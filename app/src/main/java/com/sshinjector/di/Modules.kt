@@ -8,8 +8,7 @@ import com.sshinjector.data.remote.ssh.SshKeyManager
 import com.sshinjector.domain.usecase.ServerRepository
 import com.sshinjector.domain.vpn.DnsInterceptor
 import com.sshinjector.domain.vpn.PacketProcessor
-import com.sshinjector.domain.vpn.Socks5ProxyServer
-import com.sshinjector.domain.vpn.SshChannelFactory
+import com.sshinjector.domain.vpn.tunnel.TunnelManager
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import dagger.Module
@@ -20,31 +19,31 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object AppModule {
-    
+
     @Provides
     @Singleton
     fun provideAppDatabase(@ApplicationContext context: Context): AppDatabase {
         return AppDatabase.getInstance(context)
     }
-    
+
     @Provides
     @Singleton
     fun provideServerDao(db: AppDatabase): com.sshinjector.data.local.dao.ServerDao {
         return db.serverDao()
     }
-    
+
     @Provides
     @Singleton
     fun provideWhitelistDao(db: AppDatabase): com.sshinjector.data.local.dao.WhitelistDao {
         return db.whitelistDao()
     }
-    
+
     @Provides
     @Singleton
     fun provideSettingsDataStore(@ApplicationContext context: Context): SettingsDataStore {
         return SettingsDataStore(context)
     }
-    
+
     @Provides
     @Singleton
     fun provideServerRepository(
@@ -53,13 +52,13 @@ object AppModule {
     ): ServerRepository {
         return ServerRepository(serverDao, whitelistDao)
     }
-    
+
     @Provides
     @Singleton
     fun provideSshKeyManager(@ApplicationContext context: Context): SshKeyManager {
         return SshKeyManager(context)
     }
-    
+
     @Provides
     @Singleton
     fun provideJschSshClient(keyManager: SshKeyManager): JschSshClient {
@@ -68,22 +67,10 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideSshChannelFactory(sshClient: JschSshClient): SshChannelFactory {
-        return sshClient
+    fun providePacketProcessor(tunnelManager: TunnelManager): PacketProcessor {
+        return PacketProcessor(tunnelManager)
     }
-    
-    @Provides
-    @Singleton
-    fun provideSocks5ProxyServer(sshChannelFactory: SshChannelFactory): Socks5ProxyServer {
-        return Socks5ProxyServer(sshChannelFactory)
-    }
-    
-    @Provides
-    @Singleton
-    fun providePacketProcessor(socks5Proxy: Socks5ProxyServer): PacketProcessor {
-        return PacketProcessor(socks5Proxy)
-    }
-    
+
     @Provides
     @Singleton
     fun provideDnsInterceptor(): DnsInterceptor {

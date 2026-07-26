@@ -23,6 +23,8 @@ data class ServerConfig(
     val allowedPackages: List<String> = emptyList(),
     val excludedRoutes: List<String> = emptyList(),
     val password: String? = null, // 可选：SSH 密码认证
+    val tunnelType: String = "socks5",
+    val tunnelConfigJson: String? = null,
 ) {
     enum class KeyAlgorithm { Ed25519, RSA4096, ECDSA_P256 }
     enum class DnsMode { Remote, Local, System }

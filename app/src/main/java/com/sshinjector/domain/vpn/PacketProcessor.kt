@@ -16,6 +16,8 @@ import java.nio.channels.DatagramChannel
 import java.nio.channels.SelectionKey
 import java.nio.channels.Selector
 import java.nio.channels.SocketChannel
+import com.sshinjector.domain.vpn.tunnel.TunnelManager
+import com.sshinjector.domain.vpn.tunnel.TunnelPlugin
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
@@ -23,11 +25,11 @@ import javax.inject.Singleton
 
 /**
  * 数据包处理器
- * 负责解析 IP/TCP/UDP 包头，提取五元组，并转发到 SOCKS5
+ * 负责解析 IP/TCP/UDP 包头，提取五元组，并转发到隧道插件
  */
 @Singleton
 class PacketProcessor @Inject constructor(
-    private val socks5Proxy: Socks5ProxyServer
+    private val tunnelManager: TunnelManager
 ) {
     companion object {
         private const val TAG = "PacketProcessor"
@@ -60,6 +62,7 @@ class PacketProcessor @Inject constructor(
         val srcPort: Int,
         val dstPort: Int,
         var socksChannel: SocketChannel? = null,
+        var tunnelChannel: TunnelChannel? = null,
         var state: TcpState = TcpState.SynSent,
         var lastActivity: Long = System.currentTimeMillis(),
         var browserSeq: Long = 0,
@@ -254,7 +257,18 @@ class PacketProcessor @Inject constructor(
                 conn = createTcpConnection(connKey, srcIp, dstIp, srcPort, dstPort)
                 conn.browserSeq = (seqNum.toLong()) and 0xFFFFFFFFL
                 conn.state = TcpConnection.TcpState.SynSent
-                forwardSynToSocks(conn)
+
+                // Route through tunnel plugin or fallback to local SOCKS5
+                val hasActiveTunnel = try {
+                    tunnelManager.getActiveOrFallback()
+                    true
+                } catch (_: Exception) { false }
+
+                if (hasActiveTunnel) {
+                    forwardSynToTunnel(conn)
+                } else {
+                    forwardSynToSocks(conn)
+                }
             } else {
                 conn.browserSeq = (seqNum.toLong()) and 0xFFFFFFFFL
                 conn.lastActivity = System.currentTimeMillis()
@@ -586,84 +600,41 @@ class PacketProcessor @Inject constructor(
     }
 
     /**
-     * 将 TCP SYN 转发到 SOCKS5 代理建立连接
-     * 1. 连接本地 SOCKS5 代理
-     * 2. 发送 SOCKS5 握手 (版本5, 无认证)
-     * 3. 发送 CONNECT 请求 (目标地址+端口)
-     * 4. 等待连接建立成功响应
+     * 将 TCP SYN 转发到隧道插件建立连接
+     * 通过 TunnelManager 获取活跃插件，调用 openTcpChannel
      */
-    private fun forwardSynToSocks(conn: TcpConnection) {
+    private fun forwardSynToTunnel(conn: TcpConnection) {
         scope.launch {
             try {
-                val socksPort = socks5Proxy.boundPort.value ?: 1080
-                val sock = SocketChannel.open()
-                sock.configureBlocking(true)
-                sock.connect(InetSocketAddress("127.0.0.1", socksPort))
+                val plugin = tunnelManager.getActiveOrFallback()
+                val channel = plugin.openTcpChannel(conn.dstIp.hostAddress, conn.dstPort)
+                if (channel == null) {
+                    Log.e(TAG, "openTcpChannel failed for plugin ${plugin.id}: ${conn.dstIp.hostAddress}:${conn.dstPort}")
+                    conn.state = TcpConnection.TcpState.Closed
+                    return@launch
+                }
 
-                // 注册 TUN 写回回调：relayFromTarget 收到数据后直接写 TUN
+                val connected = channel.connect(5000)
+                if (!connected) {
+                    Log.e(TAG, "channel.connect failed for plugin ${plugin.id}")
+                    channel.disconnect()
+                    conn.state = TcpConnection.TcpState.Closed
+                    return@launch
+                }
+
+                conn.tunnelChannel = channel
+                conn.state = TcpConnection.TcpState.Established
+
                 val connKey = connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort)
-                val clientLocalPort = sock.socket().localPort
-                val tunCallback: (ByteArray) -> Unit = { data ->
-                    val responsePacket = buildTcpResponsePacket(conn, data, connKey)
-                    if (responsePacket != null) {
-                        tunWriter?.invoke(responsePacket)
-                    }
-                }
-                socks5Proxy.registerTunCallback(clientLocalPort, tunCallback)
-
-                // SOCKS5 握手: VER=5, NMETHODS=1, METHOD=0x00(无认证)
-                val handshake = byteArrayOf(0x05, 0x01, 0x00)
-                sock.write(ByteBuffer.wrap(handshake))
-
-                // 读取服务器响应: VER(1) METHOD(1)
-                val handshakeResp = ByteBuffer.allocate(2)
-                val hsRead = sock.read(handshakeResp)
-                if (hsRead <= 0) {
-                    Log.e(TAG, "SOCKS5 handshake read failed: bytesRead=$hsRead")
-                    socks5Proxy.removeTunCallback(clientLocalPort)
-                    sock.close()
-                    return@launch
-                }
-                handshakeResp.flip()
-                if (handshakeResp.remaining() < 2) {
-                    Log.e(TAG, "SOCKS5 handshake response too short")
-                    socks5Proxy.removeTunCallback(clientLocalPort)
-                    sock.close()
-                    return@launch
-                }
-                val respVer = handshakeResp.get().toInt() and 0xFF
-                val respMethod = handshakeResp.get().toInt() and 0xFF
-                if (respVer != 0x05 || respMethod != 0x00) {
-                    Log.e(TAG, "SOCKS5 handshake failed: ver=$respVer method=$respMethod")
-                    socks5Proxy.removeTunCallback(clientLocalPort)
-                    sock.close()
-                    return@launch
+                val synAckPacket = buildSynAckPacket(conn, connKey)
+                if (synAckPacket != null) {
+                    tunWriter?.invoke(synAckPacket)
                 }
 
-                // 检查是否有 ipToDomain 映射
-                val hasDomain = dnsInterceptor?.ipToDomain?.containsKey(conn.dstIp.hostAddress) == true
-
-                if (hasDomain) {
-                    // 有域名映射: 立即发送 SOCKS5 CONNECT (原逻辑)
-                    sendSocks5ConnectAndWait(sock, conn, connKey, clientLocalPort)
-                } else {
-                    // 无域名映射: 延迟 CONNECT，先发 SYN-ACK，等第一个数据包提取域名
-                    conn.socksChannel = sock
-                    conn.socksLocalPort = clientLocalPort
-                    conn.pendingConnect = true
-                    conn.state = TcpConnection.TcpState.Established
-                    Log.d(TAG, "No domain mapping for ${conn.dstIp.hostAddress}, deferred CONNECT for conn ${conn.id}")
-
-                    // 发送 SYN-ACK 回 TUN
-                    val synAckPacket = buildSynAckPacket(conn, connKey)
-                    if (synAckPacket != null) {
-                        tunWriter?.invoke(synAckPacket)
-                        Log.d(TAG, "SYN-ACK sent (deferred) for conn ${conn.id}")
-                    }
-                }
-
-            } catch (e: IOException) {
-                Log.e(TAG, "forwardSynToSocks failed", e)
+                startRelayFromTunnel(conn, connKey)
+                Log.d(TAG, "TCP connection established via tunnel plugin ${plugin.id} to ${conn.dstIp}:${conn.dstPort}")
+            } catch (e: Exception) {
+                Log.e(TAG, "forwardSynToTunnel failed", e)
                 errors.value++
                 conn.state = TcpConnection.TcpState.Closed
             }
@@ -671,200 +642,74 @@ class PacketProcessor @Inject constructor(
     }
 
     /**
-     * 构建 SOCKS5 CONNECT 请求
-     * 优先使用域名 (ATYP=0x03)，回退到 IP (ATYP=0x01/0x04)
+     * 从隧道插件读取数据并写回 TUN
      */
-    private fun buildSocks5ConnectRequest(dstIp: InetAddress, dstPort: Int): ByteArray {
-        // 查 IP→域名映射 (DNS 拦截时建立)
-        val domain = dnsInterceptor?.ipToDomain?.get(dstIp.hostAddress)
+    private fun startRelayFromTunnel(conn: TcpConnection, connKey: Long) {
+        val channel = conn.tunnelChannel ?: return
+        val input = channel.inputStream ?: return
+        val writer = tunWriter ?: return
 
-        val buf: ByteArray
-        if (domain != null) {
-            // 域名模式: VER CMD RSV ATYP(0x03) LEN DOMAIN PORT
-            val domainBytes = domain.toByteArray(Charsets.US_ASCII)
-            buf = ByteBuffer.allocate(4 + 1 + domainBytes.size + 2).apply {
-                put(0x05) // VER
-                put(0x01) // CMD: CONNECT
-                put(0x00) // RSV
-                put(0x03) // ATYP: Domain
-                put(domainBytes.size.toByte())
-                put(domainBytes)
-                putShort(dstPort.toShort())
-            }.array()
-            Log.d(TAG, "SOCKS5 CONNECT via domain: $domain:$dstPort (was IP ${dstIp.hostAddress})")
-        } else {
-            val ipBytes = dstIp.address
-            val atyp = if (ipBytes.size == 4) 0x01 else 0x04
-            buf = ByteBuffer.allocate(10 + ipBytes.size).apply {
-                put(0x05) // VER
-                put(0x01) // CMD: CONNECT
-                put(0x00) // RSV
-                put(atyp.toByte())
-                put(ipBytes)
-                putShort(dstPort.toShort())
-            }.array()
-        }
-        return buf
-    }
-
-    /**
-     * 发送 SOCKS5 CONNECT 并等待响应（有域名映射时使用）
-     */
-    private suspend fun sendSocks5ConnectAndWait(
-        sock: SocketChannel,
-        conn: TcpConnection,
-        connKey: Long,
-        clientLocalPort: Int
-    ) {
-        // SOCKS5 CONNECT 请求
-        val connectReq = buildSocks5ConnectRequest(conn.dstIp, conn.dstPort)
-        sock.write(ByteBuffer.wrap(connectReq))
-
-        // 读取 CONNECT 响应
-        val connectResp = ByteBuffer.allocate(32)
-        val bytesRead = sock.read(connectResp)
-        if (bytesRead <= 0) {
-            Log.e(TAG, "SOCKS5 CONNECT read failed: bytesRead=$bytesRead")
-            socks5Proxy.removeTunCallback(clientLocalPort)
-            sock.close()
-            return
-        }
-        connectResp.flip()
-        if (connectResp.remaining() < 4) {
-            Log.e(TAG, "SOCKS5 CONNECT response too short: ${connectResp.remaining()}")
-            socks5Proxy.removeTunCallback(clientLocalPort)
-            sock.close()
-            return
-        }
-        val repVer = connectResp.get().toInt() and 0xFF
-        val rep = connectResp.get().toInt() and 0xFF
-        connectResp.get() // RSV
-        val atyp = connectResp.get().toInt() and 0xFF
-
-        if (repVer != 0x05 || rep != 0x00) {
-            Log.e(TAG, "SOCKS5 CONNECT failed: rep=$rep")
-            socks5Proxy.removeTunCallback(clientLocalPort)
-            sock.close()
-            return
-        }
-
-        // 跳过 BND.ADDR + BND.PORT
-        when (atyp) {
-            0x01 -> connectResp.position(connectResp.position() + 4 + 2)
-            0x04 -> connectResp.position(connectResp.position() + 16 + 2)
-            0x03 -> {
-                val domainLen = connectResp.get().toInt() and 0xFF
-                connectResp.position(connectResp.position() + domainLen + 2)
-            }
-        }
-
-        // 连接建立成功，保存 SOCKS5 通道
-        conn.socksChannel = sock
-        conn.state = TcpConnection.TcpState.Established
-        Log.d(TAG, "TCP connection established to ${conn.dstIp}:${conn.dstPort}")
-
-        // 发送 SYN-ACK 回 TUN
-        val synAckPacket = buildSynAckPacket(conn, connKey)
-        if (synAckPacket != null) {
-            tunWriter?.invoke(synAckPacket)
-            Log.d(TAG, "SYN-ACK sent to TUN for conn ${conn.id}")
-        }
-
-        // 监控 SOCKS5 连接断开: 发送 RST 到 TUN 通知浏览器
         Thread({
+            val buffer = ByteArray(RELAY_BUFFER_SIZE)
             try {
-                val buf = ByteBuffer.allocate(1)
-                val read = sock.read(buf)
-                if (read == -1) {
-                    Log.w(TAG, "SOCKS5 proxy closed connection for conn ${conn.id}, sending RST")
-                    val rst = buildRstPacket(conn, connKey)
-                    if (rst != null) tunWriter?.invoke(rst)
+                while (channel.isConnected && conn.state == TcpConnection.TcpState.Established) {
+                    val read = input.read(buffer)
+                    if (read == -1) break
+                    if (read > 0) {
+                        val data = buffer.copyOf(read)
+                        val responsePacket = buildTcpResponsePacket(conn, data, connKey)
+                        if (responsePacket != null) {
+                            writer(responsePacket)
+                        }
+                    }
                 }
-            } catch (_: Exception) {}
-            closeTcpConnection(connKey, conn)
-        }, "SOCKS5-Monitor-${conn.id}").start()
+            } catch (e: IOException) {
+                Log.w(TAG, "Tunnel relay read ended: ${e.message}")
+            } finally {
+                closeTcpConnection(connKey, conn)
+            }
+        }, "Tunnel-Relay-${conn.id}").start()
     }
 
     /**
-     * 完成延迟的 SOCKS5 CONNECT: 从首个数据包提取域名，发送 CONNECT，转发数据
+     * 将 TCP SYN 转发到隧道插件建立连接 (fallback 路径)
+     */
+    private fun forwardSynToSocks(conn: TcpConnection) {
+        forwardSynToTunnel(conn)
+    }
+
+    /**
+     * 完成延迟的连接: 从首个数据包提取域名，通过隧道插件转发
      */
     private fun completeDeferredConnect(conn: TcpConnection, firstData: ByteArray, connKey: Long) {
-        val socksChannel = conn.socksChannel ?: return
-        val clientLocalPort = conn.socksLocalPort
         try {
-            // 从首个数据包提取域名 (TLS SNI 或 HTTP Host)
             val domain = extractSniFromTls(firstData) ?: extractHostFromHttp(firstData)
             if (domain != null) {
                 dnsInterceptor?.ipToDomain?.put(conn.dstIp.hostAddress, domain)
                 Log.d(TAG, "Extracted domain: $domain for IP ${conn.dstIp.hostAddress} (conn ${conn.id})")
-            } else {
-                Log.d(TAG, "No domain extracted from first packet for conn ${conn.id}, using IP ${conn.dstIp.hostAddress}")
             }
 
-            // 发送 SOCKS5 CONNECT
-            val connectReq = buildSocks5ConnectRequest(conn.dstIp, conn.dstPort)
-            socksChannel.write(ByteBuffer.wrap(connectReq))
+            val plugin = tunnelManager.getActiveOrFallback()
+            val channel = plugin.openTcpChannel(conn.dstIp.hostAddress, conn.dstPort)
+            if (channel != null && channel.connect(5000)) {
+                conn.tunnelChannel = channel
+                conn.pendingConnect = false
+                conn.state = TcpConnection.TcpState.Established
 
-            // 读取 CONNECT 响应
-            val connectResp = ByteBuffer.allocate(32)
-            val bytesRead = socksChannel.read(connectResp)
-            if (bytesRead <= 0) {
-                Log.e(TAG, "Deferred SOCKS5 CONNECT read failed: bytesRead=$bytesRead")
-                closeTcpConnection(connKey, conn)
-                return
-            }
-            connectResp.flip()
-            if (connectResp.remaining() < 4) {
-                Log.e(TAG, "Deferred SOCKS5 CONNECT response too short")
-                closeTcpConnection(connKey, conn)
-                return
-            }
-            val repVer = connectResp.get().toInt() and 0xFF
-            val rep = connectResp.get().toInt() and 0xFF
-            connectResp.get() // RSV
-            val atyp = connectResp.get().toInt() and 0xFF
+                val synAckPacket = buildSynAckPacket(conn, connKey)
+                if (synAckPacket != null) tunWriter?.invoke(synAckPacket)
 
-            if (repVer != 0x05 || rep != 0x00) {
-                Log.e(TAG, "Deferred SOCKS5 CONNECT failed: rep=$rep")
-                closeTcpConnection(connKey, conn)
-                return
-            }
+                startRelayFromTunnel(conn, connKey)
 
-            // 跳过 BND.ADDR + BND.PORT
-            when (atyp) {
-                0x01 -> connectResp.position(connectResp.position() + 4 + 2)
-                0x04 -> connectResp.position(connectResp.position() + 16 + 2)
-                0x03 -> {
-                    val domainLen = connectResp.get().toInt() and 0xFF
-                    connectResp.position(connectResp.position() + domainLen + 2)
+                val output = channel.outputStream
+                if (output != null) {
+                    output.write(firstData)
+                    output.flush()
                 }
-            }
-
-            conn.pendingConnect = false
-            conn.state = TcpConnection.TcpState.Established
-            Log.d(TAG, "Deferred CONNECT completed for conn ${conn.id}")
-
-            // 转发首个数据包
-            val dataBuffer = ByteBuffer.wrap(firstData)
-            while (dataBuffer.hasRemaining()) {
-                socksChannel.write(dataBuffer)
-            }
-            Log.d(TAG, "forwardToSocks: wrote ${firstData.size}B for conn ${conn.id} (deferred) → ${conn.dstIp}:${conn.dstPort}")
-
-            // 启动监控线程
-            Thread({
-                try {
-                    val buf = ByteBuffer.allocate(1)
-                    val read = socksChannel.read(buf)
-                    if (read == -1) {
-                        Log.w(TAG, "SOCKS5 proxy closed connection for conn ${conn.id} (deferred), sending RST")
-                        val rst = buildRstPacket(conn, connKey)
-                        if (rst != null) tunWriter?.invoke(rst)
-                    }
-                } catch (_: Exception) {}
+            } else {
+                Log.e(TAG, "Deferred tunnel connect failed for conn ${conn.id}")
                 closeTcpConnection(connKey, conn)
-            }, "SOCKS5-Monitor-${conn.id}").start()
-
+            }
         } catch (e: Exception) {
             Log.e(TAG, "completeDeferredConnect failed for conn ${conn.id}", e)
             closeTcpConnection(connKey, conn)
@@ -1350,13 +1195,36 @@ private fun forwardToSocks(
          payloadStart: Int,
          payloadLength: Int
      ) {
-         val socksChannel = conn.socksChannel
-         if (socksChannel == null) {
-             Log.w(TAG, "forwardToSocks: socksChannel is null for conn ${conn.id}, state=${conn.state}")
-             return
-         }
          if (conn.state != TcpConnection.TcpState.Established) {
              Log.w(TAG, "forwardToSocks: conn ${conn.id} not established (state=${conn.state}), dropping ${payloadLength}B")
+             return
+         }
+
+         // Try tunnel channel first, then SOCKS5 channel
+         val tunnelChannel = conn.tunnelChannel
+         if (tunnelChannel != null) {
+             try {
+                 buffer.position(payloadStart)
+                 buffer.limit(payloadStart + payloadLength)
+                 val output = tunnelChannel.outputStream
+                 if (output != null) {
+                     val payload = ByteArray(payloadLength)
+                     buffer.get(payload)
+                     output.write(payload)
+                     output.flush()
+                     Log.d(TAG, "forwardToTunnel: wrote ${payloadLength}B for conn ${conn.id} → ${conn.dstIp}:${conn.dstPort}")
+                 }
+             } catch (e: IOException) {
+                 Log.e(TAG, "forwardToTunnel failed", e)
+                 errors.value++
+                 closeTcpConnection(connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort), conn)
+             }
+             return
+         }
+
+         val socksChannel = conn.socksChannel
+         if (socksChannel == null) {
+             Log.w(TAG, "forwardToSocks: both tunnelChannel and socksChannel are null for conn ${conn.id}")
              return
          }
 
@@ -1396,7 +1264,7 @@ private fun forwardToSocks(
 
         scope.launch {
             try {
-                val socksPort = socks5Proxy.boundPort.value ?: 1080
+                val socksPort = 1080
 
                 // 如果没有关联通道，先建立 UDP ASSOCIATE
                 if (!assoc.datagramChannel.isOpen) {

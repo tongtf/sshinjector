@@ -5,8 +5,9 @@ import com.sshinjector.domain.model.ConnectionStats
 import com.sshinjector.domain.model.VpnState
 import com.sshinjector.domain.vpn.DnsInterceptor
 import com.sshinjector.domain.vpn.PacketProcessor
-import com.sshinjector.domain.vpn.Socks5ProxyServer
-import com.sshinjector.domain.vpn.SshChannelFactory
+import com.sshinjector.domain.vpn.tunnel.TunnelConfig
+import com.sshinjector.domain.vpn.tunnel.TunnelManager
+import com.sshinjector.domain.vpn.tunnel.TunnelRouter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -38,12 +39,12 @@ import javax.inject.Singleton
 
 /**
  * VPN 控制器 - 管理 VPN 连接的完整生命周期
- *       * 协调 SSH 客户端、SOCKS5 代理、DNS 拦截、数据包处理
+ * 协调隧道插件、DNS 拦截、数据包处理
  */
 @Singleton
 class VpnController @Inject constructor(
-    private val sshChannelFactory: SshChannelFactory,
-    private val socks5Proxy: Socks5ProxyServer,
+    private val tunnelManager: TunnelManager,
+    private val tunnelRouter: TunnelRouter,
     private val packetProcessor: PacketProcessor,
     private val dnsInterceptor: DnsInterceptor,
     private val serverRepository: ServerRepository,
@@ -124,7 +125,7 @@ class VpnController @Inject constructor(
 
     /**
      * 启动 VPN 连接
-     * 正确顺序: SSH 连接 → SOCKS5 代理 → 数据包处理
+     * 正确顺序: 隧道连接 → DNS 设置 → 数据包处理
      */
     suspend fun connect(server: ServerConfig, password: String? = null): Result<Unit> {
         if (isRunning) {
@@ -137,30 +138,16 @@ class VpnController @Inject constructor(
         updateState { it.copy(status = VpnState.VpnStatus.Connecting, server = server) }
 
         return try {
-            // 1. 连接 SSH 服务器
-            addLog("正在连接 SSH 服务器 ${server.host}:${server.port}...", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
-            val serverWithPassword = if (!password.isNullOrEmpty()) {
-                server.copy(password = password)
-            } else {
-                server
-            }
-
-            val connectResult = sshChannelFactory.connect(serverWithPassword)
-            if (!connectResult.success) {
-                val errorMsg = connectResult.error ?: "SSH connection failed"
-                addLog("SSH 连接失败: $errorMsg", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.ERROR)
+            // 1. 启动隧道插件
+            val tunnelConfig = buildTunnelConfig(server, password)
+            addLog("正在连接隧道 (${server.tunnelType})...", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
+            val tunnelResult = tunnelManager.startPlugin(server.tunnelType, tunnelConfig)
+            if (tunnelResult.isFailure) {
+                val errorMsg = tunnelResult.exceptionOrNull()?.message ?: "Tunnel connection failed"
+                addLog("隧道连接失败: $errorMsg", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.ERROR)
                 throw Exception(errorMsg)
             }
-            addLog("SSH 连接成功，本地代理端口: ${connectResult.localSocksPort}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.SUCCESS)
-
-            // 2. 启动 SOCKS5 代理服务器
-            addLog("正在启动 SOCKS5 代理服务器...", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
-            val proxyResult = socks5Proxy.start(1080, "127.0.0.1")
-            if (proxyResult.isFailure) {
-                addLog("SOCKS5 代理启动失败", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.ERROR)
-                throw proxyResult.exceptionOrNull()!!
-            }
-            addLog("SOCKS5 代理已启动: 127.0.0.1:${proxyResult.getOrThrow()}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.SUCCESS)
+            addLog("隧道连接成功: ${server.tunnelType}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.SUCCESS)
 
             // 3. 设置 DNS 拦截器
             packetProcessor.setDnsInterceptor(dnsInterceptor)
@@ -270,21 +257,13 @@ class VpnController @Inject constructor(
         addLog("已取消所有子任务", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
 
         // 断开 SSH 连接
+        // 停止所有隧道插件
         try {
-            addLog("正在断开 SSH 连接...", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
-            sshChannelFactory.disconnect()
-            addLog("SSH 连接已断开", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.SUCCESS)
+            addLog("正在断开隧道连接...", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
+            tunnelManager.stopAll()
+            addLog("隧道连接已断开", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.SUCCESS)
         } catch (e: Exception) {
-            addLog("SSH 断开错误: ${e.message}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.ERROR)
-        }
-
-        // 停止 SOCKS5 代理
-        try {
-            addLog("正在停止 SOCKS5 代理...", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
-            socks5Proxy.stop()
-            addLog("SOCKS5 代理已停止", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.SUCCESS)
-        } catch (e: Exception) {
-            addLog("SOCKS5 停止错误: ${e.message}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.ERROR)
+            addLog("隧道断开错误: ${e.message}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.ERROR)
         }
 
         // 关闭输入输出流
@@ -699,6 +678,43 @@ private suspend fun connectionCleanupLoop() {
             android.util.Log.w("VpnController", "获取系统 DNS 失败: ${e.message}")
         }
         return dnsList
+    }
+
+    private fun buildTunnelConfig(server: ServerConfig, password: String?): TunnelConfig {
+        return when (server.tunnelType) {
+            "socks5" -> TunnelConfig.Socks5(
+                sshHost = server.host,
+                sshPort = server.port,
+                sshUsername = server.username,
+                sshKeyAlias = server.keyAlias,
+                sshPassword = password ?: server.password,
+                sshKeyAlgorithm = server.keyAlgorithm.name,
+                common = TunnelConfig.CommonConfig(
+                    connectTimeout = server.connectTimeout,
+                    keepAliveInterval = server.keepAliveInterval,
+                ),
+            )
+            "direct" -> TunnelConfig.Direct
+            "https_proxy" -> TunnelConfig.HttpsProxy(
+                proxyHost = server.host,
+                proxyPort = server.port,
+                common = TunnelConfig.CommonConfig(connectTimeout = server.connectTimeout),
+            )
+            "v2ray" -> TunnelConfig.V2Ray(
+                serverHost = server.host,
+                serverPort = server.port,
+                uuid = server.keyAlias,
+                common = TunnelConfig.CommonConfig(connectTimeout = server.connectTimeout),
+            )
+            else -> TunnelConfig.Socks5(
+                sshHost = server.host,
+                sshPort = server.port,
+                sshUsername = server.username,
+                sshKeyAlias = server.keyAlias,
+                sshPassword = password ?: server.password,
+                sshKeyAlgorithm = server.keyAlgorithm.name,
+            )
+        }
     }
 
     fun getCurrentServer(): ServerConfig? = currentServer
