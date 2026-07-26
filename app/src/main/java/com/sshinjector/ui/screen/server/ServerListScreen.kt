@@ -209,21 +209,6 @@ fun ServerCard(
                             .padding(horizontal = 8.dp, vertical = 2.dp)
                     )
                 }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                text = "MTU: ${server.mtu} | KeepAlive: ${server.keepAliveInterval}s | IPv6: ${if (server.enableIPv6) "开" else "关"}",
-                fontSize = 12.sp,
-                color = if (server.isActive) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f)
-                else MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
-            ) {
                 IconButton(onClick = onConnect) {
                     if (isConnecting) {
                         CircularProgressIndicator(
@@ -240,6 +225,14 @@ fun ServerCard(
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "MTU: ${server.mtu} | KeepAlive: ${server.keepAliveInterval}s | IPv6: ${if (server.enableIPv6) "开" else "关"}",
+                fontSize = 12.sp,
+                color = if (server.isActive) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f)
+                else MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

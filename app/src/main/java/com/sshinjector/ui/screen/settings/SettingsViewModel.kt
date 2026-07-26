@@ -3,16 +3,21 @@ package com.sshinjector.ui.screen.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sshinjector.data.local.preferences.SettingsDataStore
+import com.sshinjector.domain.vpn.tunnel.TunnelManager
+import com.sshinjector.domain.vpn.tunnel.TunnelPlugin
+import com.sshinjector.domain.vpn.tunnel.TunnelState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
-    private val settingsDataStore: SettingsDataStore
+    private val settingsDataStore: SettingsDataStore,
+    private val tunnelManager: TunnelManager
 ) : ViewModel() {
     val autoConnect: StateFlow<Boolean> = settingsDataStore.autoConnect
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
@@ -32,6 +37,12 @@ class SettingsViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.Eagerly, "system")
     val logLevel: StateFlow<Int> = settingsDataStore.logLevel
         .stateIn(viewModelScope, SharingStarted.Eagerly, 1)
+
+    val availablePlugins: StateFlow<List<TunnelPlugin>> = tunnelManager.availablePlugins
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val activePlugin: StateFlow<TunnelPlugin?> = tunnelManager.activePlugin
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     fun setAutoConnect(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setAutoConnect(enabled) }
     fun setBiometricUnlock(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setBiometricUnlock(enabled) }

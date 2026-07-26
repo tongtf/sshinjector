@@ -145,6 +145,7 @@ class SshVpnService : VpnService() {
             }
 
             serviceVpnState.value = DomainVpnState(status = DomainVpnState.VpnStatus.Connected, server = config)
+            serverRepository.setActiveServer(serverId)
             updateNotification(config)
         } catch (e: Exception) {
             vpnController.addLog("连接失败: ${e.message}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.ERROR)
@@ -265,6 +266,9 @@ class SshVpnService : VpnService() {
 
     private suspend fun disconnect() {
         android.util.Log.d("SshVpnService", "Starting disconnect...")
+
+        // 0. 清除所有服务器的激活状态
+        serverRepository.deactivateAllServers()
 
         // 1. 断开 VPN 控制器 (如果正在运行)
         if (vpnController.isVpnRunning()) {

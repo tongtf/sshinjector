@@ -63,6 +63,10 @@ class ServerRepository @Inject constructor(
         serverDao.setActive(id)
     }
 
+    suspend fun deactivateAllServers() = withContext(Dispatchers.IO) {
+        serverDao.deactivateAll()
+    }
+
     // ===== 白名单 =====
     
     suspend fun getEnabledWhitelist(): List<WhitelistApp> = withContext(Dispatchers.IO) {

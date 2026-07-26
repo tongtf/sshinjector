@@ -599,7 +599,8 @@ private fun startRelayFromTarget() {
                     }
                     if (read > 0) {
                         val data = readBuffer.array().copyOf(read)
-                        android.util.Log.d("Socks5Proxy", "[conn=$id] relayFromTarget: received ${read}B, calling callback")
+                        val hex = data.joinToString("") { "%02x".format(it) }
+                        android.util.Log.d("Socks5Proxy", "[conn=$id] relayFromTarget: received ${read}B hex=$hex callback=${callback != null}")
                         callback?.invoke(data)
                         onDataReceived(read.toLong())
                         if (callback == null) {

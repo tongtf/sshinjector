@@ -44,6 +44,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.sshinjector.domain.vpn.tunnel.TunnelState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,6 +62,8 @@ fun SettingsScreen(
     val dnsMode by viewModel.dnsMode.collectAsState()
     val theme by viewModel.theme.collectAsState()
     val logLevel by viewModel.logLevel.collectAsState()
+    val availablePlugins by viewModel.availablePlugins.collectAsState()
+    val activePlugin by viewModel.activePlugin.collectAsState()
     var showThemeDialog by remember { mutableStateOf(false) }
     var showDnsDialog by remember { mutableStateOf(false) }
     var showLogLevelDialog by remember { mutableStateOf(false) }
@@ -175,6 +178,41 @@ fun SettingsScreen(
                         }
                     }
                 )
+            }
+
+            SettingsSection("隧道插件") {
+                availablePlugins.forEach { plugin ->
+                    val isActive = activePlugin?.id == plugin.id
+                    val statusText = when {
+                        isActive -> "运行中"
+                        else -> "就绪"
+                    }
+                    val statusColor = when {
+                        isActive && plugin.state.value.status == TunnelState.Status.Connected ->
+                            MaterialTheme.colorScheme.primary
+                        isActive -> MaterialTheme.colorScheme.tertiary
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                    SettingsRow(
+                        title = plugin.displayName,
+                        subtitle = statusText,
+                        trailing = {
+                            Text(
+                                text = if (isActive) "●" else "○",
+                                fontSize = 16.sp,
+                                color = statusColor
+                            )
+                        }
+                    )
+                }
+                if (availablePlugins.isEmpty()) {
+                    Text(
+                        "无可用插件",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 16.dp, top = 8.dp)
+                    )
+                }
             }
 
             SettingsSection("关于") {

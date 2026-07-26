@@ -723,7 +723,7 @@ class PacketProcessor @Inject constructor(
         } else {
             val ipBytes = dstIp.address
             val atyp = if (ipBytes.size == 4) 0x01 else 0x04
-            buf = ByteBuffer.allocate(10 + ipBytes.size).apply {
+            buf = ByteBuffer.allocate(4 + ipBytes.size + 2).apply {
                 put(0x05) // VER
                 put(0x01) // CMD: CONNECT
                 put(0x00) // RSV
@@ -1386,13 +1386,14 @@ private fun forwardToSocks(
              return
          }
 
-         try {
-             buffer.position(payloadStart)
-             buffer.limit(payloadStart + payloadLength)
-             while (buffer.hasRemaining()) {
-                 socksChannel.write(buffer)
-             }
-             Log.d(TAG, "forwardToSocks: wrote ${payloadLength}B for conn ${conn.id} → ${conn.dstIp}:${conn.dstPort}")
+          try {
+              buffer.position(payloadStart)
+              buffer.limit(payloadStart + payloadLength)
+              val hexPayload = ByteArray(payloadLength).also { buffer.duplicate().get(it) }.joinToString("") { "%02x".format(it) }.take(40)
+              while (buffer.hasRemaining()) {
+                  socksChannel.write(buffer)
+              }
+              Log.d(TAG, "forwardToSocks: wrote ${payloadLength}B for conn ${conn.id} → ${conn.dstIp}:${conn.dstPort} hex=$hexPayload")
          } catch (e: IOException) {
              Log.e(TAG, "forwardToSocks failed", e)
             errors.value++
