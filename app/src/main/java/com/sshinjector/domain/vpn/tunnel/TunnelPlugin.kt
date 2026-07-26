@@ -23,6 +23,8 @@ interface TunnelPlugin {
 
     fun openTcpChannel(host: String, port: Int): TunnelChannel?
 
+    val localSocksPort: Int get() = 0
+
     fun sendUdp(dstHost: String, dstPort: Int, payload: ByteArray) {
         throw UnsupportedOperationException("UDP not supported by $id")
     }

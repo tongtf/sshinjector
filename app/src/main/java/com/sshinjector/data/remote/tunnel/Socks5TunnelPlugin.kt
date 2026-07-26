@@ -60,6 +60,9 @@ class Socks5TunnelPlugin @Inject constructor(
     private var socksServer: Socks5ProxyServer? = null
     private var startTime: Long = 0
 
+    override val localSocksPort: Int
+        get() = socksServer?.boundPort?.value ?: 0
+
     override suspend fun connect(config: TunnelConfig): Result<Unit> {
         val c = config as TunnelConfig.Socks5
         _state.value = TunnelState(status = TunnelState.Status.Connecting, serverAddress = c.sshHost)
