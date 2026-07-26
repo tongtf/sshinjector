@@ -80,6 +80,7 @@ fun ServerEditScreen(
     var mtu by remember { mutableStateOf("1500") }
     var keepAlive by remember { mutableStateOf("30") }
     var setAsDefault by remember { mutableStateOf(false) }
+    var tunnelType by remember { mutableStateOf("socks5") }
 
     val availableKeys by viewModel.keyAliases.collectAsState()
 
@@ -94,6 +95,7 @@ fun ServerEditScreen(
             mtu = entity.mtu.toString()
             keepAlive = entity.keepAliveInterval.toString()
             setAsDefault = entity.isActive
+            tunnelType = entity.tunnelType
         }
     }
 
@@ -125,7 +127,8 @@ fun ServerEditScreen(
                             isActive = setAsDefault,
                             enableIPv6 = enableIPv6,
                             mtu = mtu.toIntOrNull() ?: 1500,
-                            keepAliveInterval = keepAlive.toIntOrNull() ?: 30
+                            keepAliveInterval = keepAlive.toIntOrNull() ?: 30,
+                            tunnelType = tunnelType,
                         )
                         viewModel.save(serverId, entity, onSave, setAsDefault)
                     }) {
@@ -157,6 +160,31 @@ fun ServerEditScreen(
                     OutlinedTextFieldRow("端口", "22", port, { port = it }, singleLine = true, numeric = true)
                     OutlinedTextFieldRow("用户名", "root", username, { username = it }, singleLine = true)
                     KeyAliasSelector(keyAlias, availableKeys, showKeyDropdown, onSelect = { keyAlias = it; showKeyDropdown = false }, onToggleDropdown = { showKeyDropdown = !showKeyDropdown }, onGenerate = { viewModel.generateAndAssociate { newAlias -> keyAlias = newAlias } })
+                }
+            }
+
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("隧道配置", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TunnelTypeSelector(
+                        selectedType = tunnelType,
+                        onTypeSelected = { tunnelType = it }
+                    )
+
+                    // 显示当前隧道类型的能力标签
+                    val selectedPlugin = TUNNEL_TYPES.find { it.id == tunnelType }
+                    if (selectedPlugin != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            selectedPlugin.description,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
 

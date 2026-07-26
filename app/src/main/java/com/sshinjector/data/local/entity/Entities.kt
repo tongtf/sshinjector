@@ -25,6 +25,8 @@ data class ServerEntity(
     @ColumnInfo(name = "hostKeyFingerprint") val hostKeyFingerprint: String? = null, // SSH Host Key 指纹
     @ColumnInfo(name = "allowedPackages") val allowedPackages: String? = null, // JSON array
     @ColumnInfo(name = "excludedRoutes") val excludedRoutes: String? = null, // JSON array
+    @ColumnInfo(name = "tunnelType") val tunnelType: String = "socks5",
+    @ColumnInfo(name = "tunnelConfigJson") val tunnelConfigJson: String? = null,
     @ColumnInfo(name = "createdAt") val createdAt: Date = Date(),
     @ColumnInfo(name = "updatedAt") val updatedAt: Date = Date()
 ) {

@@ -119,7 +119,9 @@ private fun ServerEntity.toDomain(): ServerConfig {
             EntityDnsMode.SPLIT -> ServerConfig.DnsMode.Remote
         },
         allowedPackages = parseJsonStringList(allowedPackages),
-        excludedRoutes = parseJsonStringList(excludedRoutes)
+        excludedRoutes = parseJsonStringList(excludedRoutes),
+        tunnelType = tunnelType,
+        tunnelConfigJson = tunnelConfigJson,
     )
 }
 
@@ -144,6 +146,8 @@ private fun ServerConfig.toEntity(): ServerEntity {
         },
         allowedPackages = toJsonStringList(allowedPackages),
         excludedRoutes = toJsonStringList(excludedRoutes),
+        tunnelType = tunnelType,
+        tunnelConfigJson = tunnelConfigJson,
         createdAt = createdAt,
         updatedAt = updatedAt
     )
