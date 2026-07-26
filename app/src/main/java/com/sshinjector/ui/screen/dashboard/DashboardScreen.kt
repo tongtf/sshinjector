@@ -141,6 +141,57 @@ fun DashboardScreen(
             }
         }
 
+        // 活跃隧道卡片
+        if (state.activeTunnels.isNotEmpty()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("活跃隧道", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    state.activeTunnels.forEach { tunnel ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                val statusColor = when (tunnel.status) {
+                                    com.sshinjector.domain.vpn.tunnel.TunnelState.Status.Connected -> Color(0xFF4CAF50)
+                                    com.sshinjector.domain.vpn.tunnel.TunnelState.Status.Connecting,
+                                    com.sshinjector.domain.vpn.tunnel.TunnelState.Status.Authenticating -> Color(0xFFFF9800)
+                                    com.sshinjector.domain.vpn.tunnel.TunnelState.Status.Failed -> MaterialTheme.colorScheme.error
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(statusColor)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(tunnel.displayName, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = tunnel.status.name,
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                text = "${tunnel.activeConnections} 连接",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // 连接状态卡片
         Card(
             modifier = Modifier.fillMaxWidth(),

@@ -10,6 +10,8 @@ import androidx.lifecycle.viewModelScope
 import com.sshinjector.data.local.preferences.SettingsDataStore
 import com.sshinjector.domain.usecase.ServerRepository
 import com.sshinjector.domain.usecase.VpnController
+import com.sshinjector.domain.vpn.tunnel.TunnelManager
+import com.sshinjector.domain.vpn.tunnel.TunnelState
 import com.sshinjector.vpn.SshVpnService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -31,11 +33,21 @@ class MainViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val vpnController: VpnController,
     private val serverRepository: ServerRepository,
-    private val settingsDataStore: SettingsDataStore
+    private val settingsDataStore: SettingsDataStore,
+    private val tunnelManager: TunnelManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState = _uiState.asStateFlow()
+
+    data class TunnelInfo(
+        val id: String,
+        val displayName: String,
+        val status: TunnelState.Status,
+        val activeConnections: Int,
+        val bytesSent: Long,
+        val bytesReceived: Long,
+    )
 
     data class DnsDiagnostics(
         val dnsLatencyMs: Long? = null,
@@ -51,6 +63,7 @@ class MainViewModel @Inject constructor(
 
     data class UiState(
         val isConnected: Boolean = false,
+        val activeTunnels: List<TunnelInfo> = emptyList(),
         val hasDefaultServer: Boolean = false,
         val defaultServerId: Long = 0,
         val defaultServerName: String = "",
@@ -216,6 +229,26 @@ class MainViewModel @Inject constructor(
                 }
             }
 
+            // 观察活跃隧道状态
+            launch {
+                while (true) {
+                    val tunnels = tunnelManager.getAllActivePlugins().map { plugin ->
+                        val s = plugin.state.value
+                        val st = plugin.stats.value
+                        TunnelInfo(
+                            id = plugin.id,
+                            displayName = plugin.displayName,
+                            status = s.status,
+                            activeConnections = st.activeTcpConnections,
+                            bytesSent = st.bytesUp,
+                            bytesReceived = st.bytesDown,
+                        )
+                    }
+                    _uiState.update { it.copy(activeTunnels = tunnels) }
+                    kotlinx.coroutines.delay(2000)
+                }
+            }
+
             combine(
                 vpnController.vpnState,
                 vpnController.connectionStats
@@ -244,6 +277,7 @@ class MainViewModel @Inject constructor(
                     proxyAddress = proxyAddr,
                     deviceIpv4 = _uiState.value.deviceIpv4,
                     deviceIpv6 = _uiState.value.deviceIpv6,
+                    activeTunnels = _uiState.value.activeTunnels,
                     dnsMode = _uiState.value.dnsMode,
                     connectionLogs = _connectionLogs.toList(),
                     logLevel = _uiState.value.logLevel,
