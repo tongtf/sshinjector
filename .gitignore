@@ -1,0 +1,48 @@
+# .gitignore
+# Gradle
+.gradle/
+build/
+*/build/
+*/build/
+!src/main/build/
+
+# Local configuration
+local.properties
+*.jks
+*.keystore
+keystore.properties
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Test reports
+*/build/reports/
+*/build/outputs/
+
+# Gradle wrapper
+gradle/wrapper/gradle-wrapper.jar
+
+# Coverage
+*.ec
+*.exec
+coverage/
+
+# Release artifacts
+*.apk
+*.aab
+*.ap_
+*.so
+
+# Proguard
+proguard/

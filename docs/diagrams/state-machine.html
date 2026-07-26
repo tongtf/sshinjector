@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SSHInjector VPN 连接状态机</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--paper:#f5f5f5;--paper-2:#ececec;--ink:#2d3142;--muted:#4f5d75;--soft:#7a8399;--rule:rgba(45,49,66,0.12);--rule-solid:#bfc0c0;--accent:#eb6c36;--accent-tint:rgba(235,108,54,0.08);--link:#2e5aa8}
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Geist',sans-serif;background:var(--paper);color:var(--ink);line-height:1.6;padding:2rem}header{margin-bottom:2rem}header .eyebrow{font-family:'Geist Mono',monospace;font-size:8px;letter-spacing:0.18em;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem}h1{font-family:'Instrument Serif',serif;font-size:1.75rem;font-weight:400;color:var(--ink)}.diagram-container{background:var(--paper);overflow-x:auto}svg{display:block}footer{margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--rule);font-family:'Geist Mono',monospace;font-size:10px;color:var(--soft);text-align:center}
+.node{font-family:'Geist',sans-serif;font-size:12px;font-weight:600}.node .sublabel{font-family:'Geist Mono',monospace;font-size:9px;fill:var(--muted)}.node .tag{font-family:'Geist Mono',monospace;font-size:7px;fill:var(--muted);letter-spacing:0.08em}.arrow-label{font-family:'Geist Mono',monospace;font-size:8px;fill:var(--soft);letter-spacing:0.06em}.legend-label{font-family:'Geist Mono',monospace;font-size:8px;fill:var(--muted);letter-spacing:0.14em}marker{overflow:visible}
+</style>
+</head>
+<body>
+<header>
+<p class="eyebrow">State Machine Diagram</p>
+<h1>VPN 连接状态机</h1>
+</header>
+<div class="diagram-container">
+<svg width="1000" height="720" viewBox="0 0 1000 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="VPN 连接状态机">
+<defs>
+<marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--muted)"/></marker>
+<marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--accent)"/></marker>
+<marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--link)"/></marker>
+</defs>
+<rect width="100%" height="100%" fill="var(--paper)"/>
+
+<!-- States -->
+<!-- Disconnected (Initial) -->
+<g class="state" transform="translate(120, 120)">
+<circle cx="80" cy="60" r="60" fill="#ffffff" stroke="var(--ink)" stroke-width="2"/>
+<circle cx="80" cy="60" r="8" fill="var(--ink)"/>
+<circle cx="80" cy="60" r="18" fill="none" stroke="var(--ink)" stroke-width="1.5"/>
+<text x="80" y="42" text-anchor="middle" font-family="'Geist', sans-serif" font-size="13" font-weight="600" fill="var(--ink)">Disconnected</text>
+<text x="80" y="58" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="9" fill="var(--muted)">初始/空闲</text>
+<text x="80" y="80" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--soft)">无活动连接</text>
+</g>
+
+<!-- Connecting -->
+<g class="state" transform="translate(340, 120)">
+<circle cx="80" cy="60" r="60" fill="#ffffff" stroke="var(--ink)" stroke-width="2"/>
+<text x="80" y="42" text-anchor="middle" font-family="'Geist', sans-serif" font-size="13" font-weight="600" fill="var(--ink)">Connecting</text>
+<text x="80" y="58" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="9" fill="var(--muted)">VPN 权限申请</text>
+<text x="80" y="74" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--soft)">等待用户授权</text>
+<text x="80" y="90" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--soft)">TUN 接口建建</text>
+</g>
+
+<!-- Authenticating -->
+<g class="state" transform="translate(560, 120)">
+<circle cx="80" cy="60" r="60" fill="#ffffff" stroke="var(--accent)" stroke-width="2"/>
+<text x="80" y="36" text-anchor="middle" font-family="'Geist', sans-serif" font-size="13" font-weight="600" fill="var(--ink)">Authenticating</text>
+<text x="80" y="52" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="9" fill="var(--accent)">SSH 连接中</text>
+<text x="80" y="68" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--soft)">JSch Session 建建</text>
+<text x="80" y="82" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--soft)">密钥认证 · 密码认证</text>
+<text x="80" y="96" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--soft)">StrictHostKeyChecking=no</text>
+</g>
+
+<!-- EstablishingTunnel -->
+<g class="state" transform="translate(780, 120)">
+<circle cx="80" cy="60" r="60" fill="#ffffff" stroke="var(--accent)" stroke-width="2"/>
+<text x="80" y="36" text-anchor="middle" font-family="'Geist', sans-serif" font-size="13" font-weight="600" fill="var(--ink)">EstablishingTunnel</text>
+<text x="80" y="52" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="9" fill="var(--accent)">SOCKS5 启动</text>
+<text x="80" y="68" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--soft)">socks5Proxy.start()</text>
+<text x="80" y="82" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--soft)">packetLoop() 启动</text>
+<text x="80" y="96" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--soft)">DNS 拦截器注入</text>
+</g>
+
+<!-- Connected (Main Active State) -->
+<g class="state focal" transform="translate(340, 320)">
+<circle cx="100" cy="80" r="80" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="3"/>
+<text x="100" y="50" text-anchor="middle" font-family="'Geist', sans-serif" font-size="15" font-weight="600" fill="var(--accent)">Connected</text>
+<text x="100" y="70" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="10" fill="var(--accent)">主活动状态</text>
+<text x="100" y="88" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="9" fill="var(--muted)">packetLoop() 运行中</text>
+<text x="100" y="104" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="9" fill="var(--muted)">TUN 读写 · SOCKS5 转发</text>
+<text x="100" y="120" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="9" fill="var(--muted)">DNS 拦截 · UDP 关联</text>
+<text x="100" y="136" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="9" fill="var(--muted)">心跳保活 · 统计上报</text>
+</g>
+
+<!-- Disconnecting -->
+<g class="state" transform="translate(560, 520)">
+<circle cx="80" cy="60" r="60" fill="#ffffff" stroke="var(--ink)" stroke-width="2"/>
+<text x="80" y="42" text-anchor="middle" font-family="'Geist', sans-serif" font-size="13" font-weight="600" fill="var(--ink)">Disconnecting</text>
+<text x="80" y="58" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="9" fill="var(--muted)">取消所有协程</text>
+<text x="80" y="72" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--soft)">SSH 断开 · SOCKS5 停止</text>
+<text x="80" y="86" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--soft)">关闭 TUN · 清理状态</text>
+</g>
+
+<!-- Failed -->
+<g class="state" transform="translate(120, 520)">
+<circle cx="80" cy="60" r="60" fill="rgba(235,108,54,0.08)" stroke="var(--accent)" stroke-width="2" stroke-dasharray="4,3"/>
+<text x="80" y="42" text-anchor="middle" font-family="'Geist', sans-serif" font-size="13" font-weight="600" fill="var(--accent)">Failed</text>
+<text x="80" y="58" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="9" fill="var(--accent)">错误终态</text>
+<text x="80" y="74" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--soft)">错误信息记录</text>
+<text x="80" y="88" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--soft)">可触发 Reconnecting</text>
+</g>
+
+<!-- Reconnecting -->
+<g class="state" transform="translate(780, 320)">
+<circle cx="80" cy="60" r="60" fill="rgba(46,90,168,0.08)" stroke="var(--link)" stroke-width="2" stroke-dasharray="4,3"/>
+<text x="80" y="36" text-anchor="middle" font-family="'Geist', sans-serif" font-size="13" font-weight="600" fill="var(--link)">Reconnecting</text>
+<text x="80" y="52" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="9" fill="var(--link)">网络变化触发</text>
+<text x="80" y="68" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--soft)">指数退避: 1s,2s,4s,8s...</text>
+<text x="80" y="82" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--soft)">保持会话状态</text>
+</g>
+
+<!-- Transitions (Edges) -->
+<defs>
+<marker id="trans-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--muted)"/></marker>
+<marker id="trans-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--accent)"/></marker>
+<marker id="trans-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--link)"/></marker>
+<marker id="trans-dashed" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--soft)"/></marker>
+</defs>
+
+<!-- Disconnected -> Connecting (user clicks) -->
+<path d="M200 160 Q270 140 340 160" fill="none" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#trans-arrow)"/>
+<text x="270" y="130" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--muted)">点击连接\nVpnService.prepare()</text>
+
+<!-- Connecting -> Authenticating (permission granted) -->
+<path d="M420 160 Q490 140 560 160" fill="none" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#trans-accent)"/>
+<text x="490" y="130" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--accent)">onActivityResult\n权限已授予</text>
+
+<!-- Authenticating -> EstablishingTunnel (SSH connected) -->
+<path d="M640 160 Q710 140 780 160" fill="none" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#trans-accent)"/>
+<text x="710" y="130" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--accent)">SSH 认证成功\nsession.connect()</text>
+
+<!-- EstablishingTunnel -> Connected (SOCKS5 started) -->
+<path d="M860 170 Q820 240 440 400" fill="none" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#trans-accent)"/>
+<text x="650" y="210" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--accent)">socks5Proxy.start()\npacketLoop() 启动</text>
+
+<!-- Connected -> Disconnecting (user clicks disconnect) -->
+<path d="M440 400 Q500 460 560 520" fill="none" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#trans-arrow)"/>
+<text x="500" y="430" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--muted)">点击断开\ncoroutineContext.cancelChildren()</text>
+
+<!-- Connected -> Failed (error) -->
+<path d="M260 400 Q190 460 120 520" fill="none" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#trans-accent)" stroke-dasharray="4,3"/>
+<text x="190" y="430" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--accent)">SSH 连接失败\n认证失败\nTUN 建建失败</text>
+
+<!-- Failed -> Reconnecting (auto-retry) -->
+<path d="M120 520 Q250 420 780 320" fill="none" stroke="var(--link)" stroke-width="1.5" marker-end="url(#trans-link)" stroke-dasharray="4,3"/>
+<text x="450" y="370" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--link)">autoReconnect()\n指数退避 1s/2s/4s/8s...</text>
+
+<!-- Reconnecting -> Connecting (retry) -->
+<path d="M860 280 Q790 220 420 160" fill="none" stroke="var(--link)" stroke-width="1.5" marker-end="url(#trans-link)" stroke-dasharray="4,3"/>
+<text x="650" y="180" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--link)">重试连接\nConnectivityManager 回调</text>
+
+<!-- Disconnecting -> Disconnected (cleanup done) -->
+<path d="M560 580 Q340 580 120 180" fill="none" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#trans-arrow)"/>
+<text x="340" y="380" text-anchor="middle" font-family="'Geist Mono', monospace" font-size="8" fill="var(--muted)">清理完成\nresources released</text>
+
+<!-- Connected internal sub-states (self-loop indicators) -->
+<g font-family="'Geist Mono', monospace" font-size="7" fill="var(--soft)">
+<text x="340" y="440" text-anchor="middle">⟳ packetLoop()\n⟳ heartbeat()\n⟳ cleanupStale()</text>
+</g>
+
+<!-- Legend -->
+<line x1="30" y1="680" x2="970" y2="680" stroke="var(--rule)" stroke-width="0.8"/>
+<text x="30" y="696" class="legend-label">LEGEND</text>
+<circle cx="140" cy="690" r="12" fill="transparent" stroke="var(--ink)" stroke-width="1"/>
+<text x="150" y="696" class="legend-label">普通状态</text>
+<circle cx="270" cy="690" r="12" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="3"/>
+<text x="280" y="696" class="legend-label">主活动/关键状态</text>
+<circle cx="420" cy="690" r="12" fill="rgba(235,108,54,0.08)" stroke="var(--accent)" stroke-width="2" stroke-dasharray="4,3"/>
+<text x="430" y="696" class="legend-label">错误/异常状态</text>
+<circle cx="570" cy="690" r="12" fill="rgba(46,90,168,0.08)" stroke="var(--link)" stroke-width="2" stroke-dasharray="4,3"/>
+<text x="580" y="696" class="legend-label">异步/重连状态</text>
+<line x1="700" y1="690" x2="720" y2="690" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#trans-arrow)"/>
+<text x="725" y="696" class="legend-label">正向转移</text>
+<line x1="780" y1="690" x2="800" y2="690" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#trans-accent)"/>
+<text x="805" y="696" class="legend-label">成功路径</text>
+<line x1="880" y1="690" x2="900" y2="690" stroke="var(--link)" stroke-width="1.5" marker-end="url(#trans-link)" stroke-dasharray="4,3"/>
+<text x="905" y="696" class="legend-label">重连/异步</text>
+</svg>
+</div>
+<footer>
+Generated by diagram-design skill · SSHInjector VPN Connection State Machine · <script>document.write(new Date().toLocaleDateString('zh-CN'))</script>
+</footer>
+</body>
+</html>

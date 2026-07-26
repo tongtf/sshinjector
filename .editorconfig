@@ -1,0 +1,19 @@
+# ktlint configuration
+# https://github.com/pinterest/ktlint
+
+# 使用标准 Kotlin 代码风格
+# 禁用特定规则
+# disabled_rules=max-line-length,wildcard-import,no-wildcard-imports
+
+# 行长度限制
+max_line_length=120
+
+# 缩进
+indent_size=4
+continuation_indent_size=8
+
+# 导入顺序
+import_ordering=java,kotlin,blank,static
+
+# 空行
+empty_line_between_package_and_imports=true

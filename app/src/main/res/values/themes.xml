@@ -1,0 +1,6 @@
+<resources>
+    <!-- Base application theme for Compose -->
+    <style name="Theme.SSHInjector" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
+</resources>

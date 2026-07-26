@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SSHInjector VPN 数据流</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--paper:#f5f5f5;--paper-2:#ececec;--ink:#2d3142;--muted:#4f5d75;--soft:#7a8399;--rule:rgba(45,49,66,0.12);--rule-solid:#bfc0c0;--accent:#eb6c36;--accent-tint:rgba(235,108,54,0.08);--link:#2e5aa8}
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Geist',sans-serif;background:var(--paper);color:var(--ink);line-height:1.6;padding:2rem}header{margin-bottom:2rem}header .eyebrow{font-family:'Geist Mono',monospace;font-size:8px;letter-spacing:0.18em;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem}h1{font-family:'Instrument Serif',serif;font-size:1.75rem;font-weight:400;color:var(--ink)}.diagram-container{background:var(--paper);overflow-x:auto}svg{display:block}footer{margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--rule);font-family:'Geist Mono',monospace;font-size:10px;color:var(--soft);text-align:center}
+.node{font-family:'Geist',sans-serif;font-size:12px;font-weight:600}.node .sublabel{font-family:'Geist Mono',monospace;font-size:9px;fill:var(--muted)}.node .tag{font-family:'Geist Mono',monospace;font-size:7px;fill:var(--muted);letter-spacing:0.08em}.arrow-label{font-family:'Geist Mono',monospace;font-size:8px;fill:var(--soft);letter-spacing:0.06em}.legend-label{font-family:'Geist Mono',monospace;font-size:8px;fill:var(--muted);letter-spacing:0.14em}marker{overflow:visible}
+</style>
+</head>
+<body>
+<header>
+<p class="eyebrow">Data Flow Diagram</p>
+<h1>VPN 数据包处理流程</h1>
+</header>
+<div class="diagram-container">
+<svg width="1000" height="760" viewBox="0 0 1000 760" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="VPN 数据包处理流程图">
+<defs>
+<marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--muted)"/></marker>
+<marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--accent)"/></marker>
+<marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--link)"/></marker>
+<marker id="arrow-dashed" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--soft)"/></marker>
+</defs>
+<rect width="100%" height="100%" fill="var(--paper)"/>
+
+<!-- App Traffic Source -->
+<rect x="40" y="40" width="180" height="80" rx="6" fill="var(--ink)" stroke="var(--ink)" stroke-width="1"/>
+<rect x="56" y="50" width="44" height="12" rx="2" fill="transparent" stroke="rgba(245,245,245,0.4)" stroke-width="0.8"/>
+<text x="78" y="60" fill="rgba(245,245,245,0.7)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SOURCE</text>
+<text x="130" y="78" fill="#f5f5f5" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">白名单应用流量</text>
+<text x="130" y="96" fill="rgba(245,245,245,0.7)" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">IPv4/IPv6 · TCP/UDP</text>
+
+<!-- VpnService TUN Interface -->
+<rect x="260" y="20" width="220" height="120" rx="6" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.5"/>
+<rect x="276" y="30" width="36" height="12" rx="2" fill="transparent" stroke="var(--accent)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="294" y="40" fill="var(--accent)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">TUN</text>
+<text x="370" y="58" fill="var(--ink)" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">SshVpnService</text>
+<text x="370" y="76" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">VpnService 子类</text>
+<text x="370" y="94" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">10.0.0.1/24 · fd00::1/64</text>
+<text x="370" y="112" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">addAllowedApplication()</text>
+
+<!-- PacketProcessor -->
+<rect x="520" y="20" width="220" height="140" rx="6" fill="#ffffff" stroke="var(--ink)" stroke-width="1"/>
+<rect x="536" y="30" width="44" height="12" rx="2" fill="transparent" stroke="var(--ink)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="558" y="40" fill="var(--ink)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">PACKET</text>
+<text x="630" y="58" fill="var(--ink)" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">PacketProcessor</text>
+<text x="630" y="76" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">IPv4/IPv6 头部解析</text>
+<text x="630" y="94" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">五元组提取 · 协议分发</text>
+<text x="630" y="112" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">IPv6 扩展头部处理</text>
+<text x="630" y="130" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">TCP 状态机 · 校验和</text>
+
+<!-- Decision: Protocol -->
+<rect x="780" y="40" width="180" height="100" rx="6" fill="var(--paper-2)" stroke="var(--muted)" stroke-width="1" stroke-dasharray="4,3"/>
+<rect x="796" y="50" width="44" height="12" rx="2" fill="transparent" stroke="var(--muted)" stroke-width="0.8"/>
+<text x="818" y="60" fill="var(--muted)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">DECIDE</text>
+<text x="870" y="78" fill="var(--ink)" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">协议分发</text>
+<text x="870" y="96" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">TCP (0x06) → processTcp</text>
+<text x="870" y="114" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">UDP (0x11) → processUdp</text>
+<text x="870" y="132" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">ICMPv6 → processIcmpv6</text>
+
+<!-- TCP Path -->
+<rect x="520" y="200" width="220" height="140" rx="6" fill="#ffffff" stroke="var(--ink)" stroke-width="1"/>
+<rect x="536" y="210" width="44" height="12" rx="2" fill="transparent" stroke="var(--ink)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="558" y="220" fill="var(--ink)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">TCP</text>
+<text x="630" y="238" fill="var(--ink)" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">TCP 路径</text>
+<text x="630" y="256" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">SYN → forwardSynToSocks()</text>
+<text x="630" y="274" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">建立 SOCKS5 连接</text>
+<text x="630" y="292" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">握手 → CONNECT 请求</text>
+<text x="630" y="310" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">建立后 → forwardToSocks()</text>
+
+<!-- UDP Path -->
+<rect x="780" y="200" width="180" height="140" rx="6" fill="#ffffff" stroke="var(--ink)" stroke-width="1"/>
+<rect x="796" y="210" width="44" height="12" rx="2" fill="transparent" stroke="var(--ink)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="818" y="220" fill="var(--ink)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">UDP</text>
+<text x="870" y="238" fill="var(--ink)" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">UDP 路径</text>
+<text x="870" y="256" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">DNS (53) → DnsInterceptor</text>
+<text x="870" y="274" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">其他 → UDP ASSOCIATE</text>
+<text x="870" y="292" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">forwardUdpToSocks()</text>
+<text x="870" y="310" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">SOCKS5 UDP 帧封装</text>
+
+<!-- DNS Interceptor -->
+<rect x="40" y="200" width="220" height="140" rx="6" fill="var(--ink)" stroke="var(--ink)" stroke-width="1"/>
+<rect x="56" y="210" width="44" height="12" rx="2" fill="transparent" stroke="rgba(245,245,245,0.4)" stroke-width="0.8"/>
+<text x="78" y="220" fill="rgba(245,245,245,0.7)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">DNS</text>
+<text x="150" y="238" fill="#f5f5f5" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">DnsInterceptor</text>
+<text x="150" y="256" fill="rgba(245,245,245,0.7)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">拦截 UDP:53</text>
+<text x="150" y="274" fill="rgba(245,245,245,0.7)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">DNS 报文解析 (dnsjava)</text>
+<text x="150" y="292" fill="rgba(245,245,245,0.7)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">缓存 · TTL 遵守</text>
+<text x="150" y="310" fill="rgba(245,245,245,0.7)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">远端解析 (SOCKS5/DoH)</text>
+
+<!-- Socks5ProxyServer -->
+<rect x="260" y="380" width="220" height="140" rx="6" fill="#ffffff" stroke="var(--ink)" stroke-width="1"/>
+<rect x="276" y="390" width="44" height="12" rx="2" fill="transparent" stroke="var(--ink)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="298" y="400" fill="var(--ink)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">PROXY</text>
+<text x="370" y="418" fill="var(--ink)" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Socks5ProxyServer</text>
+<text x="370" y="436" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">127.0.0.1:1080</text>
+<text x="370" y="454" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">握手: VER=5, METHOD=0x00</text>
+<text x="370" y="472" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">CMD=CONNECT (0x01)</text>
+<text x="370" y="490" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">CMD=UDP ASSOCIATE (0x03)</text>
+
+<!-- JschSshClient -->
+<rect x="520" y="380" width="220" height="140" rx="6" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.5"/>
+<rect x="536" y="390" width="36" height="12" rx="2" fill="transparent" stroke="var(--accent)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="554" y="400" fill="var(--accent)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SSH</text>
+<text x="630" y="418" fill="var(--ink)" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">JschSshClient</text>
+<text x="630" y="436" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">implements SshChannelFactory</text>
+<text x="630" y="454" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">SSH 会话 · 密钥认证</text>
+<text x="630" y="472" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">ChannelDirectTCPIP</text>
+<text x="630" y="490" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">动态端口转发 (ssh -D)</text>
+
+<!-- JschTunnelChannel -->
+<rect x="780" y="380" width="180" height="140" rx="6" fill="#ffffff" stroke="var(--ink)" stroke-width="1"/>
+<rect x="796" y="390" width="44" height="12" rx="2" fill="transparent" stroke="var(--ink)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="818" y="400" fill="var(--ink)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">ADAPTER</text>
+<text x="870" y="418" fill="var(--ink)" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">JschTunnelChannel</text>
+<text x="870" y="436" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">implements TunnelChannel</text>
+<text x="870" y="454" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">InputStream / OutputStream</text>
+<text x="870" y="472" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">零拷贝双向管道</text>
+<text x="870" y="490" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">rel="middle">connect()/disconnect()</text>
+
+<!-- Remote Server -->
+<rect x="40" y="560" width="920" height="90" rx="6" fill="var(--ink)" stroke="var(--ink)" stroke-width="1" stroke-dasharray="4,3"/>
+<rect x="56" y="570" width="60" height="12" rx="2" fill="transparent" stroke="rgba(245,245,245,0.4)" stroke-width="0.8" stroke-dasharray="4,3"/>
+<text x="86" y="580" fill="rgba(245,245,245,0.7)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">REMOTE</text>
+<text x="500" y="595" fill="#f5f5f5" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">SSH 服务器 (45.136.14.188:33567)</text>
+<text x="500" y="615" fill="rgba(245,245,245,0.7)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">用户: sproxy · Ed25519 密钥认证 · 动态端口转发</text>
+<text x="500" y="635" fill="rgba(245,245,245,0.7)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">远程 DNS: 8.8.8.8 / 1.1.1.1 · 目标服务器任意</text>
+
+<!-- Return Path: Response packets -->
+<rect x="40" y="680" width="920" height="50" rx="6" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.5"/>
+<rect x="56" y="690" width="44" height="12" rx="2" fill="transparent" stroke="var(--accent)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="78" y="700" fill="var(--accent)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">RETURN</text>
+<text x="500" y="712" fill="var(--ink)" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">回程数据流: TunnelChannel → SOCKS5 → PacketProcessor.buildTcpResponsePacket() → TUN 写回</text>
+
+<!-- Connections -->
+<!-- App -> TUN -->
+<path d="M220 80 H260" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+<text x="240" y="70" class="arrow-label">TUN fd write()</text>
+
+<!-- TUN -> PacketProcessor -->
+<path d="M480 80 H520" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+<text x="500" y="70" class="arrow-label">readBuffer</text>
+
+<!-- PacketProcessor -> Protocol Decision -->
+<path d="M740 90 H780" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+<text x="760" y="80" class="arrow-label">dispatch</text>
+
+<!-- TCP path -->
+<path d="M630 200 V220" stroke="var(--ink)" stroke-width="1.2" marker-end="url(#arrow)"/>
+<text x="638" y="210" class="arrow-label">TCP</text>
+
+<!-- UDP path -->
+<path d="M740 120 V200" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+<text x="748" y="160" class="arrow-label">UDP</text>
+
+<!-- UDP -> DNS (port 53) -->
+<path d="M150 340 V200 Q150 180 220 180 H500 Q510 180 510 210 V380" stroke="var(--link)" stroke-width="1" marker-end="url(#arrow-link)" stroke-dasharray="5,4"/>
+<text x="330" y="170" class="arrow-label">DNS (53)</text>
+
+<!-- TCP -> SOCKS5 -->
+<path d="M630 340 V380" stroke="var(--ink)" stroke-width="1.2" marker-end="url(#arrow)"/>
+<text x="638" y="360" class="arrow-label">CONNECT</text>
+
+<!-- UDP -> SOCKS5 -->
+<path d="M870 340 V380" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+<text x="878" y="360" class="arrow-label">ASSOCIATE</text>
+
+<!-- SOCKS5 -> SSH ChannelFactory -->
+<path d="M370 450 H520" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrow-accent)"/>
+<text x="445" y="440" class="arrow-label">createDirectChannel()</text>
+
+<!-- SSH Client -> TunnelChannel -->
+<path d="M630 520 V560" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrow-accent)"/>
+<text x="638" y="540" class="arrow-label">openChannel()</text>
+
+<!-- TunnelChannel -> Remote -->
+<path d="M870 460 H900 Q910 460 910 500 V560" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrow-accent)"/>
+<text x="910" y="500" class="arrow-label">SSH -D</text>
+
+<!-- Return path annotation -->
+<path d="M960 600 L960 680" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrow-accent)" stroke-dasharray="5,4"/>
+<text x="965" y="640" class="arrow-label" style="font-size:7px">回程</text>
+
+<!-- Legend -->
+<line x1="30" y1="742" x2="970" y2="742" stroke="var(--rule)" stroke-width="0.8"/>
+<text x="30" y="758" class="legend-label">LEGEND</text>
+<text x="150" y="758" class="legend-label">TCP Path</text>
+<text x="240" y="758" class="legend-label">UDP Path</text>
+<text x="320" y="758" class="legend-label">DNS Path</text>
+<text x="410" y="758" class="legend-label">SOCKS5/SSH</text>
+<text x="520" y="758" class="legend-label">Return Path</text>
+<text x="620" y="758" class="legend-label">External</text>
+<line x1="140" y1="754" x2="155" y2="754" stroke="var(--ink)" stroke-width="1.2" marker-end="url(#arrow)"/>
+<line x1="230" y1="754" x2="245" y2="754" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+<line x1="310" y1="754" x2="325" y2="754" stroke="var(--link)" stroke-width="1" marker-end="url(#arrow-link)" stroke-dasharray="5,4"/>
+<line x1="400" y1="754" x2="415" y2="754" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrow-accent)"/>
+<line x1="510" y1="754" x2="525" y2="754" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrow-accent)" stroke-dasharray="5,4"/>
+<line x1="610" y1="754" x2="625" y2="754" stroke="var(--ink)" stroke-width="0.8" stroke-dasharray="4,3" marker-end="url(#arrow-dashed)"/>
+</svg>
+</div>
+<footer>
+Generated by diagram-design skill · SSHInjector VPN Data Flow · <script>document.write(new Date().toLocaleDateString('zh-CN'))</script>
+</footer>
+</body>
+</html>

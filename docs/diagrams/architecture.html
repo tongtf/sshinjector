@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SSHInjector 系统架构</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--paper:#f5f5f5;--paper-2:#ececec;--ink:#2d3142;--muted:#4f5d75;--soft:#7a8399;--rule:rgba(45,49,66,0.12);--rule-solid:#bfc0c0;--accent:#eb6c36;--accent-tint:rgba(235,108,54,0.08);--link:#2e5aa8}
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Geist',sans-serif;background:var(--paper);color:var(--ink);line-height:1.6;padding:2rem}header{margin-bottom:2rem}header .eyebrow{font-family:'Geist Mono',monospace;font-size:8px;letter-spacing:0.18em;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem}h1{font-family:'Instrument Serif',serif;font-size:1.75rem;font-weight:400;color:var(--ink)}.diagram-container{background:var(--paper);overflow-x:auto}svg{display:block}footer{margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--rule);font-family:'Geist Mono',monospace;font-size:10px;color:var(--soft);text-align:center}
+.node{font-family:'Geist',sans-serif;font-size:12px;font-weight:600}.node .sublabel{font-family:'Geist Mono',monospace;font-size:9px;fill:var(--muted)}.node .tag{font-family:'Geist Mono',monospace;font-size:7px;fill:var(--muted);letter-spacing:0.08em}.arrow-label{font-family:'Geist Mono',monospace;font-size:8px;fill:var(--soft);letter-spacing:0.06em}.legend-label{font-family:'Geist Mono',monospace;font-size:8px;fill:var(--muted);letter-spacing:0.14em}.title-tag{font-family:'Instrument Serif',serif;font-size:14px;font-style:italic;fill:var(--ink)}marker{overflow:visible}
+</style>
+</head>
+<body>
+<header>
+<p class="eyebrow">Architecture Diagram</p>
+<h1>SSHInjector 系统架构</h1>
+</header>
+<div class="diagram-container">
+<svg width="1000" height="720" viewBox="0 0 1000 780" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SSHInjector 系统架构图">
+<defs>
+<marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--muted)"/></marker>
+<marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--accent)"/></marker>
+<marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--link)"/></marker>
+</defs>
+<!-- Background -->
+<rect width="100%" height="100%" fill="var(--paper)"/>
+
+<!-- UI Layer -->
+<rect x="40" y="40" width="920" height="120" rx="8" fill="var(--ink)" stroke="var(--ink)" stroke-width="0.8"/>
+<rect x="40" y="40" width="920" height="120" rx="8" fill="rgba(235,108,54,0.08)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="56" y="50" width="36" height="12" rx="2" fill="transparent" stroke="var(--accent)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="74" y="60" fill="var(--accent)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">UI</text>
+<text x="500" y="80" fill="#f5f5f5" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">UI Layer (Jetpack Compose)</text>
+<text x="500" y="105" fill="rgba(245,245,245,0.7)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">MainActivity · NavGraph · Dashboard/Server/Whitelist/Settings/KeyManager Screens</text>
+<text x="500" y="125" fill="rgba(245,245,245,0.7)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">ViewModels: MainVM · ServerListVM · ServerEditVM · WhitelistVM · SettingsVM · KeyManagerVM</text>
+
+<!-- Domain Layer -->
+<rect x="40" y="190" width="920" height="300" rx="8" fill="var(--paper-2)" stroke="var(--rule-solid)" stroke-width="1"/>
+<rect x="40" y="190" width="920" height="300" rx="8" fill="transparent" stroke="var(--ink)" stroke-width="0.5"/>
+<rect x="56" y="200" width="44" height="12" rx="2" fill="transparent" stroke="var(--ink)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="78" y="210" fill="var(--ink)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">DOMAIN</text>
+
+<!-- VpnController -->
+<rect x="72" y="224" width="280" height="100" rx="6" fill="#ffffff" stroke="var(--ink)" stroke-width="1"/>
+<rect x="88" y="230" width="36" height="12" rx="2" fill="transparent" stroke="var(--ink)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="106" y="240" fill="var(--ink)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">USECASE</text>
+<text x="212" y="252" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">VpnController</text>
+<text x="212" y="270" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">VPN 生命周期协调</text>
+<text x="212" y="286" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">SSH 连接 · SOCKS5 启动</text>
+<text x="212" y="302" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">数据包循环 · TUN 读写</text>
+
+<!-- Socks5ProxyServer -->
+<rect x="380" y="224" width="280" height="100" rx="6" fill="#ffffff" stroke="var(--ink)" stroke-width="1"/>
+<rect x="396" y="230" width="44" height="12" rx="2" fill="transparent" stroke="var(--ink)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="418" y="240" fill="var(--ink)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">PROXY</text>
+<text x="520" y="252" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Socks5ProxyServer</text>
+<text x="520" y="270" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">SOCKS5 协议栈</text>
+<text x="520" y="286" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">TCP CONNECT · UDP ASSOCIATE</text>
+<text x="520" y="302" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">零拷贝双向管道</text>
+
+<!-- PacketProcessor -->
+<rect x="688" y="224" width="280" height="100" rx="6" fill="#ffffff" stroke="var(--ink)" stroke-width="1"/>
+<rect x="704" y="230" width="44" height="12" rx="2" fill="transparent" stroke="var(--ink)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="726" y="240" fill="var(--ink)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">PACKET</text>
+<text x="828" y="252" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">PacketProcessor</text>
+<text x="828" y="270" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">IP/TCP/UDP 解析</text>
+<text x="828" y="286" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">TCP 状态机 · 校验和</text>
+<text x="828" y="302" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">IPv6 扩展头部</text>
+
+<!-- DnsInterceptor -->
+<rect x="72" y="352" width="280" height="100" rx="6" fill="#ffffff" stroke="var(--ink)" stroke-width="1"/>
+<rect x="88" y="358" width="44" height="12" rx="2" fill="transparent" stroke="var(--ink)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="110" y="368" fill="var(--ink)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">DNS</text>
+<text x="212" y="386" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">DnsInterceptor</text>
+<text x="212" y="404" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">DNS 拦截 · 远端解析</text>
+<text x="212" y="420" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">缓存 · SOCKS5/DoH 双模式</text>
+
+<!-- ServerRepository -->
+<rect x="380" y="352" width="280" height="100" rx="6" fill="#ffffff" stroke="var(--ink)" stroke-width="1"/>
+<rect x="396" y="358" width="44" height="12" rx="2" fill="transparent" stroke="var(--ink)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="418" y="368" fill="var(--ink)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">REPO</text>
+<text x="520" y="386" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">ServerRepository</text>
+<text x="520" y="404" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Server/Whitelist CRUD</text>
+<text x="520" y="420" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">CIDR 路由 · JSON 序列化</text>
+
+<!-- SshChannelFactory (Interface) -->
+<rect x="688" y="352" width="280" height="100" rx="6" fill="var(--ink)" stroke="var(--ink)" stroke-width="0.8" stroke-dasharray="4,3"/>
+<rect x="704" y="358" width="36" height="12" rx="2" fill="transparent" stroke="var(--accent)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="722" y="368" fill="var(--accent)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SEAM</text>
+<text x="828" y="386" fill="#f5f5f5" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">SshChannelFactory</text>
+<text x="828" y="404" fill="rgba(245,245,245,0.7)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Interface (Seam)</text>
+<text x="828" y="420" fill="rgba(245,245,245,0.7)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">createDirectChannel()</text>
+
+<!-- Data Layer -->
+<rect x="40" y="520" width="920" height="160" rx="8" fill="var(--paper-2)" stroke="var(--rule-solid)" stroke-width="1"/>
+<rect x="40" y="520" width="920" height="160" rx="8" fill="transparent" stroke="var(--ink)" stroke-width="0.5"/>
+<rect x="56" y="530" width="44" height="12" rx="2" fill="transparent" stroke="var(--ink)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="78" y="540" fill="var(--ink)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">DATA</text>
+
+<!-- JschSshClient -->
+<rect x="72" y="554" width="280" height="100" rx="6" fill="#ffffff" stroke="var(--ink)" stroke-width="1"/>
+<rect x="88" y="560" width="36" height="12" rx="2" fill="transparent" stroke="var(--ink)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="106" y="570" fill="var(--ink)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">IMPL</text>
+<text x="212" y="588" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">JschSshClient</text>
+<text x="212" y="606" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">implements SshChannelFactory</text>
+<text x="212" y="622" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">SSH 连接 · 密钥认证</text>
+<text x="212" y="638" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">ChannelDirectTCPIP · 心跳</text>
+
+<!-- JschTunnelChannel -->
+<rect x="380" y="554" width="280" height="100" rx="6" fill="#ffffff" stroke="var(--ink)" stroke-width="1"/>
+<rect x="396" y="560" width="44" height="12" rx="2" fill="transparent" stroke="var(--ink)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="418" y="570" fill="var(--ink)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">ADAPTER</text>
+<text x="520" y="588" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">JschTunnelChannel</text>
+<text x="520" y="606" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">implements TunnelChannel</text>
+<text x="520" y="622" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Input/OutputStream 适配</text>
+<text x="520" y="638" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">JSch Channel 封装</text>
+
+<!-- SshKeyManager -->
+<rect x="688" y="554" width="280" height="100" rx="6" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="704" y="560" width="44" height="12" rx="2" fill="transparent" stroke="var(--accent)" stroke-width="0.8" stroke-opacity="0.4"/>
+<text x="726" y="570" fill="var(--accent)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">KEY</text>
+<text x="828" y="588" fill="var(--ink)" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">SshKeyManager</text>
+<text x="828" y="606" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Keystore 生成/导入 Ed25519/ECDSA/RSA</text>
+<text x="828" y="622" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">生物识别保护 · JSch Identity 适配</text>
+<text x="828" y="638" fill="var(--muted)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">AndroidKeyStoreIdentity</text>
+
+<!-- Android Framework Layer -->
+<rect x="40" y="680" width="920" height="70" rx="8" fill="var(--ink)" stroke="var(--ink)" stroke-width="0.8" stroke-dasharray="4,3"/>
+<rect x="40" y="680" width="920" height="70" rx="8" fill="transparent" stroke="var(--ink)" stroke-width="0.8" stroke-dasharray="4,3"/>
+<rect x="56" y="690" width="60" height="12" rx="2" fill="transparent" stroke="var(--ink)" stroke-width="0.8" stroke-opacity="0.4" stroke-dasharray="4,3"/>
+<text x="86" y="700" fill="var(--ink)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">ANDROID</text>
+<text x="500" y="712" fill="#f5f5f5" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Android Framework Layer</text>
+<text x="500" y="732" fill="rgba(245,245,245,0.7)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">SshVpnService (VpnService) · TUN 接口 · 白名单 · Foreground Service · BootReceiver</text>
+
+<!-- Connections: UI -> Domain -->
+<path d="M500 160 V190" stroke="var(--muted)" stroke-width="1" marker-end="url(#arrow)"/>
+<text x="508" y="175" class="arrow-label">Hilt DI</text>
+
+<!-- VpnController -> Socks5ProxyServer -->
+<path d="M352 274 H380" stroke="var(--muted)" stroke-width="1" marker-end="url(#arrow)"/>
+<text x="366" y="260" class="arrow-label">start()</text>
+
+<!-- VpnController -> PacketProcessor -->
+<path d="M668 274 H688" stroke="var(--muted)" stroke-width="1" marker-end="url(#arrow)"/>
+<text x="678" y="260" class="arrow-label">setTunWriter()</text>
+
+<!-- VpnController -> DnsInterceptor -->
+<path d="M212 324 V352" stroke="var(--muted)" stroke-width="1" marker-end="url(#arrow)"/>
+<text x="220" y="338" class="arrow-label">setDnsInterceptor()</text>
+
+<!-- VpnController -> ServerRepository -->
+<path d="M520 324 V352" stroke="var(--muted)" stroke-width="1" marker-end="url(#arrow)"/>
+<text x="528" y="338" class="arrow-label">getActiveServer()</text>
+
+<!-- Socks5ProxyServer -> SshChannelFactory -->
+<path d="M520 324 V382 Q520 390 580 390 H688" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+<text x="600" y="370" class="arrow-label">createDirectChannel()</text>
+
+<!-- PacketProcessor -> DnsInterceptor -->
+<path d="M828 324 V352" stroke="var(--muted)" stroke-width="1" marker-end="url(#arrow)"/>
+<text x="836" y="338" class="arrow-label">processDnsQuery()</text>
+
+<!-- DnsInterceptor -> SshChannelFactory (via SOCKS5) -->
+<path d="M212 420 V460 Q212 470 280 470 H688" stroke="var(--link)" stroke-width="1" marker-end="url(#arrow-link)" stroke-dasharray="5,4"/>
+<text x="400" y="458" class="arrow-label">DoH / SOCKS5 TCP</text>
+
+<!-- JschSshClient -> SshChannelFactory (implements) -->
+<path d="M212 654 V680 Q212 690 300 690 H700 Q708 690 708 670 V554" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+<text x="400" y="698" class="arrow-label">implements</text>
+
+<!-- JschTunnelChannel -> TunnelChannel (implements) -->
+<path d="M520 654 V680 Q520 690 450 690 H390 Q382 690 382 670 V654" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+<text x="420" y="698" class="arrow-label">implements</text>
+
+<!-- SshKeyManager -> JschSshClient -->
+<path d="M828 588 H900 Q910 588 910 600 V630 Q910 650 830 650 H828" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+<text x="915" y="610" class="arrow-label">createJSchIdentity()</text>
+
+<!-- Data Layer -> Domain Layer (Room) -->
+<path d="M500 520 V520" stroke="var(--muted)" stroke-width="1" marker-end="url(#arrow)"/>
+<path d="M500 680 V680" stroke="var(--muted)" stroke-width="1" marker-end="url(#arrow)"/>
+
+<!-- Android Framework -> VpnController -->
+<path d="M500 680 V680" stroke="var(--muted)" stroke-width="1" marker-end="url(#arrow)" stroke-dasharray="5,4"/>
+<path d="M500 680 V680" stroke="var(--muted)" stroke-width="1" marker-end="url(#arrow)" stroke-dasharray="5,4"/>
+
+<!-- Legend -->
+<line x1="30" y1="722" x2="970" y2="722" stroke="var(--rule)" stroke-width="0.8"/>
+<text x="30" y="738" class="legend-label">LEGEND</text>
+<text x="150" y="738" class="legend-label">UI Layer</text>
+<text x="250" y="738" class="legend-label">Domain Layer</text>
+<text x="370" y="738" class="legend-label">Data Layer</text>
+<text x="470" y="738" class="legend-label">Android Framework</text>
+<text x="630" y="738" class="legend-label">Seam (Interface)</text>
+<text x="770" y="738" class="legend-label">Internal Dep</text>
+<text x="870" y="738" class="legend-label">External/HTTP</text>
+<rect x="140" y="728" width="12" height="12" rx="2" fill="rgba(235,108,54,0.08)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="240" y="728" width="12" height="12" rx="2" fill="var(--paper-2)" stroke="var(--rule-solid)" stroke-width="1"/>
+<rect x="360" y="728" width="12" height="12" rx="2" fill="transparent" stroke="var(--ink)" stroke-width="1" stroke-dasharray="4,3"/>
+<rect x="460" y="728" width="12" height="12" rx="2" fill="transparent" stroke="var(--ink)" stroke-width="0.8" stroke-dasharray="4,3"/>
+<line x1="620" y1="734" x2="650" y2="734" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+<line x1="760" y1="734" x2="790" y2="734" stroke="var(--muted)" stroke-width="1" marker-end="url(#arrow)"/>
+<line x1="860" y1="734" x2="890" y2="734" stroke="var(--link)" stroke-width="1" marker-end="url(#arrow-link)" stroke-dasharray="5,4"/>
+</svg>
+</div>
+<footer>
+Generated by diagram-design skill · SSHInjector Architecture · <script>document.write(new Date().toLocaleDateString('zh-CN'))</script>
+</footer>
+</body>
+</html>

@@ -1,0 +1,106 @@
+build:
+  maxIssues: 20
+  weights:
+    complexity: 2
+    LongParameterList: 1
+    style: 1
+    comments: 1
+
+formatting:
+  indentation: 4
+  continuationIndent: 8
+  maxLineLength: 120
+  wrapArguments: true
+  wrapExpressions: true
+  packageImportLayout: standard
+  importOrder: standard
+
+naming:
+  MatchingDeclarationName:
+    ignoreOverridden: true
+  ClassNaming:
+    ignoreOverridden: true
+  FunctionParameterNaming:
+    ignoreOverridden: true
+  MemberName:
+    ignoreOverridden: true
+
+style:
+  WildcardImport:
+    excludeImports:
+      - 'androidx.compose.*'
+      - 'kotlinx.coroutines.*'
+      - 'kotlinx.serialization.*'
+      - 'kotlinx.collections.*'
+      - 'kotlinx.coroutines.flow.*'
+  MagicNumber:
+    ignoreNumbers: '-1,0,1,2,3,4,5,6,7,8,9,10,16,32,64,128,256,512,1024,2048,4096'
+    ignorePropertyDeclaration: true
+    ignoreLocalVariableDeclaration: true
+    ignoreFunctionCall: true
+    ignoreConstantDeclaration: true
+  NestedClassesVisibility:
+    visibilityModifier: 'internal'
+  MaxLineLength:
+    maxLineLength: 120
+  ReturnCount:
+    max: 6
+  FunctionOnlyReturningConstant:
+    ignoreOverridden: true
+  ExplicitCollectionElementAccessMethod:
+    ignoreExtensionFunctions: true
+
+complexity:
+  LongMethod:
+    threshold: 60
+  LongParameterList:
+    threshold: 6
+    ignoreDefaultValues: true
+  ComplexMethod:
+    threshold: 15
+    ignoreSimpleWhenEntries: true
+    ignoreSingleWhenExpression: true
+  LabeledExpression:
+    enabled: false
+  TooManyFunctions:
+    thresholdInFiles: 20
+    thresholdInClasses: 15
+    thresholdInInterfaces: 15
+    thresholdInObjects: 15
+    thresholdInEnums: 15
+    ignoreDeprecated: true
+    ignorePrivate: true
+    ignoreOverridden: true
+
+exceptions:
+  TooGenericExceptionCaught:
+    enabled: false
+  NotImplementedDeclaration:
+    enabled: false
+
+comments:
+  CommentOverPrivateFunction:
+    enabled: false
+  CommentOverPrivateProperty:
+    enabled: false
+
+potential-bugs:
+  SpreadOperator:
+    enabled: false
+
+coroutines:
+  GlobalCoroutineUsage:
+    enabled: false
+
+performance:
+  SpreadOperator:
+    enabled: false
+
+formatting:
+  # 与 ktfmt 兼容
+  ktfmt:
+    enabled: false
+
+# 自定义规则集
+ruleset:
+  'detekt-rules-compose': true
