@@ -748,6 +748,18 @@ private suspend fun connectionCleanupLoop() {
                 uuid = server.keyAlias,
                 common = TunnelConfig.CommonConfig(connectTimeout = server.connectTimeout),
             )
+            "trojan" -> TunnelConfig.Trojan(
+                serverHost = server.host,
+                serverPort = server.port,
+                password = server.keyAlias,
+                common = TunnelConfig.CommonConfig(connectTimeout = server.connectTimeout),
+            )
+            "shadowsocks" -> TunnelConfig.Shadowsocks(
+                serverHost = server.host,
+                serverPort = server.port,
+                password = server.keyAlias,
+                common = TunnelConfig.CommonConfig(connectTimeout = server.connectTimeout),
+            )
             else -> TunnelConfig.Socks5(
                 sshHost = server.host,
                 sshPort = server.port,
