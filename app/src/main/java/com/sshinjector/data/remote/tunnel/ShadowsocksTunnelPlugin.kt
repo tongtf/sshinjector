@@ -20,6 +20,7 @@ import java.net.Socket
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.Cipher
+import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import javax.inject.Inject
@@ -87,18 +88,20 @@ class ShadowsocksTunnelPlugin @Inject constructor() : TunnelPlugin {
             val socket = Socket()
             socket.connect(InetSocketAddress(c.serverHost, c.serverPort), c.common.connectTimeout)
             val os = socket.getOutputStream()
-            val ssCipher = SsCipher(c.password, c.method)
 
+            val ssCipher = SsCipher(c.password, c.method)
             val salt = ByteArray(ssCipher.saltLen).also { SecureRandom().nextBytes(it) }
             val sessionKey = ssCipher.deriveKey(salt)
+            val sessionIv = ssCipher.deriveIv(salt)
+
             os.write(salt)
 
             val addrBytes = buildAddressBytes(host, port)
-            val encrypted = ssCipher.encrypt(sessionKey, addrBytes)
+            val encrypted = ssCipher.encrypt(sessionKey, sessionIv, addrBytes)
             os.write(encrypted)
             os.flush()
 
-            ShadowsocksTunnelChannel(socket, ssCipher, sessionKey)
+            ShadowsocksTunnelChannel(socket, ssCipher, sessionKey, sessionIv)
         } catch (e: Exception) {
             null
         }
@@ -122,62 +125,66 @@ class ShadowsocksTunnelPlugin @Inject constructor() : TunnelPlugin {
 private class SsCipher(password: String, method: String) {
     val saltLen: Int
     private val keyLen: Int
-    private val ivLen: Int
+    private val ivLen: Int = 12
     private val tagLen: Int = 16
     private val cipherName: String
+    private val key: ByteArray
 
     init {
         when (method) {
-            "aes-256-gcm" -> { saltLen = 32; keyLen = 32; ivLen = 12; cipherName = "AES/GCM/NoPadding" }
-            "aes-128-gcm" -> { saltLen = 16; keyLen = 16; ivLen = 12; cipherName = "AES/GCM/NoPadding" }
-            "chacha20-ietf-poly1305" -> { saltLen = 32; keyLen = 32; ivLen = 12; cipherName = "AES/GCM/NoPadding" }
-            else -> { saltLen = 32; keyLen = 32; ivLen = 12; cipherName = "AES/GCM/NoPadding" }
+            "aes-256-gcm" -> {
+                saltLen = 32; keyLen = 32; cipherName = "AES/GCM/NoPadding"
+            }
+            "aes-128-gcm" -> {
+                saltLen = 16; keyLen = 16; cipherName = "AES/GCM/NoPadding"
+            }
+            "chacha20-ietf-poly1305" -> {
+                saltLen = 32; keyLen = 32; cipherName = "ChaCha20-Poly1305/None/NoPadding"
+            }
+            else -> {
+                saltLen = 32; keyLen = 32; cipherName = "AES/GCM/NoPadding"
+            }
         }
+        key = sha256(password.toByteArray())
     }
 
-    private val keyMaterial: ByteArray = run {
-        val md = MessageDigest.getInstance("SHA-256")
-        val result = ByteArray(keyLen)
-        var ctx = password.toByteArray()
-        var offset = 0
-        while (offset < keyLen) {
-            ctx = md.digest(ctx)
-            val copyLen = minOf(ctx.size, keyLen - offset)
-            ctx.copyInto(result, offset, 0, copyLen)
-            offset += copyLen
-        }
-        result
-    }
+    fun deriveKey(salt: ByteArray): ByteArray = hkdfSha1(key, salt, "ss-subkey".toByteArray(), keyLen)
+    fun deriveIv(salt: ByteArray): ByteArray = hkdfSha1(key, salt, "ss-subiv".toByteArray(), ivLen)
 
-    fun deriveKey(salt: ByteArray): ByteArray {
-        val md = MessageDigest.getInstance("SHA-256")
-        val result = keyMaterial.copyOf()
-        val ctx = md.digest(keyMaterial + salt)
-        ctx.copyInto(result, 0, 0, minOf(ctx.size, result.size))
-        return result
-    }
-
-    fun encrypt(key: ByteArray, plaintext: ByteArray): ByteArray {
-        val iv = ByteArray(ivLen).also { SecureRandom().nextBytes(it) }
+    fun encrypt(k: ByteArray, iv: ByteArray, plaintext: ByteArray): ByteArray {
         val cipher = Cipher.getInstance(cipherName)
-        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(tagLen * 8, iv))
-        val encrypted = cipher.doFinal(plaintext)
-        return iv + encrypted
+        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(k, extractKeyAlg()), GCMParameterSpec(tagLen * 8, iv))
+        return cipher.doFinal(plaintext)
     }
 
-    fun decrypt(key: ByteArray, data: ByteArray): ByteArray {
-        val iv = data.copyOfRange(0, ivLen)
-        val ciphertext = data.copyOfRange(ivLen, data.size)
+    fun decrypt(k: ByteArray, iv: ByteArray, data: ByteArray): ByteArray {
         val cipher = Cipher.getInstance(cipherName)
-        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(tagLen * 8, iv))
-        return cipher.doFinal(ciphertext)
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(k, extractKeyAlg()), GCMParameterSpec(tagLen * 8, iv))
+        return cipher.doFinal(data)
     }
+
+    private fun extractKeyAlg(): String = if (cipherName.startsWith("AES")) "AES" else "ChaCha20"
 }
+
+private fun hkdfSha1(ikm: ByteArray, salt: ByteArray, info: ByteArray, length: Int): ByteArray {
+    val mac = Mac.getInstance("HmacSHA1")
+    mac.init(SecretKeySpec(salt, "HmacSHA1"))
+    val prk = mac.doFinal(ikm)
+
+    mac.init(SecretKeySpec(prk, "HmacSHA1"))
+    mac.update(info)
+    mac.update(1)
+    val result = mac.doFinal()
+    return result.copyOf(length)
+}
+
+private fun sha256(data: ByteArray) = MessageDigest.getInstance("SHA-256").digest(data)
 
 private class ShadowsocksTunnelChannel(
     private val socket: Socket,
     private val ssCipher: SsCipher,
     private val sessionKey: ByteArray,
+    private val sessionIv: ByteArray,
 ) : TunnelChannel {
     override fun connect(timeoutMs: Int): Boolean = socket.isConnected
     override val inputStream: InputStream? get() = if (socket.isConnected) socket.getInputStream() else null

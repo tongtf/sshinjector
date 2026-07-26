@@ -23,6 +23,8 @@ import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
+private val IS_DEBUG = android.util.Log.isLoggable("PacketProcessor", android.util.Log.DEBUG)
+
 /**
  * 数据包处理器
  * 负责解析 IP/TCP/UDP 包头，提取五元组，并转发到隧道插件
@@ -35,10 +37,14 @@ class PacketProcessor @Inject constructor(
         private const val TAG = "PacketProcessor"
         private const val SOCKS5_HANDSHAKE_TIMEOUT = 5000
         private const val RELAY_BUFFER_SIZE = 65535
+        private const val MAX_PACKET_SIZE = 65535
         const val DEFAULT_CONNECTION_CLEANUP_TIMEOUT_MS = 300000L // 5 分钟默认值
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val responseBuffer = java.lang.ThreadLocal.withInitial {
+        ByteBuffer.allocate(MAX_PACKET_SIZE).order(ByteOrder.BIG_ENDIAN)
+    }
     private val tcpConnections = ConcurrentHashMap<Long, TcpConnection>()
     private val udpAssociations = ConcurrentHashMap<Long, UdpAssociation>()
     private val connectionIdCounter = AtomicLong(0)
@@ -89,7 +95,7 @@ class PacketProcessor @Inject constructor(
      */
     fun processIpv4Packet(buffer: ByteBuffer, tunFd: java.io.FileDescriptor): Boolean {
         buffer.order(ByteOrder.BIG_ENDIAN)
-        Log.d(TAG, "processIpv4Packet: remaining=${buffer.remaining()}")
+        if (IS_DEBUG) Log.d(TAG, "processIpv4Packet: remaining=${buffer.remaining()}")
         
         // 最小 IPv4 头部 20 字节
         if (buffer.remaining() < 20) return false
@@ -116,7 +122,7 @@ class PacketProcessor @Inject constructor(
         val srcIp = readIpAddress(buffer)
         val dstIp = readIpAddress(buffer)
         
-        Log.d(TAG, "IPv4: proto=$protocol src=$srcIp dst=$dstIp")
+        if (IS_DEBUG) Log.d(TAG, "IPv4: proto=$protocol src=$srcIp dst=$dstIp")
         
         // 处理选项
         if (ihl > 5) {
@@ -298,9 +304,9 @@ class PacketProcessor @Inject constructor(
                              buffer.position(payloadStart + dataOffset)
                              forwardToSocks(conn, buffer, payloadStart + dataOffset, payloadLen)
                          }
-                     } else {
-                         Log.d(TAG, "Retransmit/seq mismatch for conn ${conn.id}: seq=${seqNum.toLong() and 0xFFFFFFFFL} expected=${expectedBrowserSeq} state=${conn.state} fwd=${conn.forwardedBytes}")
-                     }
+} else {
+                          if (IS_DEBUG) Log.d(TAG, "Retransmit/seq mismatch for conn ${conn.id}: seq=${seqNum.toLong() and 0xFFFFFFFFL} expected=${expectedBrowserSeq} state=${conn.state} fwd=${conn.forwardedBytes}")
+                      }
                  } else {
                      // pure ACK (three-way handshake completion) — no payload
                  }
@@ -382,7 +388,7 @@ class PacketProcessor @Inject constructor(
 
         try {
             // 诊断日志：记录所有 53 端口 UDP 包
-            android.util.Log.d(TAG, "handleDnsPacket: src=$srcIp:$srcPort dst=$dstIp:$dstPort len=$length mode=${interceptor.getTransportMode()}")
+            if (IS_DEBUG) android.util.Log.d(TAG, "handleDnsPacket: src=$srcIp:$srcPort dst=$dstIp:$dstPort len=$length mode=${interceptor.getTransportMode()}")
             
             // 提取 DNS 查询 payload (buffer 已跳过 UDP 头部 8 字节)
             val dnsPayloadLen = length - 8
@@ -390,15 +396,17 @@ class PacketProcessor @Inject constructor(
             dnsBuffer.limit(dnsPayloadLen)
 
             // 委托 DnsInterceptor 处理
-            val result = interceptor.processDnsQuery(dnsBuffer, srcIp, dstIp, srcPort, dstPort)
-            if (result) {
+            val processed = interceptor.processDnsQuery(dnsBuffer, srcIp, dstIp, srcPort, dstPort)
+            if (processed) {
                 packetsProcessed.value++
                 bytesProcessed.value = bytesProcessed.value + length.toLong()
-                android.util.Log.d(TAG, "DNS query processed via DnsInterceptor (returned true)")
+                if (IS_DEBUG) android.util.Log.d(TAG, "DNS query processed via DnsInterceptor (returned true)")
             } else {
-                android.util.Log.w(TAG, "DnsInterceptor returned false, passing through")
+                // 不支持的查询类型（如 SRV），丢弃而非透传，避免包循环
+                packetsProcessed.value++
+                bytesProcessed.value = bytesProcessed.value + length.toLong()
             }
-            return result
+            return true
         } catch (e: Exception) {
             android.util.Log.e(TAG, "handleDnsPacket failed", e)
             errors.value++
@@ -431,7 +439,7 @@ class PacketProcessor @Inject constructor(
                 return handleRouterSolicitation(buffer, srcIp, dstIp, payloadStart, payloadLength)
             }
             else -> {
-                Log.d(TAG, "ICMPv6 type=$type code=$code not handled, dropping")
+                if (IS_DEBUG) Log.d(TAG, "ICMPv6 type=$type code=$code not handled, dropping")
                 return false
             }
         }
@@ -467,7 +475,7 @@ class PacketProcessor @Inject constructor(
             isOverride = true
         )
         writer(naPacket)
-        Log.d(TAG, "Sent Neighbor Advertisement for $targetAddr")
+        if (IS_DEBUG) Log.d(TAG, "Sent Neighbor Advertisement for $targetAddr")
         return true
     }
 
@@ -486,7 +494,7 @@ class PacketProcessor @Inject constructor(
             dstIp = srcIp.address
         )
         writer(raPacket)
-        Log.d(TAG, "Sent Router Advertisement")
+        if (IS_DEBUG) Log.d(TAG, "Sent Router Advertisement")
         return true
     }
 
@@ -601,24 +609,30 @@ class PacketProcessor @Inject constructor(
 
     /**
      * 将 TCP SYN 转发到隧道插件建立连接
-     * 如果插件提供本地 SOCKS5 端口，通过 SOCKS5 代理转发
-     * 否则直接通过隧道插件的 openTcpChannel
+     * SOCKS5 优先：先回 SYN-ACK 再异步建 SSH 隧道，避免客户端超时
+     * 无 SOCKS5 端口时走 openTcpChannel 直连
      */
     private fun forwardSynToTunnel(conn: TcpConnection) {
         scope.launch {
             try {
                 val plugin = tunnelManager.getActiveOrFallback()
-                val socksPort = plugin.localSocksPort
-
-                if (socksPort > 0) {
-                    // Plugin provides local SOCKS5 proxy (e.g., Socks5TunnelPlugin)
-                    forwardThroughLocalSocks(conn, plugin, socksPort)
+                
+                if (plugin.localSocksPort > 0) {
+                    forwardThroughLocalSocks(conn, plugin, plugin.localSocksPort)
                 } else {
-                    // Plugin provides direct channel (e.g., DirectTunnelPlugin, HttpsProxyTunnelPlugin)
-                    forwardThroughDirectChannel(conn, plugin)
+                    val channel = plugin.openTcpChannel(conn.dstIp.hostAddress, conn.dstPort)
+                    if (channel != null) {
+                        forwardThroughDirectChannel(conn, plugin, channel)
+                    } else {
+                        Log.e(TAG, "Plugin ${plugin.id} provides neither SOCKS5 port nor direct channel")
+                        val connKey = connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort)
+                        val rstPacket = buildRstPacket(conn, connKey)
+                        if (rstPacket != null) tunWriter?.invoke(rstPacket)
+                        conn.state = TcpConnection.TcpState.Closed
+                    }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "forwardSynToTunnel failed", e)
+                if (IS_DEBUG) Log.e(TAG, "forwardSynToTunnel failed", e)
                 errors.value++
                 conn.state = TcpConnection.TcpState.Closed
             }
@@ -701,7 +715,7 @@ class PacketProcessor @Inject constructor(
         }
 
         startRelayFromSocks(conn, connKey)
-        Log.d(TAG, "TCP established via SOCKS5 to ${conn.dstIp}:${conn.dstPort}")
+        if (IS_DEBUG) Log.d(TAG, "TCP established via SOCKS5 to ${conn.dstIp}:${conn.dstPort}")
     }
 
     /**
@@ -742,7 +756,7 @@ class PacketProcessor @Inject constructor(
         val socksChannel = conn.socksChannel ?: return
         val writer = tunWriter ?: return
 
-        Thread({
+        scope.launch(Dispatchers.IO) {
             val buffer = ByteBuffer.allocateDirect(RELAY_BUFFER_SIZE)
             try {
                 while (socksChannel.isOpen && conn.state == TcpConnection.TcpState.Established) {
@@ -764,24 +778,21 @@ class PacketProcessor @Inject constructor(
             } finally {
                 closeTcpConnection(connKey, conn)
             }
-        }, "SOCKS5-Relay-${conn.id}").start()
+        }
     }
 
     /**
      * 通过隧道插件直接转发 (无本地 SOCKS5 代理)
+     * @param channel 已由 forwardSynToTunnel 打开的通道
      */
-    private suspend fun forwardThroughDirectChannel(conn: TcpConnection, plugin: TunnelPlugin) {
-        val channel = plugin.openTcpChannel(conn.dstIp.hostAddress, conn.dstPort)
-        if (channel == null) {
-            Log.e(TAG, "openTcpChannel failed for plugin ${plugin.id}: ${conn.dstIp.hostAddress}:${conn.dstPort}")
-            conn.state = TcpConnection.TcpState.Closed
-            return
-        }
-
+    private suspend fun forwardThroughDirectChannel(conn: TcpConnection, plugin: TunnelPlugin, channel: TunnelChannel) {
         val connected = channel.connect(5000)
         if (!connected) {
             Log.e(TAG, "channel.connect failed for plugin ${plugin.id}")
             channel.disconnect()
+            val connKey = connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort)
+            val rstPacket = buildRstPacket(conn, connKey)
+            if (rstPacket != null) tunWriter?.invoke(rstPacket)
             conn.state = TcpConnection.TcpState.Closed
             return
         }
@@ -796,7 +807,7 @@ class PacketProcessor @Inject constructor(
         }
 
         startRelayFromTunnel(conn, connKey)
-        Log.d(TAG, "TCP established via direct channel ${plugin.id} to ${conn.dstIp}:${conn.dstPort}")
+        if (IS_DEBUG) Log.d(TAG, "TCP established via direct channel ${plugin.id} to ${conn.dstIp}:${conn.dstPort}")
     }
 
     /**
@@ -807,7 +818,7 @@ class PacketProcessor @Inject constructor(
         val input = channel.inputStream ?: return
         val writer = tunWriter ?: return
 
-        Thread({
+        scope.launch(Dispatchers.IO) {
             val buffer = ByteArray(RELAY_BUFFER_SIZE)
             try {
                 while (channel.isConnected && conn.state == TcpConnection.TcpState.Established) {
@@ -826,7 +837,7 @@ class PacketProcessor @Inject constructor(
             } finally {
                 closeTcpConnection(connKey, conn)
             }
-        }, "Tunnel-Relay-${conn.id}").start()
+        }
     }
 
     /**
@@ -844,7 +855,7 @@ class PacketProcessor @Inject constructor(
             val domain = extractSniFromTls(firstData) ?: extractHostFromHttp(firstData)
             if (domain != null) {
                 dnsInterceptor?.ipToDomain?.put(conn.dstIp.hostAddress, domain)
-                Log.d(TAG, "Extracted domain: $domain for IP ${conn.dstIp.hostAddress} (conn ${conn.id})")
+                if (IS_DEBUG) Log.d(TAG, "Extracted domain: $domain for IP ${conn.dstIp.hostAddress} (conn ${conn.id})")
             }
 
             val plugin = tunnelManager.getActiveOrFallback()
@@ -1034,19 +1045,18 @@ class PacketProcessor @Inject constructor(
             val ipHeaderLen = if (isIPv6) 40 else 20
             val totalLen = ipHeaderLen + tcpHeaderLen + payload.size
 
-            val packet = ByteBuffer.allocate(totalLen)
-            packet.order(ByteOrder.BIG_ENDIAN)
+            val packet = responseBuffer.get()
+            packet.clear()
+            packet.limit(totalLen)
 
             if (isIPv6) {
-                // IPv6 Header (40 bytes)
-                packet.putInt(0x60000000.toInt()) // Version=6, Traffic Class=0, Flow Label=0
-                packet.putShort((tcpHeaderLen + payload.size).toShort()) // Payload length = TCP header + payload
-                packet.put(6.toByte())  // Next Header: TCP
-                packet.put(64.toByte()) // Hop Limit
+                packet.putInt(0x60000000.toInt())
+                packet.putShort((tcpHeaderLen + payload.size).toShort())
+                packet.put(6.toByte())
+                packet.put(64.toByte())
                 packet.put(srcIp)
                 packet.put(dstIp)
             } else {
-                // IPv4 Header (20 bytes)
                 packet.put(0x45.toByte())
                 packet.put(0x00)
                 packet.putShort(totalLen.toShort())
@@ -1059,37 +1069,33 @@ class PacketProcessor @Inject constructor(
                 packet.put(dstIp)
             }
 
-            // TCP Header
             packet.putShort(srcPort.toShort())
             packet.putShort(dstPort.toShort())
             packet.putInt(seqNum.toInt())
             packet.putInt(ackNum.toInt())
-            packet.putShort(0x5018.toShort()) // ACK+PSH
+            packet.putShort(0x5018.toShort())
             packet.putShort(65535.toShort())
             packet.putShort(0)
             packet.putShort(0)
 
-            // Payload
             packet.put(payload)
 
             if (!isIPv6) {
-                // IPv4 校验和
                 packet.position(0)
                 val ipChecksum = calculateIpChecksum(packet, ipHeaderLen)
                 packet.position(10)
                 packet.putShort(ipChecksum)
             }
 
-            // TCP 校验和
             val tcpChecksum = calculateTcpChecksum(srcIp, dstIp, packet.array(), ipHeaderLen, payload.size + tcpHeaderLen)
             packet.position(ipHeaderLen + 16)
             packet.putShort(tcpChecksum)
 
             if (!isIPv6) {
-                Log.d(TAG, "TCP resp (${packet.array().size}B) conn=${conn.id}")
+                if (IS_DEBUG) Log.d(TAG, "TCP resp (${totalLen}B) conn=${conn.id}")
             }
 
-            return packet.array()
+            return packet.array().copyOfRange(0, totalLen)
         } catch (e: Exception) {
             Log.e(TAG, "buildTcpResponsePacket failed: ${e::class.simpleName}: conn.srcIp.size=${conn.srcIp.address.size} payload.size=${payload.size}", e)
             return null
@@ -1118,19 +1124,18 @@ class PacketProcessor @Inject constructor(
             val ipHeaderLen = if (isIPv6) 40 else 20
             val totalLen = ipHeaderLen + tcpHeaderLen
 
-            val packet = ByteBuffer.allocate(totalLen)
-            packet.order(ByteOrder.BIG_ENDIAN)
+            val packet = responseBuffer.get()
+            packet.clear()
+            packet.limit(totalLen)
 
             if (isIPv6) {
-                // IPv6 Header
                 packet.putInt(0x60000000.toInt())
-                packet.putShort(tcpHeaderLen.toShort()) // Payload length = TCP header only
+                packet.putShort(tcpHeaderLen.toShort())
                 packet.put(6.toByte())
                 packet.put(64.toByte())
                 packet.put(srcIp)
                 packet.put(dstIp)
             } else {
-                // IPv4 Header
                 packet.put(0x45.toByte())
                 packet.put(0x00)
                 packet.putShort(totalLen.toShort())
@@ -1160,17 +1165,18 @@ class PacketProcessor @Inject constructor(
                 packet.putShort(ipChecksum)
             }
 
-            // TCP 校验和 (对 IPv6 伪头部用 0 填充)
             val tcpChecksum = calculateTcpChecksum(srcIp, dstIp, packet.array(), ipHeaderLen, tcpHeaderLen)
             packet.position(ipHeaderLen + 16)
             packet.putShort(tcpChecksum)
 
             if (!isIPv6) {
-                val hex = packet.array().joinToString("") { "%02x".format(it) }
-                Log.d(TAG, "SYN-ACK packet (${packet.array().size}B): $hex")
+                if (IS_DEBUG) {
+                    val hex = packet.array().copyOfRange(0, totalLen).joinToString("") { "%02x".format(it) }
+                    Log.d(TAG, "SYN-ACK packet (${totalLen}B): $hex")
+                }
             }
 
-            return packet.array()
+            return packet.array().copyOfRange(0, totalLen)
         } catch (e: Exception) {
             Log.e(TAG, "buildSynAckPacket failed: ${e::class.simpleName}: ${e.message}", e)
             return null
@@ -1191,8 +1197,9 @@ class PacketProcessor @Inject constructor(
             val ipHeaderLen = if (isIPv6) 40 else 20
             val totalLen = ipHeaderLen + tcpHeaderLen
 
-            val packet = ByteBuffer.allocate(totalLen)
-            packet.order(ByteOrder.BIG_ENDIAN)
+            val packet = responseBuffer.get()
+            packet.clear()
+            packet.limit(totalLen)
 
             if (isIPv6) {
                 packet.putInt(0x60000000.toInt())
@@ -1234,8 +1241,8 @@ class PacketProcessor @Inject constructor(
             packet.position(ipHeaderLen + 16)
             packet.putShort(tcpChecksum)
 
-            Log.d(TAG, "RST packet ${packet.array().size}B for conn ${conn.id} ${conn.srcIp.hostAddress}:${conn.srcPort}")
-            return packet.array()
+            if (IS_DEBUG) Log.d(TAG, "RST packet ${totalLen}B for conn ${conn.id} ${conn.srcIp.hostAddress}:${conn.srcPort}")
+            return packet.array().copyOfRange(0, totalLen)
         } catch (e: Exception) {
             Log.e(TAG, "buildRstPacket failed: ${e::class.simpleName}: ${e.message}", e)
             return null
@@ -1370,7 +1377,7 @@ private fun forwardToSocks(
                      buffer.get(payload)
                      output.write(payload)
                      output.flush()
-                     Log.d(TAG, "forwardToTunnel: wrote ${payloadLength}B for conn ${conn.id} → ${conn.dstIp}:${conn.dstPort}")
+                     if (IS_DEBUG) Log.d(TAG, "forwardToTunnel: wrote ${payloadLength}B for conn ${conn.id} → ${conn.dstIp}:${conn.dstPort}")
                  }
              } catch (e: IOException) {
                  Log.e(TAG, "forwardToTunnel failed", e)
@@ -1386,14 +1393,16 @@ private fun forwardToSocks(
              return
          }
 
-          try {
-              buffer.position(payloadStart)
-              buffer.limit(payloadStart + payloadLength)
-              val hexPayload = ByteArray(payloadLength).also { buffer.duplicate().get(it) }.joinToString("") { "%02x".format(it) }.take(40)
-              while (buffer.hasRemaining()) {
-                  socksChannel.write(buffer)
-              }
-              Log.d(TAG, "forwardToSocks: wrote ${payloadLength}B for conn ${conn.id} → ${conn.dstIp}:${conn.dstPort} hex=$hexPayload")
+try {
+               buffer.position(payloadStart)
+               buffer.limit(payloadStart + payloadLength)
+               while (buffer.hasRemaining()) {
+                   socksChannel.write(buffer)
+               }
+               if (IS_DEBUG) {
+                   val hexPayload = ByteArray(payloadLength).also { buffer.duplicate().get(it) }.joinToString("") { "%02x".format(it) }.take(40)
+                   Log.d(TAG, "forwardToSocks: wrote ${payloadLength}B for conn ${conn.id} → ${conn.dstIp}:${conn.dstPort} hex=$hexPayload")
+               }
          } catch (e: IOException) {
              Log.e(TAG, "forwardToSocks failed", e)
             errors.value++

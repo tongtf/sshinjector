@@ -232,19 +232,21 @@ class MainViewModel @Inject constructor(
             // 观察活跃隧道状态
             launch {
                 while (true) {
-                    val tunnels = tunnelManager.getAllActivePlugins().map { plugin ->
-                        val s = plugin.state.value
-                        val st = plugin.stats.value
-                        TunnelInfo(
-                            id = plugin.id,
-                            displayName = plugin.displayName,
-                            status = s.status,
-                            activeConnections = st.activeTcpConnections,
-                            bytesSent = st.bytesUp,
-                            bytesReceived = st.bytesDown,
-                        )
-                    }
-                    _uiState.update { it.copy(activeTunnels = tunnels) }
+                    try {
+                        val tunnels = tunnelManager.getAllActivePlugins().map { plugin ->
+                            val s = plugin.state.value
+                            val st = plugin.stats.value
+                            TunnelInfo(
+                                id = plugin.id,
+                                displayName = plugin.displayName,
+                                status = s.status,
+                                activeConnections = st.activeTcpConnections,
+                                bytesSent = st.bytesUp,
+                                bytesReceived = st.bytesDown,
+                            )
+                        }
+                        _uiState.update { it.copy(activeTunnels = tunnels) }
+                    } catch (_: Exception) {}
                     kotlinx.coroutines.delay(2000)
                 }
             }

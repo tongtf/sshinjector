@@ -54,6 +54,8 @@ val TUNNEL_TYPES = listOf(
     TunnelTypeOption("direct", "直连", "不经过代理，直接连接"),
     TunnelTypeOption("https_proxy", "HTTPS Proxy", "通过 HTTP CONNECT 代理"),
     TunnelTypeOption("v2ray", "V2Ray", "V2Ray/VMess 加密隧道"),
+    TunnelTypeOption("trojan", "Trojan", "Trojan 加密隧道 (TLS)"),
+    TunnelTypeOption("shadowsocks", "Shadowsocks", "Shadowsocks AEAD 加密隧道"),
 )
 
 @OptIn(ExperimentalLayoutApi::class)

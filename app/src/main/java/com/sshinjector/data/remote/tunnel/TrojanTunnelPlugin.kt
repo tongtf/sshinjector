@@ -17,9 +17,14 @@ import java.io.OutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
 import javax.inject.Inject
 import javax.inject.Singleton
+import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocketFactory
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 
 @Singleton
 class TrojanTunnelPlugin @Inject constructor() : TunnelPlugin {
@@ -95,8 +100,22 @@ class TrojanTunnelPlugin @Inject constructor() : TunnelPlugin {
         val socket = Socket()
         socket.connect(InetSocketAddress(host, port), timeout)
         val sni = c.sni ?: host
-        val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
+        val sslFactory = if (c.allowInsecure) {
+            val ctx = SSLContext.getInstance("TLS")
+            ctx.init(null, arrayOf(INSECURE_TRUST_MANAGER), SecureRandom())
+            ctx.socketFactory as SSLSocketFactory
+        } else {
+            SSLSocketFactory.getDefault() as SSLSocketFactory
+        }
         return sslFactory.createSocket(socket, sni, port, true)
+    }
+
+    companion object {
+        private val INSECURE_TRUST_MANAGER = object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+        }
     }
 
     private fun buildAddressBytes(host: String, port: Int): ByteArray {

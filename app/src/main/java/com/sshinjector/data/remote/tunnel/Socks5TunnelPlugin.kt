@@ -4,6 +4,7 @@ import com.sshinjector.R
 import com.sshinjector.data.remote.ssh.JschSshClient
 import com.sshinjector.data.remote.ssh.SshKeyManager
 import com.sshinjector.domain.model.ServerConfig
+import com.sshinjector.domain.vpn.DnsInterceptor
 import com.sshinjector.domain.vpn.Socks5ProxyServer
 import com.sshinjector.domain.vpn.TunnelChannel
 import com.sshinjector.domain.vpn.tunnel.ConfigField
@@ -21,7 +22,8 @@ import javax.inject.Singleton
 
 @Singleton
 class Socks5TunnelPlugin @Inject constructor(
-    private val keyManager: SshKeyManager
+    private val keyManager: SshKeyManager,
+    private val dnsInterceptor: DnsInterceptor
 ) : TunnelPlugin {
 
     override val id = "socks5"
@@ -82,7 +84,7 @@ class Socks5TunnelPlugin @Inject constructor(
             val result = client.connect(sshConfig)
             if (!result.success) throw Exception(result.error ?: "SSH connection failed")
 
-            val proxy = Socks5ProxyServer(client)
+            val proxy = Socks5ProxyServer(client, dnsInterceptor)
             val proxyResult = proxy.start(c.socksPort, "127.0.0.1")
             if (proxyResult.isFailure) throw proxyResult.exceptionOrNull()!!
 

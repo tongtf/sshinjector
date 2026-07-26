@@ -20,6 +20,8 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.MessageDigest
 import javax.crypto.Cipher
+import javax.crypto.Mac
+import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import javax.inject.Inject
@@ -94,14 +96,14 @@ class V2RayTunnelPlugin @Inject constructor() : TunnelPlugin {
         return try {
             val socket = createSocket(c)
             val os = socket.getOutputStream()
+            val input = socket.getInputStream()
 
-            val vmess = VmessProtocol(c.uuid, c.alterId)
-            val request = vmess.buildRequest(host, port)
+            val vmess = VmessAeadProtocol(c.uuid)
+            val request = vmess.buildRequest(host, port, System.currentTimeMillis() / 1000)
             os.write(request)
             os.flush()
 
-            val input = socket.getInputStream()
-            if (vmess.readResponse(input) == null) {
+            if (!vmess.readResponse(input)) {
                 socket.close()
                 return null
             }
@@ -124,45 +126,53 @@ class V2RayTunnelPlugin @Inject constructor() : TunnelPlugin {
     }
 }
 
-private class VmessProtocol(
-    private val uuid: String,
-    private val alterId: Int,
-) {
-    private val uuidBytes: ByteArray by lazy {
+private class VmessAeadProtocol(uuid: String) {
+    private val uuidBytes = run {
         val hex = uuid.replace("-", "")
         ByteArray(16) { Integer.parseInt(hex.substring(it * 2, it * 2 + 2), 16).toByte() }
     }
+    private val key = md5(uuidBytes + "c48619fe-8f02-49e0-b9e9-edf763e17e21".toByteArray())
+    private val iv = md5(key + "c48619fe-8f02-49e0-b9e9-edf763e17e21".toByteArray())
 
-    fun buildRequest(host: String, port: Int): ByteArray {
-        val timestamp = System.currentTimeMillis() / 1000
-        val nonce = ByteArray(8) { (timestamp shr (it * 8)).toByte() }
+    fun buildRequest(host: String, port: Int, timestamp: Long): ByteArray {
+        val tsBytes = ByteArray(8) { (timestamp shr (it * 8)).toByte() }
 
-        val addrBytes = buildAddrBytes(host, port)
-        val instruction = ByteArray(1 + 1 + 1 + 1 + addrBytes.size)
-        var idx = 0
-        instruction[idx++] = 1
-        instruction[idx++] = 1
-        instruction[idx++] = 0
-        instruction[idx++] = 0
-        addrBytes.copyInto(instruction, idx)
+        val body = buildRequestBody(host, port)
+        val bodyKey = md5(key + tsBytes)
+        val bodyIv = md5(iv + tsBytes)
 
-        val bodyKey = md5(uuidBytes + "c48619fe-8f02-49e0-b9e9-edf763e17e21".toByteArray())
-        val bodyCipher = Cipher.getInstance("AES/CFB/NoPadding")
-        bodyCipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(bodyKey.copyOf(16), "AES"), IvParameterSpec(nonce.copyOf(16)))
-        val encrypted = bodyCipher.doFinal(instruction)
+        val cipher = Cipher.getInstance("AES/CFB/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(bodyKey, "AES"), IvParameterSpec(bodyIv))
+        val encryptedBody = cipher.doFinal(body)
 
-        val headerKey = md5(uuidBytes)
+        val authData = ByteArray(16)
+        val hmac = Mac.getInstance("HmacSHA256")
+        hmac.init(SecretKeySpec(uuidBytes, "HmacSHA256"))
+        val authId = hmac.doFinal(tsBytes).copyOf(4)
+        authId.copyInto(authData, 0, 0, 4)
+        val tsPart = tsBytes.copyOf(8)
+        tsPart.copyInto(authData, 4, 0, 8)
+
         val headerCipher = Cipher.getInstance("AES/CFB/NoPadding")
-        headerCipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(headerKey, "AES"), IvParameterSpec(nonce.copyOf(16)))
-        val header = headerCipher.doFinal(nonce.copyOf(16))
+        headerCipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
+        val encryptedAuth = headerCipher.doFinal(authData).copyOf(16)
 
-        return header + encrypted
+        return encryptedAuth + encryptedBody
     }
 
-    fun readResponse(input: InputStream): ByteArray? {
+    fun readResponse(input: InputStream): Boolean {
         val buf = ByteArray(4)
         val n = input.read(buf)
-        return if (n >= 0) buf else null
+        return n >= 4
+    }
+
+    private fun buildRequestBody(host: String, port: Int): ByteArray {
+        val addrBytes = buildAddrBytes(host, port)
+        return ByteArray(1) + // version
+            byteArrayOf(1) + // cmd (TCP)
+            byteArrayOf(0) + // opt
+            byteArrayOf(0) +  // sec
+            addrBytes
     }
 
     private fun buildAddrBytes(host: String, port: Int): ByteArray {

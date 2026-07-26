@@ -22,6 +22,9 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
+import android.util.Log
+
+private val IS_DEBUG = android.util.Log.isLoggable("Socks5Proxy", android.util.Log.DEBUG)
 
 /**
  * 本地 SOCKS5 代理服务器 (RFC 1928)
@@ -31,7 +34,8 @@ import javax.inject.Singleton
  */
 @Singleton
 class Socks5ProxyServer @Inject constructor(
-    private val sshChannelFactory: SshChannelFactory
+    private val sshChannelFactory: SshChannelFactory,
+    private val dnsInterceptor: DnsInterceptor
 ) {
     
     private var serverChannel: ServerSocketChannel? = null
@@ -117,11 +121,11 @@ class Socks5ProxyServer @Inject constructor(
     private fun eventLoop() {
         while (!Thread.interrupted() && selector?.isOpen == true) {
             try {
-                val ready = selector?.select(10) ?: break
+                val ready = selector?.select(1000) ?: break
                 if (ready == 0) continue
                 
                 val selectedKeys = selector?.selectedKeys() ?: continue
-                val keysCopy = selectedKeys.toSet()
+                val keysCopy = selectedKeys.toTypedArray()
                 selectedKeys.clear()
                 
                 for (key in keysCopy) {
@@ -185,7 +189,8 @@ class Socks5ProxyServer @Inject constructor(
                 removeTunCallback(clientPort)
                 activeConnections.value = connections.size
             },
-            onDataFromTarget = null
+            onDataFromTarget = null,
+            ipToDomainLookup = { dnsInterceptor.ipToDomain[it] }
         )
         
         // 延迟查找回调: relayFromTarget 首次使用前从 pendingTunCallbacks 获取
@@ -247,7 +252,8 @@ class Socks5Connection(
     private val onDataSent: (Long) -> Unit,
     private val onDataReceived: (Long) -> Unit,
     private val onClosed: () -> Unit,
-    var onDataFromTarget: ((ByteArray) -> Unit)? = null
+    var onDataFromTarget: ((ByteArray) -> Unit)? = null,
+    private val ipToDomainLookup: ((String) -> String?)? = null
 ) {
     private val buffer = ByteBuffer.allocateDirect(32768)
     private var state = SocksState.Handshake
@@ -255,7 +261,6 @@ class Socks5Connection(
     private var remoteHost: String? = null
     private var remotePort: Int = 0
     private val pendingWrites = java.util.concurrent.ConcurrentLinkedDeque<ByteBuffer>()
-    private var relayThread: Thread? = null
     internal var selectionKey: SelectionKey? = null
     internal var tunCallbackKey: Int = 0
     internal var pendingTunCallbacksRef: java.util.concurrent.ConcurrentHashMap<Int, (ByteArray) -> Unit>? = null
@@ -291,7 +296,7 @@ class Socks5Connection(
             val read = channel.read(buffer)
 
             if (read == -1) {
-                android.util.Log.d("Socks5Proxy", "[conn=$id] handleRead: EOF (state=$state)")
+                if (IS_DEBUG) android.util.Log.d("Socks5Proxy", "[conn=$id] handleRead: EOF (state=$state)")
                 close()
                 return
             }
@@ -342,7 +347,13 @@ class Socks5Connection(
         }
         // If queue is empty, remove OP_WRITE
         if (pendingWrites.isEmpty()) {
-            key.interestOps(key.interestOps() and SelectionKey.OP_WRITE.inv())
+            try {
+                if (key.isValid) {
+                    key.interestOps(key.interestOps() and SelectionKey.OP_WRITE.inv())
+                }
+            } catch (e: java.nio.channels.CancelledKeyException) {
+                close()
+            }
         }
     }
 
@@ -510,10 +521,10 @@ class Socks5Connection(
      */
     private fun connectToTarget() {
         val factory = sshChannelFactory
-        val host = remoteHost
+        var host = remoteHost
         val port = remotePort
 
-        android.util.Log.d("Socks5Proxy", "connectToTarget: $host:$port, factory=${factory != null}")
+        if (IS_DEBUG) android.util.Log.d("Socks5Proxy", "connectToTarget: $host:$port, factory=${factory != null}")
 
         if (factory == null || host == null) {
             android.util.Log.e("Socks5Proxy", "connectToTarget failed: factory=$factory host=$host")
@@ -522,9 +533,22 @@ class Socks5Connection(
             return
         }
 
+        // 解析假 IP 为真实域名 (198.18.x.x 或 fd00::/64 范围)
+        val resolvedHost = if (host.startsWith("198.18.")) {
+            ipToDomainLookup?.invoke(host) ?: host
+        } else if (host.startsWith("fd00:")) {
+            ipToDomainLookup?.invoke(host) ?: host
+        } else {
+            host
+        }
+
+        if (resolvedHost != host) {
+            android.util.Log.d("Socks5Proxy", "Resolved fake IP $host to domain $resolvedHost")
+        }
+
         scope.launch {
             try {
-                val tunnel = factory.createDirectChannel(host, port)
+                val tunnel = factory.createDirectChannel(resolvedHost, port)
                 if (tunnel == null) {
                     android.util.Log.e("Socks5Proxy", "connectToTarget failed: createDirectChannel returned null for $host:$port")
                     sendErrorReply(0x05)
@@ -541,7 +565,7 @@ class Socks5Connection(
                     return@launch
                 }
 
-                android.util.Log.d("Socks5Proxy", "connectToTarget success: $host:$port")
+                if (IS_DEBUG) android.util.Log.d("Socks5Proxy", "connectToTarget success: $host:$port")
                 targetTunnel = tunnel
                 onTargetConnected()
 
@@ -574,20 +598,20 @@ class Socks5Connection(
     }
 
     /**
-     * 启动反向中继线程: 从 SSH 隧道读取数据写回 SOCKS5 客户端
+     * 启动反向中继: 从 SSH 隧道读取数据写回 SOCKS5 客户端
      */
-private fun startRelayFromTarget() {
+    private fun startRelayFromTarget() {
         val tunnel = targetTunnel ?: return
         val input = tunnel.inputStream ?: return
 
-        relayThread = Thread({
-            val readBuffer = ByteBuffer.allocate(32768)
+        scope.launch(Dispatchers.IO) {
+            val readBuffer = ByteBuffer.allocate(65535)  // 增加到 64KB
             var resolvedCallback = onDataFromTarget
             if (resolvedCallback == null && pendingTunCallbacksRef != null) {
                 resolvedCallback = pendingTunCallbacksRef!![tunCallbackKey]
             }
             val callback = resolvedCallback
-            android.util.Log.d("Socks5Proxy", "[conn=$id] relayFromTarget started, callbackKey=$tunCallbackKey callback=${if (callback != null) "set" else "MISSING"}")
+            if (IS_DEBUG) android.util.Log.d("Socks5Proxy", "[conn=$id] relayFromTarget started, callbackKey=$tunCallbackKey callback=${if (callback != null) "set" else "MISSING"}")
             try {
                 while (tunnel.isConnected && state == SocksState.Relaying) {
                     readBuffer.clear()
@@ -598,9 +622,12 @@ private fun startRelayFromTarget() {
                         break
                     }
                     if (read > 0) {
+                        // 只在必须传给 callback 时拷贝; sendReply 路径可直接用 array + offset/len
                         val data = readBuffer.array().copyOf(read)
-                        val hex = data.joinToString("") { "%02x".format(it) }
-                        android.util.Log.d("Socks5Proxy", "[conn=$id] relayFromTarget: received ${read}B hex=$hex callback=${callback != null}")
+                        if (IS_DEBUG) {
+                            val hex = data.joinToString("") { "%02x".format(it) }
+                            android.util.Log.d("Socks5Proxy", "[conn=$id] relayFromTarget: received ${read}B hex=$hex callback=${callback != null}")
+                        }
                         callback?.invoke(data)
                         onDataReceived(read.toLong())
                         if (callback == null) {
@@ -609,13 +636,11 @@ private fun startRelayFromTarget() {
                     }
                 }
             } catch (e: Exception) {
-                android.util.Log.e("Socks5Proxy", "[conn=$id] relayFromTarget error: ${e.message}", e)
+                android.util.Log.e("Socks5Connection", "[conn=$id] relayFromTarget error: ${e.message}", e)
             } finally {
-                android.util.Log.d("Socks5Proxy", "[conn=$id] relayFromTarget thread exiting")
+                if (IS_DEBUG) android.util.Log.d("Socks5Connection", "[conn=$id] relayFromTarget coroutine exiting")
             }
-        }, "SOCKS5-Relay-FromTarget-$id")
-        relayThread?.isDaemon = true
-        relayThread?.start()
+        }
     }
 
     private fun buildSuccessReply(): ByteArray {
@@ -660,11 +685,20 @@ private fun startRelayFromTarget() {
         try {
             val output = tunnel.outputStream
             if (output != null) {
-                val bytes = ByteArray(buffer.remaining())
-                buffer.get(bytes)
-                output.write(bytes)
+                // 直接从 direct buffer 写入，避免中间字节数组分配
+                // 注意: outputStream.write(ByteBuffer) 需要 Java 9+, 这里兼容性写法
+                val remaining = buffer.remaining()
+                if (buffer.hasArray()) {
+                    output.write(buffer.array(), buffer.arrayOffset() + buffer.position(), remaining)
+                } else {
+                    // direct buffer: 落地到临时数组 (尽量复用)
+                    val bytes = ByteArray(remaining)
+                    buffer.get(bytes)
+                    output.write(bytes, 0, remaining)
+                }
+                // JSch SSH channel 需要 flush 才能真正发送数据包
                 output.flush()
-                onDataSent(bytes.size.toLong())
+                onDataSent(remaining.toLong())
             }
             buffer.clear()
             lastActivity = System.currentTimeMillis()
@@ -717,9 +751,6 @@ private fun startRelayFromTarget() {
 
         timeoutCheckJob?.cancel()
         timeoutCheckJob = null
-
-        relayThread?.interrupt()
-        relayThread = null
 
         try { channel.close() } catch (_: Exception) {}
         try {
