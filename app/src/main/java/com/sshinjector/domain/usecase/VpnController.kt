@@ -149,6 +149,9 @@ class VpnController @Inject constructor(
             }
             addLog("隧道连接成功: ${server.tunnelType}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.SUCCESS)
 
+            // 2.5 加载路由配置
+            loadRouteConfig()
+
             // 3. 设置 DNS 拦截器
             packetProcessor.setDnsInterceptor(dnsInterceptor)
             val dnsModeValue = settingsDataStore.dnsMode.first()
@@ -678,6 +681,45 @@ private suspend fun connectionCleanupLoop() {
             android.util.Log.w("VpnController", "获取系统 DNS 失败: ${e.message}")
         }
         return dnsList
+    }
+
+    private suspend fun loadRouteConfig() {
+        try {
+            val json = settingsDataStore.routeConfig.first()
+            if (!json.isNullOrBlank()) {
+                val obj = org.json.JSONObject(json)
+                val appTags = mutableListOf<com.sshinjector.domain.vpn.tunnel.AppTagEntry>()
+                val appTagsArr = obj.optJSONArray("appTags")
+                if (appTagsArr != null) {
+                    for (i in 0 until appTagsArr.length()) {
+                        val entry = appTagsArr.getJSONObject(i)
+                        val pkg = entry.getString("packageName")
+                        val tags = (0 until entry.getJSONArray("tags").length())
+                            .map { entry.getJSONArray("tags").getString(it) }.toSet()
+                        appTags.add(com.sshinjector.domain.vpn.tunnel.AppTagEntry(pkg, tags))
+                    }
+                }
+                val tagTunnels = mutableListOf<com.sshinjector.domain.vpn.tunnel.TagTunnelEntry>()
+                val tagTunnelsArr = obj.optJSONArray("tagTunnels")
+                if (tagTunnelsArr != null) {
+                    for (i in 0 until tagTunnelsArr.length()) {
+                        val entry = tagTunnelsArr.getJSONObject(i)
+                        tagTunnels.add(
+                            com.sshinjector.domain.vpn.tunnel.TagTunnelEntry(
+                                tag = entry.getString("tag"),
+                                primaryTunnelId = entry.getString("primaryTunnelId"),
+                            )
+                        )
+                    }
+                }
+                val config = com.sshinjector.domain.vpn.tunnel.RouteConfig(
+                    appTags = appTags,
+                    tagTunnels = tagTunnels,
+                    defaultTunnelId = obj.optString("defaultTunnelId", "socks5"),
+                )
+                tunnelRouter.updateConfig(config)
+            }
+        } catch (_: Exception) {}
     }
 
     private fun buildTunnelConfig(server: ServerConfig, password: String?): TunnelConfig {

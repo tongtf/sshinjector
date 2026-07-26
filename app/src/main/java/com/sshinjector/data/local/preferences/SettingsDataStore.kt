@@ -32,6 +32,7 @@ class SettingsDataStore @Inject constructor(
         private val KEY_ENABLE_IPV6 = booleanPreferencesKey("enable_ipv6")
         private val KEY_DNS_MODE = intPreferencesKey("dns_mode")
         private val KEY_LOG_LEVEL = intPreferencesKey("log_level") // 0=简洁 1=详细
+        private val KEY_ROUTE_CONFIG = stringPreferencesKey("route_config")
         private const val KEY_KEYSTORE_ALIAS_PREFIX = "keystore_alias_"
     }
 
@@ -64,6 +65,13 @@ class SettingsDataStore @Inject constructor(
 
     val logLevel: Flow<Int> = context.dataStore.data
         .map { it[KEY_LOG_LEVEL] ?: 1 } // 默认详细模式
+
+    val routeConfig: Flow<String?> = context.dataStore.data
+        .map { it[KEY_ROUTE_CONFIG] }
+
+    suspend fun setRouteConfig(json: String) {
+        context.dataStore.edit { it[KEY_ROUTE_CONFIG] = json }
+    }
 
     suspend fun setAutoConnect(enabled: Boolean) {
         context.dataStore.edit { it[KEY_AUTO_CONNECT] = enabled }

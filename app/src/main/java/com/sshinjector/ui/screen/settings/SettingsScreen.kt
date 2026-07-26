@@ -50,6 +50,7 @@ import com.sshinjector.domain.vpn.tunnel.TunnelState
 @Composable
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
+    onNavigateToRouteSettings: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
     modifier: Modifier = Modifier
 ) {
@@ -181,6 +182,12 @@ fun SettingsScreen(
             }
 
             SettingsSection("隧道插件") {
+                SettingsRow(
+                    title = "路由规则",
+                    subtitle = "配置应用标签与隧道映射",
+                    trailing = { Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                    onClick = onNavigateToRouteSettings
+                )
                 availablePlugins.forEach { plugin ->
                     val isActive = activePlugin?.id == plugin.id
                     val statusText = when {

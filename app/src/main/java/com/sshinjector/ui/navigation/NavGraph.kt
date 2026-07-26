@@ -9,6 +9,7 @@ import com.sshinjector.ui.screen.dashboard.DashboardScreen
 import com.sshinjector.ui.screen.keymanager.KeyManagerScreen
 import com.sshinjector.ui.screen.server.ServerEditScreen
 import com.sshinjector.ui.screen.server.ServerListScreen
+import com.sshinjector.ui.screen.settings.RouteSettingsScreen
 import com.sshinjector.ui.screen.settings.SettingsScreen
 import com.sshinjector.ui.screen.whitelist.WhitelistScreen
 
@@ -46,7 +47,13 @@ fun AppNavGraph(navController: NavHostController, modifier: Modifier = Modifier)
             WhitelistScreen(onNavigateBack = { navController.popBackStack() })
         }
         composable("settings") {
-            SettingsScreen(onNavigateBack = { navController.popBackStack() })
+            SettingsScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToRouteSettings = { navController.navigate("route_settings") }
+            )
+        }
+        composable("route_settings") {
+            RouteSettingsScreen(onNavigateBack = { navController.popBackStack() })
         }
         composable("keys") {
             KeyManagerScreen(onNavigateBack = { navController.popBackStack() })
