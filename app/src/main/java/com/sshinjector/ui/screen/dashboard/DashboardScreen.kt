@@ -116,7 +116,8 @@ fun DashboardScreen(
                     val (dnsBg, dnsFg) = when (state.dnsMode) {
                         "远程代理" -> Color(0xFF7C4DFF) to Color.White
                         "本地直连" -> Color(0xFF9E9E9E) to Color.White
-                        "自动模式" -> Color(0xFFFF9800) to Color.White
+                        "白名单模式" -> Color(0xFF00BCD4) to Color.White
+                        "域名分流" -> Color(0xFFFF9800) to Color.White
                         else -> MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurface
                     }
                     Surface(

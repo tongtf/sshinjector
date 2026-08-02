@@ -118,13 +118,7 @@ class MainViewModel @Inject constructor(
     private fun observeDnsModeChanges() {
         viewModelScope.launch {
             settingsDataStore.dnsMode.collect { dnsModeValue ->
-                val dnsModeText = when (dnsModeValue) {
-                    0 -> "远程代理"
-                    1 -> "本地直连"
-                    2 -> "自动模式"
-                    else -> "远程代理"
-                }
-                _uiState.update { it.copy(dnsMode = dnsModeText) }
+                _uiState.update { it.copy(dnsMode = dnsModeLabel(dnsModeValue)) }
             }
         }
     }
@@ -151,12 +145,7 @@ class MainViewModel @Inject constructor(
 
             // 获取 DNS 模式
             val dnsModeValue = settingsDataStore.dnsMode.first()
-            val dnsModeText = when (dnsModeValue) {
-                0 -> "远程代理"
-                1 -> "本地直连"
-                2 -> "自动模式"
-                else -> "远程代理"
-            }
+            val dnsModeText = dnsModeLabel(dnsModeValue)
 
             _uiState.update {
                 it.copy(
@@ -580,3 +569,14 @@ class MainViewModel @Inject constructor(
  * 计算下一个连接模式 (0=REMOTE, 1=SYSTEM, 2=WHITELIST, 3=DOMAIN_SPLIT, 循环)
  */
 internal fun nextDnsMode(current: Int): Int = (current + 1) % 4
+
+/**
+ * 连接模式文案 (0=远程代理, 1=本地直连, 2=白名单模式, 3=域名分流)
+ */
+internal fun dnsModeLabel(mode: Int): String = when (mode) {
+    0 -> "远程代理"
+    1 -> "本地直连"
+    2 -> "白名单模式"
+    3 -> "域名分流"
+    else -> "远程代理"
+}

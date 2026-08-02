@@ -117,13 +117,7 @@ class SshVpnService : VpnService() {
                 whitelistDao.getEnabledPackageNames()
             } else emptyList()
 
-            val dnsModeText = when (dnsMode) {
-                0 -> "远程代理"
-                1 -> "本地直连"
-                2 -> "自动模式"
-                3 -> "域名分流"
-                else -> "远程代理"
-            }
+            val dnsModeText = com.sshinjector.ui.viewmodel.dnsModeLabel(dnsMode)
 
             // 记录连接配置日志
             vpnController.addLog("目标服务器: ${config.host}:${config.port}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)

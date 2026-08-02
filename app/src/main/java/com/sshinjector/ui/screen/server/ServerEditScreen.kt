@@ -83,8 +83,11 @@ fun ServerEditScreen(
     var keepAlive by remember { mutableStateOf("30") }
     var setAsDefault by remember { mutableStateOf(false) }
     var tunnelType by remember { mutableStateOf("socks5") }
+    var tunnelConfigValues by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
 
     val availableKeys by viewModel.keyAliases.collectAsState()
+    val plugins by viewModel.pluginList.collectAsState(initial = emptyList())
+    val selectedPlugin = plugins.find { it.id == tunnelType }
 
     LaunchedEffect(serverId) {
         viewModel.load(serverId) { entity ->
@@ -98,6 +101,7 @@ fun ServerEditScreen(
             keepAlive = entity.keepAliveInterval.toString()
             setAsDefault = entity.isActive
             tunnelType = entity.tunnelType
+            tunnelConfigValues = parseTunnelConfig(entity.tunnelConfigJson)
         }
     }
 
@@ -131,6 +135,7 @@ fun ServerEditScreen(
                             mtu = mtu.toIntOrNull() ?: 1500,
                             keepAliveInterval = keepAlive.toIntOrNull() ?: 30,
                             tunnelType = tunnelType,
+                            tunnelConfigJson = serializeTunnelConfig(tunnelConfigValues),
                         )
                         viewModel.save(serverId, entity, onSave, setAsDefault)
                     }) {
@@ -175,18 +180,29 @@ fun ServerEditScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     TunnelTypeSelector(
                         selectedType = tunnelType,
-                        onTypeSelected = { tunnelType = it }
+                        options = plugins.map { TunnelTypeOption(it.id, it.displayName, "") },
+                        onTypeSelected = { newType ->
+                            tunnelType = newType
+                            // 切换隧道类型时重置配置字段 (非 SSH 隧道需要独立配置)
+                            tunnelConfigValues = emptyMap()
+                        }
                     )
 
-                    // 显示当前隧道类型的能力标签
-                    val selectedPlugin = TUNNEL_TYPES.find { it.id == tunnelType }
-                    if (selectedPlugin != null) {
+                    // 能力标签: 由插件注册驱动
+                    val plugin = plugins.find { it.id == tunnelType }
+                    if (plugin != null) {
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            selectedPlugin.description,
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        TunnelCapabilityChips(plugin.capabilities)
+
+                        // 按 configDescriptor 动态渲染配置字段
+                        if (plugin.configDescriptor.fields.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            TunnelDynamicFields(
+                                plugin = plugin,
+                                values = tunnelConfigValues,
+                                onValuesChange = { tunnelConfigValues = it }
+                            )
+                        }
                     }
                 }
             }

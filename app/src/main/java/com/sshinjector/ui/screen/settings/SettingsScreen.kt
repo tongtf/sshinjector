@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.sshinjector.domain.vpn.tunnel.TunnelState
+import com.sshinjector.ui.viewmodel.dnsModeLabel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -140,10 +141,10 @@ fun SettingsScreen(
 
                 SettingsRow(
                     title = "连接模式",
-                    subtitle = when(dnsMode) { 0 -> "远程代理"; 1 -> "本地直连"; 2 -> "自动模式"; 3 -> "域名分流"; else -> "远程代理" },
+                    subtitle = dnsModeLabel(dnsMode),
                     trailing = {
                         Text(
-                            text = when(dnsMode) { 0 -> "远程代理"; 1 -> "本地直连"; 2 -> "自动模式"; 3 -> "域名分流"; else -> "远程代理" },
+                            text = dnsModeLabel(dnsMode),
                             fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.primary
                         )
@@ -278,7 +279,7 @@ fun SettingsScreen(
                     listOf(
                         0 to "远程代理" to "全部流量走 VPN 隧道 (SOCKS5)",
                         1 to "本地直连" to "全部流量走物理网卡，不经过 VPN",
-                        2 to "自动模式" to "白名单应用走 VPN，其余走物理网卡",
+                        2 to "白名单模式" to "白名单应用走 VPN，其余走物理网卡",
                         3 to "域名分流" to "命中域名列表走隧道，其余域名直连"
                     ).forEach { (item, desc) ->
                         val (value, label) = item

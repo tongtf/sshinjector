@@ -832,6 +832,15 @@ private suspend fun connectionCleanupLoop() {
     }
 
     private fun buildTunnelConfig(server: ServerConfig, password: String?): TunnelConfig {
+        val cfg = server.tunnelConfigJson?.let { json ->
+            try {
+                val obj = org.json.JSONObject(json)
+                obj.keys().asSequence().associateWith { obj.optString(it) }
+            } catch (_: Exception) {
+                emptyMap()
+            }
+        } ?: emptyMap()
+
         return when (server.tunnelType) {
             "socks5" -> TunnelConfig.Socks5(
                 sshHost = server.host,
@@ -847,26 +856,40 @@ private suspend fun connectionCleanupLoop() {
             )
             "direct" -> TunnelConfig.Direct
             "https_proxy" -> TunnelConfig.HttpsProxy(
-                proxyHost = server.host,
-                proxyPort = server.port,
+                proxyHost = cfg["proxyHost"]?.takeIf { it.isNotBlank() } ?: server.host,
+                proxyPort = cfg["proxyPort"]?.toIntOrNull() ?: server.port,
+                username = cfg["username"]?.takeIf { it.isNotBlank() },
+                password = cfg["password"]?.takeIf { it.isNotBlank() },
+                useTls = cfg["useTls"]?.toBooleanStrictOrNull() ?: true,
+                sni = cfg["sni"]?.takeIf { it.isNotBlank() },
                 common = TunnelConfig.CommonConfig(connectTimeout = server.connectTimeout),
             )
             "v2ray" -> TunnelConfig.V2Ray(
-                serverHost = server.host,
-                serverPort = server.port,
-                uuid = server.keyAlias,
+                serverHost = cfg["serverHost"]?.takeIf { it.isNotBlank() } ?: server.host,
+                serverPort = cfg["serverPort"]?.toIntOrNull() ?: server.port,
+                uuid = cfg["uuid"]?.takeIf { it.isNotBlank() } ?: server.keyAlias,
+                alterId = cfg["alterId"]?.toIntOrNull() ?: 0,
+                security = cfg["security"]?.takeIf { it.isNotBlank() } ?: "auto",
+                network = cfg["network"]?.takeIf { it.isNotBlank() } ?: "tcp",
+                path = cfg["path"]?.takeIf { it.isNotBlank() },
+                useTls = cfg["useTls"]?.toBooleanStrictOrNull() ?: true,
+                sni = cfg["sni"]?.takeIf { it.isNotBlank() },
+                allowInsecure = cfg["allowInsecure"]?.toBooleanStrictOrNull() ?: false,
                 common = TunnelConfig.CommonConfig(connectTimeout = server.connectTimeout),
             )
             "trojan" -> TunnelConfig.Trojan(
-                serverHost = server.host,
-                serverPort = server.port,
-                password = server.keyAlias,
+                serverHost = cfg["serverHost"]?.takeIf { it.isNotBlank() } ?: server.host,
+                serverPort = cfg["serverPort"]?.toIntOrNull() ?: server.port,
+                password = cfg["password"]?.takeIf { it.isNotBlank() } ?: server.keyAlias,
+                sni = cfg["sni"]?.takeIf { it.isNotBlank() },
+                allowInsecure = cfg["allowInsecure"]?.toBooleanStrictOrNull() ?: false,
                 common = TunnelConfig.CommonConfig(connectTimeout = server.connectTimeout),
             )
             "shadowsocks" -> TunnelConfig.Shadowsocks(
-                serverHost = server.host,
-                serverPort = server.port,
-                password = server.keyAlias,
+                serverHost = cfg["serverHost"]?.takeIf { it.isNotBlank() } ?: server.host,
+                serverPort = cfg["serverPort"]?.toIntOrNull() ?: server.port,
+                password = cfg["password"]?.takeIf { it.isNotBlank() } ?: server.keyAlias,
+                method = cfg["method"]?.takeIf { it.isNotBlank() } ?: "aes-256-gcm",
                 common = TunnelConfig.CommonConfig(connectTimeout = server.connectTimeout),
             )
             else -> TunnelConfig.Socks5(

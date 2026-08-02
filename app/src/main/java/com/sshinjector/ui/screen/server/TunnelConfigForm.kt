@@ -35,11 +35,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.sshinjector.domain.vpn.tunnel.ConfigField
 import com.sshinjector.domain.vpn.tunnel.TunnelCapability
 import com.sshinjector.domain.vpn.tunnel.TunnelPlugin
 
@@ -49,24 +52,16 @@ data class TunnelTypeOption(
     val description: String,
 )
 
-val TUNNEL_TYPES = listOf(
-    TunnelTypeOption("socks5", "SOCKS5 (SSH)", "通过 SSH 隧道的 SOCKS5 代理"),
-    TunnelTypeOption("direct", "直连", "不经过代理，直接连接"),
-    TunnelTypeOption("https_proxy", "HTTPS Proxy", "通过 HTTP CONNECT 代理"),
-    TunnelTypeOption("v2ray", "V2Ray", "V2Ray/VMess 加密隧道"),
-    TunnelTypeOption("trojan", "Trojan", "Trojan 加密隧道 (TLS)"),
-    TunnelTypeOption("shadowsocks", "Shadowsocks", "Shadowsocks AEAD 加密隧道"),
-)
-
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TunnelTypeSelector(
     selectedType: String,
+    options: List<TunnelTypeOption>,
     onTypeSelected: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val selected = TUNNEL_TYPES.find { it.id == selectedType } ?: TUNNEL_TYPES.first()
+    val selected = options.find { it.id == selectedType } ?: options.first()
 
     Column(modifier = modifier.fillMaxWidth()) {
         Text("隧道模式", fontSize = 16.sp, fontWeight = FontWeight.Medium)
@@ -94,12 +89,14 @@ fun TunnelTypeSelector(
                 expanded = expanded,
                 onDismissRequest = { expanded = false }
             ) {
-                TUNNEL_TYPES.forEach { option ->
+                options.forEach { option ->
                     DropdownMenuItem(
                         text = {
                             Column {
                                 Text(option.name, fontWeight = FontWeight.Medium)
-                                Text(option.description, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (option.description.isNotBlank()) {
+                                    Text(option.description, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
                             }
                         },
                         onClick = {
@@ -177,6 +174,11 @@ fun TunnelConfigField(
                 .height(56.dp),
             placeholder = { Text(placeholder, fontSize = 14.sp) },
             singleLine = true,
+            keyboardOptions = if (numeric) {
+                KeyboardOptions(keyboardType = KeyboardType.Number)
+            } else {
+                KeyboardOptions.Default
+            },
             visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None
         )
     }
@@ -196,5 +198,111 @@ fun TunnelConfigSwitch(
     ) {
         Text(label, fontSize = 14.sp)
         Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+/**
+ * 根据插件 configDescriptor 动态渲染配置字段, 读写 values (key -> value 字符串)。
+ * 返回 map 由调用方持久化为 tunnelConfigJson。
+ */
+@Composable
+fun TunnelDynamicFields(
+    plugin: TunnelPlugin,
+    values: Map<String, String>,
+    onValuesChange: (Map<String, String>) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        plugin.configDescriptor.fields.forEach { field ->
+            val value = values[field.key] ?: field.defaultValue?.toString() ?: ""
+            when (field) {
+                is ConfigField.TextField -> TunnelConfigField(
+                    label = field.label,
+                    value = value,
+                    onValueChange = { onValuesChange(values + (field.key to it)) },
+                    placeholder = field.placeholder,
+                    isPassword = field.isPassword
+                )
+                is ConfigField.NumberField -> TunnelConfigField(
+                    label = field.label,
+                    value = value,
+                    onValueChange = { onValuesChange(values + (field.key to it)) },
+                    numeric = true
+                )
+                is ConfigField.SwitchField -> TunnelConfigSwitch(
+                    label = field.label,
+                    checked = value.toBooleanStrictOrNull() ?: (field.defaultValue as? Boolean ?: false),
+                    onCheckedChange = { onValuesChange(values + (field.key to it.toString())) }
+                )
+                is ConfigField.DropdownField -> TunnelConfigDropdown(
+                    field = field,
+                    value = value,
+                    onValueChange = { onValuesChange(values + (field.key to it)) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun TunnelConfigDropdown(
+    field: ConfigField.DropdownField,
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selected = field.options.firstOrNull { it.first == value }?.second ?: field.options.firstOrNull()?.second ?: ""
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Text(text = field.label, fontSize = 14.sp, modifier = Modifier.padding(bottom = 4.dp))
+        Box {
+            OutlinedTextField(
+                value = selected,
+                onValueChange = {},
+                readOnly = true,
+                trailingIcon = { Icon(Icons.Default.KeyboardArrowDown, contentDescription = null) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = true }
+            )
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable { expanded = true }
+            )
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                field.options.forEach { (key, label) ->
+                    DropdownMenuItem(
+                        text = { Text(label) },
+                        onClick = {
+                            onValueChange(key)
+                            expanded = false
+                        },
+                        trailingIcon = if (key == value) {
+                            { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                        } else null
+                    )
+                }
+            }
+        }
+    }
+}
+
+fun serializeTunnelConfig(values: Map<String, String>): String? {
+    if (values.isEmpty()) return null
+    return org.json.JSONObject(values).toString()
+}
+
+fun parseTunnelConfig(json: String?): Map<String, String> {
+    if (json.isNullOrBlank()) return emptyMap()
+    return try {
+        val obj = org.json.JSONObject(json)
+        obj.keys().asSequence().associateWith { obj.optString(it) }
+    } catch (_: Exception) {
+        emptyMap()
     }
 }

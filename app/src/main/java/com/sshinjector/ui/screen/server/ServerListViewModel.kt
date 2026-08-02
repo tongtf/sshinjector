@@ -37,7 +37,12 @@ class ServerListViewModel @Inject constructor(
 
     fun delete(id: Long) {
         viewModelScope.launch {
+            val wasActive = serverDao.getByIdBlocking(id)?.isActive == true
             serverDao.delete(id)
+            // 删除默认服务器后, 提升一条其他服务器作为默认 (若有)
+            if (wasActive) {
+                serverDao.getAllBlocking().firstOrNull()?.let { serverDao.setActive(it.id) }
+            }
         }
     }
 
