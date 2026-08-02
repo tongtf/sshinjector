@@ -50,10 +50,10 @@ import com.sshinjector.domain.vpn.tunnel.TunnelState
 @Composable
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
+    modifier: Modifier = Modifier,
     onNavigateToRouteSettings: () -> Unit = {},
     onNavigateToDomainListSettings: () -> Unit = {},
-    viewModel: SettingsViewModel = hiltViewModel(),
-    modifier: Modifier = Modifier
+    viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val autoConnect by viewModel.autoConnect.collectAsState()
     val biometricUnlock by viewModel.biometricUnlock.collectAsState()

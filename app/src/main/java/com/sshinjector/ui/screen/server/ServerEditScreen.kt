@@ -65,8 +65,8 @@ fun ServerEditScreen(
     serverId: Long,
     onSave: () -> Unit,
     onCancel: () -> Unit,
-    viewModel: ServerEditViewModel = hiltViewModel(),
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    viewModel: ServerEditViewModel = hiltViewModel()
 ) {
     val isNew = serverId == -1L
     val snackbarHostState = remember { SnackbarHostState() }

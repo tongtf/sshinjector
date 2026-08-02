@@ -51,6 +51,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -77,8 +78,8 @@ data class InstalledApp(
 @Composable
 fun WhitelistScreen(
     onNavigateBack: () -> Unit,
-    viewModel: WhitelistViewModel = hiltViewModel(),
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    viewModel: WhitelistViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
@@ -86,7 +87,7 @@ fun WhitelistScreen(
     var hideSystemApps by remember { mutableStateOf(true) }
     var hasPermission by remember { mutableStateOf(false) }
     var showPermissionDialog by remember { mutableStateOf(false) }
-    var filterMode by remember { mutableStateOf(0) } // 0=全部 1=已选 2=系统应用
+    var filterMode by remember { mutableIntStateOf(0) } // 0=全部 1=已选 2=系统应用
 
     val enabledPackages by viewModel.enabledPackages.collectAsState()
     val allApps by viewModel.cachedApps.collectAsState()

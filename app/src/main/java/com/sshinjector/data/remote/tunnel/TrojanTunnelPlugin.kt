@@ -111,6 +111,8 @@ class TrojanTunnelPlugin @Inject constructor() : TunnelPlugin {
     }
 
     companion object {
+        // 仅在 allowInsecure 开关开启时使用 (用户显式接受不校验证书), 否则走系统默认信任链
+        @Suppress("TrustAllX509TrustManager", "CustomX509TrustManager")
         private val INSECURE_TRUST_MANAGER = object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
             override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}

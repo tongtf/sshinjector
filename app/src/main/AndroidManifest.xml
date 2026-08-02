@@ -11,7 +11,8 @@
     <!-- 前台服务 (VPN) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_TYPE_VPN" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_TYPE_VPN"
+        tools:ignore="SystemPermissionTypo" />
 
     <!-- 启动时自动连接 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -33,8 +34,7 @@
         android:roundIcon="@drawable/ic_launcher_foreground"
         android:supportsRtl="true"
         android:theme="@style/Theme.SSHInjector"
-        android:usesCleartextTraffic="true"
-        tools:targetApi="34">
+        android:usesCleartextTraffic="true">
 
         <!-- VPN 服务声明 -->
         <service

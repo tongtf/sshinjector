@@ -54,8 +54,8 @@ fun DashboardScreen(
     onNavigateToWhitelist: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToKeys: () -> Unit,
-    viewModel: MainViewModel = hiltViewModel(),
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    viewModel: MainViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()
     val isConnected = state.isConnected
@@ -66,7 +66,7 @@ fun DashboardScreen(
         if (startTime == null) return@LaunchedEffect
         while (true) {
             val elapsed = (java.util.Date().time - startTime.time) / 1000
-            duration = String.format("%02d:%02d:%02d", elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60)
+            duration = String.format(java.util.Locale.ROOT, "%02d:%02d:%02d", elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60)
             delay(1000)
         }
     }

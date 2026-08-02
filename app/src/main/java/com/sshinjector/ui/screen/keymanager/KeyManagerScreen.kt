@@ -43,6 +43,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -61,8 +62,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun KeyManagerScreen(
     onNavigateBack: () -> Unit,
-    viewModel: KeyManagerViewModel = hiltViewModel(),
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    viewModel: KeyManagerViewModel = hiltViewModel()
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -70,7 +71,7 @@ fun KeyManagerScreen(
     val activeKey by viewModel.activeKey.collectAsState()
 
     var showGenerateDialog by remember { mutableStateOf(false) }
-    var generateAlgorithm by remember { mutableStateOf(0) }
+    var generateAlgorithm by remember { mutableIntStateOf(0) }
     var importedKey by remember { mutableStateOf("") }
     var showImportDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }

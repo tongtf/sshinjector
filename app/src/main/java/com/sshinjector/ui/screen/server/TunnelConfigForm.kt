@@ -158,10 +158,10 @@ fun TunnelConfigField(
     label: String,
     value: String,
     onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
     placeholder: String = "",
     isPassword: Boolean = false,
     numeric: Boolean = false,
-    modifier: Modifier = Modifier
 ) {
     Row(
         modifier = modifier.fillMaxWidth(),

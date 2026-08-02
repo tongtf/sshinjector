@@ -58,8 +58,8 @@ fun ServerListScreen(
     onAddServer: () -> Unit,
     onEditServer: (Long) -> Unit,
     onNavigateBack: () -> Unit,
-    viewModel: ServerListViewModel = hiltViewModel(),
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    viewModel: ServerListViewModel = hiltViewModel()
 ) {
     val servers by viewModel.servers.collectAsState()
     val connectingServerId by viewModel.connectingServerId.collectAsState()
