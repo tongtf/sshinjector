@@ -1,6 +1,7 @@
 package com.sshinjector.domain.vpn
 
 import android.util.Log
+import com.sshinjector.data.local.DomainListManager
 import org.xbill.DNS.Flags
 import org.xbill.DNS.Message
 import org.xbill.DNS.Opcode
@@ -49,7 +50,15 @@ class DnsInterceptor @Inject constructor() {
     enum class DnsTransport {
         REMOTE,      // 全部流量走 TCP over SOCKS5 (SSH 隧道)
         SYSTEM,      // 系统默认: DNS 用 DHCP 获取的 DNS，所有流量走物理网卡
-        WHITELIST    // 白名单: 白名单应用走 REMOTE，其余走 SYSTEM
+        WHITELIST,   // 白名单: 白名单应用走 REMOTE，其余走 SYSTEM
+        DOMAIN_SPLIT // 域名分流: 命中域名列表 → 假 IP(走隧道)，未命中 → 系统 DNS(直连)
+    }
+
+    // 域名分流模式使用的列表管理器
+    private var domainListManager: DomainListManager? = null
+
+    fun setDomainListManager(manager: DomainListManager) {
+        domainListManager = manager
     }
 
     private val executor = Executors.newFixedThreadPool(2)
@@ -188,12 +197,24 @@ class DnsInterceptor @Inject constructor() {
 
             cacheMisses.incrementAndGet()
 
-            // REMOTE/WHITELIST 模式: 不做真实 DNS 解析, 分配假 IP, CONNECT 时用域名让 SSH 服务器解析
-            if (transportMode != DnsTransport.SYSTEM) {
+            // 判断本次查询走隧道(假 IP)还是系统 DNS(直连)
+            val useSystemDns = when (transportMode) {
+                DnsTransport.SYSTEM -> true
+                DnsTransport.DOMAIN_SPLIT -> {
+                    val qname = question.name.toString(true)
+                    val inList = domainListManager?.matches(qname) == true
+                    Log.d(TAG, "DOMAIN_SPLIT: $qname -> ${if (inList) "tunnel" else "direct"}")
+                    !inList
+                }
+                else -> false
+            }
+
+            // 走隧道: 不做真实 DNS 解析, 分配假 IP, CONNECT 时用域名让 SSH 服务器解析
+            if (!useSystemDns) {
                 return handleRemoteDnsFakery(question, originalQueryId, srcIp, srcPort)
             }
 
-            // SYSTEM 模式: 正常 DNS 解析
+            // 系统 DNS 模式: 正常 DNS 解析
             val queryId = queryIdCounter.incrementAndGet()
 
             val pending = DnsPendingQuery(
@@ -228,7 +249,7 @@ class DnsInterceptor @Inject constructor() {
      */
     private fun sendDnsQuery(queryData: ByteArray, queryId: Int) {
         when (transportMode) {
-            DnsTransport.SYSTEM -> sendDnsOverProtectedSocket(queryData, queryId)
+            DnsTransport.SYSTEM, DnsTransport.DOMAIN_SPLIT -> sendDnsOverProtectedSocket(queryData, queryId)
             else -> {
                 Log.w(TAG, "sendDnsQuery called in non-SYSTEM mode ($transportMode), should not happen")
                 onDnsResponse(queryId, ByteArray(0))

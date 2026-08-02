@@ -114,6 +114,7 @@ class SshVpnService : VpnService() {
                 0 -> "远程代理"
                 1 -> "本地直连"
                 2 -> "自动模式"
+                3 -> "域名分流"
                 else -> "远程代理"
             }
 
@@ -191,6 +192,16 @@ class SshVpnService : VpnService() {
                 vpnController.addLog("DNS 服务器: 10.0.0.2 (WHITELIST)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
                 vpnController.addLog("IPv4 路由: 0.0.0.0/0 (白名单应用走 VPN)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
                 vpnController.addLog("IPv6 路由: ::/0 (白名单应用走 VPN)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
+            }
+            3 -> {
+                // DOMAIN_SPLIT 模式: 只捕获假 IP 段与 DNS, 真实 IP 流量直接走物理网卡, 避免 TUN 循环
+                builder.addRoute("198.18.0.0", 15)
+                builder.addRoute("fd00::", 8)
+                builder.addRoute("10.0.0.2", 32)
+                vpnController.addLog("DNS 服务器: 10.0.0.2 (DOMAIN_SPLIT)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                vpnController.addLog("IPv4 路由: 198.18.0.0/15 (假 IP 走隧道)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
+                vpnController.addLog("IPv6 路由: fd00::/8 (假 IP 走隧道)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
+                vpnController.addLog("真实 IP 流量走物理网卡直连", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
             }
         }
 

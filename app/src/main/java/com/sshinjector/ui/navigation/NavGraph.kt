@@ -9,6 +9,7 @@ import com.sshinjector.ui.screen.dashboard.DashboardScreen
 import com.sshinjector.ui.screen.keymanager.KeyManagerScreen
 import com.sshinjector.ui.screen.server.ServerEditScreen
 import com.sshinjector.ui.screen.server.ServerListScreen
+import com.sshinjector.ui.screen.settings.DomainListSettingsScreen
 import com.sshinjector.ui.screen.settings.RouteSettingsScreen
 import com.sshinjector.ui.screen.settings.SettingsScreen
 import com.sshinjector.ui.screen.whitelist.WhitelistScreen
@@ -49,11 +50,15 @@ fun AppNavGraph(navController: NavHostController, modifier: Modifier = Modifier)
         composable("settings") {
             SettingsScreen(
                 onNavigateBack = { navController.popBackStack() },
-                onNavigateToRouteSettings = { navController.navigate("route_settings") }
+                onNavigateToRouteSettings = { navController.navigate("route_settings") },
+                onNavigateToDomainListSettings = { navController.navigate("domain_list_settings") }
             )
         }
         composable("route_settings") {
             RouteSettingsScreen(onNavigateBack = { navController.popBackStack() })
+        }
+        composable("domain_list_settings") {
+            DomainListSettingsScreen(onNavigateBack = { navController.popBackStack() })
         }
         composable("keys") {
             KeyManagerScreen(onNavigateBack = { navController.popBackStack() })

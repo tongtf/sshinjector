@@ -2,60 +2,52 @@
 
 ## Project Overview
 
-Android 14+ (minSdk 34) SSH SOCKS5 proxy app. Kotlin + Jetpack Compose + Hilt + Room. Single module `app/`.
+Android 14+ (minSdk 34) SSH SOCKS5 proxy app. Kotlin + Jetpack Compose + Hilt + Room. Single module `app/`, package `com.sshinjector`.
 
-SSH chain: JSch (mwiede/jsch) → ChannelDirectTCPIP → SOCKS5 ProxyServer (NIO) → VpnService TUN whitelist mode.
+Traffic path: VpnService TUN → PacketProcessor → TunnelRouter (per-UID selection) → TunnelPlugin → remote server. Default tunnel is `socks5` (JSch → ChannelDirectTCPIP → Socks5ProxyServer NIO).
 
 ## Build & Verify
 
 ```bash
 ./gradlew assembleDebug                    # Build Debug APK
-./gradlew testDebugUnitTest                # Run unit tests
-./gradlew ktlintCheck detekt lint          # Code quality triad
-./gradlew bundleRelease                    # Build Release AAB (needs signing config)
-```
-
-CI runs lint checks separately, not as a combined command:
-```bash
-./gradlew ktlintCheck    # Then detekt, then lint individually
+./gradlew testDebugUnitTest                # Run unit tests (JUnit4 + Mockito-Kotlin)
+./gradlew ktlintCheck                      # CI runs each quality gate separately:
 ./gradlew detekt
 ./gradlew lint
+./gradlew bundleRelease                    # Release AAB
 ```
 
-**Release signing**: env vars `KEYSTORE_PATH` / `KEYSTORE_PASSWORD` / `KEY_ALIAS` / `KEY_PASSWORD`, or in `local.properties` (gitignored). Falls back to `app/debug.keystore` if not configured.
+**Release signing**: `buildTypes.release` wires `signingConfigs.getByName("debug")` — the `signingConfigs.create("release")` block reads `KEYSTORE_PATH`/`KEYSTORE_PASSWORD`/`KEY_ALIAS`/`KEY_PASSWORD` env vars but is **never referenced**. Release is always signed with `app/debug.keystore`; the keystore import + env vars in CI's `build-release` job are dead config.
 
-**CI** (`.github/workflows/ci.yml`):
-- Triggers: push to `main`/`develop`, PRs to `main`/`develop`, tags `v*`
-- Jobs: `lint-and-test` → `build-debug` (parallel) → `build-release` (tag only, needs signing secrets)
-- Also runs `dependencyCheckAnalyze` in a separate job
-- JDK 17, Android SDK 34, Gradle caching enabled
+**CI** (`.github/workflows/ci.yml`): push/PR to `main`/`develop`, tags `v*` → `lint-and-test` (ktlint → detekt → lint → testDebugUnitTest) → `build-debug`; `build-release` (tag only); `dependency-check` runs `./gradlew dependencyCheckAnalyze` but **no OWASP dependency-check plugin is configured in any build file — that task doesn't exist**. CI also uploads jacoco reports but no jacoco plugin is configured. Those CI parts are stale.
 
 ## Code Style
 
 - **Must pass** all three before commit: detekt + ktlint + Android Lint
 - Line length: 120 chars, indent: 4, continuation indent: 8
 - Import order: java → kotlin → blank → static; `androidx.compose.*` and `kotlinx.coroutines.*` allow wildcards
-- MagicNumber whitelist configured (see `detekt.yml` — numbers 0-2048, 4096 ignored)
-- Commit messages: Conventional Commits
+- MagicNumber whitelist: 0-4096 (see `detekt.yml`); local vars/properties/function calls ignored
+- Commit messages: Conventional Commits (see git log)
 - Compiler flag: `-Xopt-in=kotlin.RequiresOptIn` enabled project-wide
 
 ## Architecture
 
 - **Single module**: all code in `app/src/main/java/com/sshinjector/`
-- **DI**: Hilt (KSP), all bindings in `di/Modules.kt` (SingletonComponent)
-- **Database**: Room 2.6.1, schema exports to `app/schemas/` (versions 1 and 2)
+- **DI**: Hilt (KSP). Two modules: `di/Modules.kt` (`AppModule`, `@Provides`) and `di/TunnelModule.kt` (abstract `@Binds @IntoMap @StringKey`). ksp args: `hilt.disableAggregatingTask=true`
+- **Tunnel plugins** (`domain/vpn/tunnel/` + `data/remote/tunnel/`): `socks5`, `direct`, `https_proxy`, `v2ray`, `trojan`, `shadowsocks`. To add a tunnel: implement `TunnelPlugin`, bind it in `TunnelModule.kt`, describe fields in `TunnelConfigDescriptor` (the UI form `TunnelConfigForm.kt` is auto-driven from it)
+- **Data flow**: `domain/vpn/PacketProcessor` → `TunnelRouter.selectPlugin(uid)` / `TunnelManager` → `TunnelPlugin` (default `socks5` in `TunnelManager`) → `data/remote/ssh/JschSshClient` + `domain/vpn/Socks5ProxyServer` → `domain/vpn/TunnelChannel` (`data/remote/ssh/JschTunnelChannel`)
+- **Database**: Room 2.6.1, schema exports to `app/schemas/` (versions 1-3 via ksp arg `room.schemaLocation`)
 - **VPN**: `vpn/SshVpnService` (foreground service), `vpn/BootReceiver`
-- **Core data flow**: `domain/vpn/PacketProcessor` → `domain/vpn/Socks5ProxyServer` → `data/remote/ssh/JschSshClient` → `domain/vpn/TunnelChannel` interface
 - **Navigation**: `ui/navigation/NavGraph.kt` (separated from MainActivity)
 - **Key storage**: Android Keystore (hardware encryption) + BiometricPrompt
-- **Testing**: Mockito-Kotlin, Coroutines Test
+- **Tests**: unit tests in `app/src/test/` (PacketProcessor, Socks5Protocol, DnsInterceptor, SshKeyManager, VpnController); androidTest (Database/Settings integration) requires a device
 
 ## Key Gotchas
 
-- **JSch via jitpack.io** — `settings.gradle.kts` configures jitpack maven repo
+- **JSch via jitpack.io** — `settings.gradle.kts` configures jitpack maven repo (needed for mwiede/jsch)
 - **Compose Compiler version mismatch**: `app/build.gradle.kts` hardcodes `1.5.11`, `gradle.properties` has `1.5.14` (stale). Update both when changing Compose Compiler
-- **Version drift**: `gradle.properties` versions don't match `build.gradle.kts` (e.g., Kotlin `1.9.23` vs `1.9.24`, AGP `8.4.0` vs `8.5.2`, Hilt `2.48` vs `2.51`). **Always use `build.gradle.kts` as source of truth**
-- `local.properties` not committed (contains signing + SDK path)
-- `debug.keystore` in `app/` directory, used for local builds
-- ProGuard/R8 enabled in Release (`isMinifyEnabled = true`) — watch keep rules when modifying reflected code
+- **Version drift**: `gradle.properties` versions don't match root `build.gradle.kts` (e.g., Kotlin `1.9.23` vs `1.9.24`, AGP `8.4.0` vs `8.5.2`, Hilt `2.48` vs `2.51`). **Always use `build.gradle.kts` as source of truth**
+- `configurations.all` in `app/build.gradle.kts` forces `androidx.tracing:tracing:1.1.0` — don't remove when bumping deps
+- `local.properties` not committed (SDK path + signing)
+- ProGuard/R8 enabled in Release (`isMinifyEnabled = true`) — watch keep rules in `proguard-rules.pro` when modifying reflected code
 - `dnsjava` version in `build.gradle.kts` is `3.6.5`, not `3.5.7` as in `gradle.properties`

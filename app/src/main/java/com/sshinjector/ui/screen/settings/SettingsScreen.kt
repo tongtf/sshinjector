@@ -51,6 +51,7 @@ import com.sshinjector.domain.vpn.tunnel.TunnelState
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
     onNavigateToRouteSettings: () -> Unit = {},
+    onNavigateToDomainListSettings: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
     modifier: Modifier = Modifier
 ) {
@@ -139,15 +140,22 @@ fun SettingsScreen(
 
                 SettingsRow(
                     title = "连接模式",
-                    subtitle = when(dnsMode) { 0 -> "远程代理"; 1 -> "本地直连"; 2 -> "自动模式"; else -> "远程代理" },
+                    subtitle = when(dnsMode) { 0 -> "远程代理"; 1 -> "本地直连"; 2 -> "自动模式"; 3 -> "域名分流"; else -> "远程代理" },
                     trailing = {
                         Text(
-                            text = when(dnsMode) { 0 -> "远程代理"; 1 -> "本地直连"; 2 -> "自动模式"; else -> "远程代理" },
+                            text = when(dnsMode) { 0 -> "远程代理"; 1 -> "本地直连"; 2 -> "自动模式"; 3 -> "域名分流"; else -> "远程代理" },
                             fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.primary
                         )
                     },
                     onClick = { showDnsDialog = true }
+                )
+
+                SettingsRow(
+                    title = "域名列表",
+                    subtitle = "配置域名分流列表 (仅域名分流模式生效)",
+                    trailing = { Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                    onClick = onNavigateToDomainListSettings
                 )
             }
 
@@ -270,7 +278,8 @@ fun SettingsScreen(
                     listOf(
                         0 to "远程代理" to "全部流量走 VPN 隧道 (SOCKS5)",
                         1 to "本地直连" to "全部流量走物理网卡，不经过 VPN",
-                        2 to "自动模式" to "白名单应用走 VPN，其余走物理网卡"
+                        2 to "自动模式" to "白名单应用走 VPN，其余走物理网卡",
+                        3 to "域名分流" to "命中域名列表走隧道，其余域名直连"
                     ).forEach { (item, desc) ->
                         val (value, label) = item
                         Row(

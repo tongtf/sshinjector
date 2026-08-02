@@ -33,7 +33,11 @@ class SettingsDataStore @Inject constructor(
         private val KEY_DNS_MODE = intPreferencesKey("dns_mode")
         private val KEY_LOG_LEVEL = intPreferencesKey("log_level") // 0=简洁 1=详细
         private val KEY_ROUTE_CONFIG = stringPreferencesKey("route_config")
+        private val KEY_DOMAIN_LIST_URL = stringPreferencesKey("domain_list_url")
+        private val KEY_DOMAIN_LIST_LAST_UPDATE = longPreferencesKey("domain_list_last_update")
         private const val KEY_KEYSTORE_ALIAS_PREFIX = "keystore_alias_"
+
+        const val DEFAULT_DOMAIN_LIST_URL = "https://gitlab.com/gfwlist/gfwlist/raw/master/gfwlist.txt"
     }
 
     val autoConnect: Flow<Boolean> = context.dataStore.data
@@ -61,13 +65,19 @@ class SettingsDataStore @Inject constructor(
         .map { it[KEY_ENABLE_IPV6] ?: true }
 
     val dnsMode: Flow<Int> = context.dataStore.data
-        .map { it[KEY_DNS_MODE] ?: 3 } // 默认白名单分流模式
+        .map { it[KEY_DNS_MODE] ?: 0 } // 默认远程代理模式
 
     val logLevel: Flow<Int> = context.dataStore.data
         .map { it[KEY_LOG_LEVEL] ?: 1 } // 默认详细模式
 
     val routeConfig: Flow<String?> = context.dataStore.data
         .map { it[KEY_ROUTE_CONFIG] }
+
+    val domainListUrl: Flow<String> = context.dataStore.data
+        .map { it[KEY_DOMAIN_LIST_URL] ?: DEFAULT_DOMAIN_LIST_URL }
+
+    val domainListLastUpdate: Flow<Long?> = context.dataStore.data
+        .map { it[KEY_DOMAIN_LIST_LAST_UPDATE] }
 
     suspend fun setRouteConfig(json: String) {
         context.dataStore.edit { it[KEY_ROUTE_CONFIG] = json }
@@ -107,6 +117,18 @@ class SettingsDataStore @Inject constructor(
 
     suspend fun setDnsMode(mode: Int) {
         context.dataStore.edit { it[KEY_DNS_MODE] = mode }
+    }
+
+    suspend fun setDomainListUrl(url: String) {
+        context.dataStore.edit { it[KEY_DOMAIN_LIST_URL] = url }
+    }
+
+    suspend fun setDomainListLastUpdate(timestamp: Long) {
+        context.dataStore.edit { it[KEY_DOMAIN_LIST_LAST_UPDATE] = timestamp }
+    }
+
+    suspend fun getDomainListLastUpdate(): Long? {
+        return context.dataStore.data.map { it[KEY_DOMAIN_LIST_LAST_UPDATE] }.first()
     }
 
     suspend fun setLogLevel(level: Int) {

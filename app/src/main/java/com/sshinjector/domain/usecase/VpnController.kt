@@ -3,6 +3,7 @@ package com.sshinjector.domain.usecase
 import com.sshinjector.domain.model.ServerConfig
 import com.sshinjector.domain.model.ConnectionStats
 import com.sshinjector.domain.model.VpnState
+import com.sshinjector.data.local.DomainListManager
 import com.sshinjector.domain.vpn.DnsInterceptor
 import com.sshinjector.domain.vpn.PacketProcessor
 import com.sshinjector.domain.vpn.tunnel.TunnelConfig
@@ -49,6 +50,7 @@ class VpnController @Inject constructor(
     private val dnsInterceptor: DnsInterceptor,
     private val serverRepository: ServerRepository,
     private val settingsDataStore: com.sshinjector.data.local.preferences.SettingsDataStore,
+    private val domainListManager: DomainListManager,
     @ApplicationContext private val context: Context
 ) : CoroutineScope by CoroutineScope(Dispatchers.IO + Job()) {
     
@@ -89,6 +91,10 @@ class VpnController @Inject constructor(
     )
 
     companion object {
+        private const val IPPROTO_TCP = 6
+        private const val IPPROTO_UDP = 17
+        private const val DNS_PORT = 53
+
         private fun parseCidr(cidr: String): CidrRoute? {
             try {
                 val parts = cidr.split("/")
@@ -159,22 +165,36 @@ class VpnController @Inject constructor(
                 0 -> DnsInterceptor.DnsTransport.REMOTE      // 全部走隧道
                 1 -> DnsInterceptor.DnsTransport.SYSTEM      // 系统默认，完全透传
                 2 -> DnsInterceptor.DnsTransport.WHITELIST   // 白名单分流
+                3 -> DnsInterceptor.DnsTransport.DOMAIN_SPLIT // 域名分流
                 else -> DnsInterceptor.DnsTransport.REMOTE
             }
             dnsInterceptor.setTransportMode(this.transportMode)
+            dnsInterceptor.setDomainListManager(domainListManager)
 
-            // 传递系统 DNS 服务器到 DnsInterceptor (SYSTEM 模式需要)
+            // 传递系统 DNS 服务器到 DnsInterceptor (SYSTEM/DOMAIN_SPLIT 模式需要)
             val systemDns = getSystemDnsServers()
             dnsInterceptor.setSystemDnsServers(systemDns)
             
-            // SYSTEM 模式: 设置 socket 保护函数，用于 DNS 查询绕过 VPN
-            if (transportMode == DnsInterceptor.DnsTransport.SYSTEM) {
-                addLog(">>> [VpnController] 设置 DNS Interceptor 保护函数 (SYSTEM 模式)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+            // SYSTEM/DOMAIN_SPLIT 模式: 设置 socket 保护函数，用于 DNS 查询绕过 VPN
+            if (transportMode == DnsInterceptor.DnsTransport.SYSTEM || transportMode == DnsInterceptor.DnsTransport.DOMAIN_SPLIT) {
+                addLog(">>> [VpnController] 设置 DNS Interceptor 保护函数 ($transportMode)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
                 dnsInterceptor.setProtectFunction { socket ->
                     addLog(">>> [VpnController] 保护函数被调用: socket=$socket", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
                     val result = protectDatagramChannel?.invoke(socket) ?: false
                     addLog(">>> [VpnController] 保护函数返回: $result", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
                     result
+                }
+            }
+
+            // 域名分流模式: 启动时检查并后台刷新域名列表 (24h 间隔)
+            if (transportMode == DnsInterceptor.DnsTransport.DOMAIN_SPLIT) {
+                launch {
+                    val needRefresh = domainListManager.shouldRefresh()
+                    addLog("域名列表刷新检查: ${if (needRefresh) "需要" else "无需"}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                    if (needRefresh) {
+                        addLog("正在更新域名列表...", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
+                        domainListManager.update()
+                    }
                 }
             }
             
@@ -304,13 +324,15 @@ class VpnController @Inject constructor(
             0 -> DnsInterceptor.DnsTransport.REMOTE      // 全部走隧道
             1 -> DnsInterceptor.DnsTransport.SYSTEM      // 系统默认，完全透传
             2 -> DnsInterceptor.DnsTransport.WHITELIST   // 白名单分流
+            3 -> DnsInterceptor.DnsTransport.DOMAIN_SPLIT // 域名分流
             else -> DnsInterceptor.DnsTransport.REMOTE
         }
         dnsInterceptor.setTransportMode(this.transportMode)
+        dnsInterceptor.setDomainListManager(domainListManager)
         
-        // SYSTEM 模式: 设置/更新 socket 保护函数，用于 DNS 查询绕过 VPN
-        if (this.transportMode == DnsInterceptor.DnsTransport.SYSTEM) {
-            addLog(">>> [VpnController] updateDnsMode: 设置 DNS Interceptor 保护函数 (SYSTEM 模式)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+        // SYSTEM/DOMAIN_SPLIT 模式: 设置/更新 socket 保护函数，用于 DNS 查询绕过 VPN
+        if (this.transportMode == DnsInterceptor.DnsTransport.SYSTEM || this.transportMode == DnsInterceptor.DnsTransport.DOMAIN_SPLIT) {
+            addLog(">>> [VpnController] updateDnsMode: 设置 DNS Interceptor 保护函数 ($transportMode)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
             dnsInterceptor.setProtectFunction { socket ->
                 addLog(">>> [VpnController] 保护函数被调用: socket=$socket", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
                 val result = protectDatagramChannel?.invoke(socket) ?: false
@@ -451,6 +473,26 @@ class VpnController @Inject constructor(
                 return
             }
 
+            // 域名分流: 命中列表域名拿到假 IP(198.18.x.x / fd00::x)走隧道,
+            // 未命中域名拿到真实 IP, 该 TCP/非 53 UDP 直连透传回 TUN。
+            // DNS(UDP:53) 与 ICMP 放行给 DnsInterceptor/系统处理, 保证 DNS 拦截与 IPv6 ND 正常。
+            if (transportMode == DnsInterceptor.DnsTransport.DOMAIN_SPLIT && dstIp != null && !isFakeIp(dstIp)) {
+                val proto = extractProtocol(workBuffer, workVersion)
+                val dstPort = extractDstPort(workBuffer, workVersion)
+                val direct = when (proto) {
+                    IPPROTO_TCP -> true
+                    IPPROTO_UDP -> dstPort != DNS_PORT
+                    else -> false
+                }
+                if (direct) {
+                    val data = ByteArray(workBuffer.remaining())
+                    workBuffer.duplicate().get(data)
+                    addLog("域名分流直连: proto=$proto dst=${dstIp.hostAddress}:$dstPort", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                    writeToTun(data)
+                    return
+                }
+            }
+
             when (workVersion) {
                 4 -> {
                     val processed = packetProcessor.processIpv4Packet(workBuffer, fd)
@@ -492,6 +534,51 @@ class VpnController @Inject constructor(
         } finally {
             buffer.reset()
         }
+    }
+
+    private fun extractProtocol(buffer: ByteBuffer, version: Int): Int {
+        return try {
+            buffer.mark()
+            val protoOffset = if (version == 4) 9 else 6
+            val proto = buffer.get(buffer.position() + protoOffset).toInt() and 0xFF
+            buffer.reset()
+            proto
+        } catch (_: Exception) {
+            -1
+        }
+    }
+
+    private fun extractDstPort(buffer: ByteBuffer, version: Int): Int {
+        return try {
+            buffer.mark()
+            val ipHeaderLen = if (version == 4) {
+                (buffer.get(buffer.position()).toInt() and 0x0F) * 4
+            } else {
+                40
+            }
+            val portOffset = buffer.position() + ipHeaderLen + 2
+            val port = ((buffer.get(portOffset).toInt() and 0xFF) shl 8) or (buffer.get(portOffset + 1).toInt() and 0xFF)
+            buffer.reset()
+            port
+        } catch (_: Exception) {
+            -1
+        }
+    }
+
+    /**
+     * 判定 IP 是否为 DnsInterceptor 分配的假 IP (198.18.0.0/15, fd00::/8)。
+     */
+    private fun isFakeIp(ip: InetAddress): Boolean {
+        val bytes = ip.address
+        if (bytes.size == 4) {
+            val b0 = bytes[0].toInt() and 0xFF
+            val b1 = bytes[1].toInt() and 0xFF
+            return b0 == 198 && (b1 == 18 || b1 == 19)
+        }
+        if (bytes.size == 16) {
+            return (bytes[0].toInt() and 0xFF) == 0xFD
+        }
+        return false
     }
 
     private fun shouldBypassVpn(dstIp: InetAddress): Boolean {
@@ -655,28 +742,24 @@ private suspend fun connectionCleanupLoop() {
 }
 
     /**
-     * 获取系统配置的 DNS 服务器
+     * 获取系统配置的 DNS 服务器 (IPv4 优先)
      */
     private fun getSystemDnsServers(): List<String> {
         val dnsList = mutableListOf<String>()
         try {
             val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             val network = cm.activeNetwork ?: return dnsList
-            val networkCapabilities = cm.getNetworkCapabilities(network) ?: return dnsList
-            
-            // 使用反射获取 LinkProperties (Android 14+)
-            val linkProperties = networkCapabilities.javaClass.getMethod("getLinkProperties").invoke(networkCapabilities)
-                ?: return dnsList
-            
-            val dnsServers = linkProperties.javaClass.getField("dnsServers").get(linkProperties) as? java.util.List<*>
-                ?: return dnsList
-            
-            for (dns in dnsServers) {
-                val host = dns.javaClass.getField("hostAddress").get(dns) as? String
-                if (host != null && host.isNotEmpty() && !host.startsWith("fe80") && !host.startsWith("::1") && !host.startsWith("127.")) {
-                    dnsList.add(host)
-                }
+            val linkProperties = cm.getLinkProperties(network) ?: return dnsList
+
+            val v4 = mutableListOf<String>()
+            val v6 = mutableListOf<String>()
+            for (dns in linkProperties.dnsServers) {
+                val host = dns.hostAddress ?: continue
+                if (host.startsWith("fe80") || host.startsWith("::1") || host.startsWith("127.")) continue
+                if (dns is java.net.Inet4Address) v4.add(host) else v6.add(host)
             }
+            dnsList.addAll(v4)
+            dnsList.addAll(v6)
         } catch (e: Exception) {
             android.util.Log.w("VpnController", "获取系统 DNS 失败: ${e.message}")
         }
