@@ -40,6 +40,7 @@ class JschSshClient @Inject constructor(
     companion object {
         private const val TAG = "JschSshClient"
         private const val SESSION_POOL_SIZE = 3
+        private const val CHANNEL_WINDOW_SIZE = 8 * 1024 * 1024
     }
 
     private val pool = ConcurrentLinkedQueue<PooledSession>()
@@ -276,6 +277,7 @@ class JschSshClient @Inject constructor(
             channel.setPort(port)
             channel.setInputStream(null)
             channel.setOutputStream(null)
+            setChannelWindowSize(channel, CHANNEL_WINDOW_SIZE)
             val input = channel.getInputStream()
             val output = channel.getOutputStream()
             pooled.activeChannels.incrementAndGet()
@@ -291,6 +293,25 @@ class JschSshClient @Inject constructor(
         } catch (e: Exception) {
             android.util.Log.w(TAG, "createDirectChannel failed on pool-$bestIdx: $host:$port", e)
             null
+        }
+    }
+
+    private fun setChannelWindowSize(channel: com.jcraft.jsch.Channel, windowSize: Int) {
+        try {
+            for (m in com.jcraft.jsch.Channel::class.java.declaredMethods) {
+                when (m.name) {
+                    "setLocalWindowSizeMax" -> {
+                        m.isAccessible = true
+                        m.invoke(channel, windowSize)
+                    }
+                    "setLocalWindowSize" -> {
+                        m.isAccessible = true
+                        m.invoke(channel, windowSize)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "setChannelWindowSize failed: ${e.message}")
         }
     }
 

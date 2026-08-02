@@ -324,25 +324,29 @@ class Socks5Connection(
     }
 
     fun handleWrite(key: SelectionKey) {
-        pendingWrites.poll()?.let { buf ->
+        while (true) {
+            val buf = pendingWrites.peek() ?: break
+            if (!buf.hasRemaining()) {
+                // 丢弃队列里残留的空 buffer, 继续处理下一个
+                pendingWrites.poll()
+                continue
+            }
             try {
                 val written = channel.write(buf)
                 onDataSent(written.toLong())
                 lastActivity = System.currentTimeMillis()
-                if (!buf.hasRemaining()) {
-                    // Buffer fully written, remove OP_WRITE if queue is empty
-                    if (pendingWrites.isEmpty()) {
-                        key.interestOps(key.interestOps() and SelectionKey.OP_WRITE.inv())
-                    } else {
-                        // Re-add this buffer to front of queue
-                        pendingWrites.addFirst(buf)
-                    }
-                } else {
-                    // Buffer partially written, re-add to front
+                if (buf.hasRemaining()) {
+                    // Buffer partially written, re-add to front (keeps order)
+                    pendingWrites.poll()
                     pendingWrites.addFirst(buf)
+                } else {
+                    pendingWrites.poll()
                 }
+                // 写满一个 buffer 后继续尝试下一个, 直到 write 返回 0 或队列空
+                if (written == 0) break
             } catch (e: Exception) {
                 close()
+                return
             }
         }
         // If queue is empty, remove OP_WRITE
@@ -615,7 +619,9 @@ class Socks5Connection(
             try {
                 while (tunnel.isConnected && state == SocksState.Relaying) {
                     readBuffer.clear()
+                    val readStart = System.nanoTime()
                     val read = input.read(readBuffer.array())
+                    val readWaitMs = (System.nanoTime() - readStart) / 1000000
                     if (read == -1) {
                         android.util.Log.w("Socks5Proxy", "[conn=$id] relayFromTarget: EOF from tunnel")
                         this@Socks5Connection.close()
@@ -625,8 +631,7 @@ class Socks5Connection(
                         // 只在必须传给 callback 时拷贝; sendReply 路径可直接用 array + offset/len
                         val data = readBuffer.array().copyOf(read)
                         if (IS_DEBUG) {
-                            val hex = data.joinToString("") { "%02x".format(it) }
-                            android.util.Log.d("Socks5Proxy", "[conn=$id] relayFromTarget: received ${read}B hex=$hex callback=${callback != null}")
+                            android.util.Log.d("Socks5Proxy", "[conn=$id] relayFromTarget: received ${read}B wait=${readWaitMs}ms callback=${callback != null}")
                         }
                         callback?.invoke(data)
                         onDataReceived(read.toLong())
@@ -667,6 +672,10 @@ class Socks5Connection(
                 // Queue the reply for writing
                 pendingWrites.add(ByteBuffer.wrap(reply))
                 selectionKey!!.interestOps(selectionKey!!.interestOps() or SelectionKey.OP_WRITE)
+                // 唤醒阻塞中的 selector, 避免跨线程 interestOps 修改后写入延迟
+                try {
+                    selectionKey!!.selector().wakeup()
+                } catch (_: Exception) {}
             } else {
                 channel.write(ByteBuffer.wrap(reply))
             }
