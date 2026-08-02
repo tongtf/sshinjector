@@ -292,7 +292,8 @@ class PacketProcessor @Inject constructor(
                  }
                  if (hasPayload) {
                      val expectedBrowserSeq = (conn.browserSeq + 1 + conn.forwardedBytes) and 0xFFFFFFFFL
-                     if (seqNum.toLong() and 0xFFFFFFFFL == expectedBrowserSeq) {
+                     val receivedSeq = seqNum.toLong() and 0xFFFFFFFFL
+                     if (receivedSeq == expectedBrowserSeq) {
                          conn.forwardedBytes += payloadLen.toLong()
                          if (conn.pendingConnect) {
                              // 延迟 CONNECT: 从首个数据包提取域名，完成 CONNECT，再转发数据
@@ -304,9 +305,17 @@ class PacketProcessor @Inject constructor(
                              buffer.position(payloadStart + dataOffset)
                              forwardToSocks(conn, buffer, payloadStart + dataOffset, payloadLen)
                          }
-} else {
-                          if (IS_DEBUG) Log.d(TAG, "Retransmit/seq mismatch for conn ${conn.id}: seq=${seqNum.toLong() and 0xFFFFFFFFL} expected=${expectedBrowserSeq} state=${conn.state} fwd=${conn.forwardedBytes}")
-                      }
+                         // 立即回纯 ACK，避免浏览器因等待确认而超时重传
+                         sendAckToBrowser(conn, connKey)
+                     } else if (receivedSeq < expectedBrowserSeq) {
+                         // 重传段 (seq < expected): 数据已转发过, 丢弃重复, 回 ACK 推进浏览器窗口
+                         if (IS_DEBUG) Log.d(TAG, "Retransmit (dup) for conn ${conn.id}: seq=$receivedSeq expected=$expectedBrowserSeq fwd=${conn.forwardedBytes}, acking")
+                         sendAckToBrowser(conn, connKey)
+                     } else {
+                         // 乱序段 (seq > expected): 尚未能按序转发, 丢弃并回 ACK, 触发浏览器快重传缺失段
+                         if (IS_DEBUG) Log.d(TAG, "Out-of-order for conn ${conn.id}: seq=$receivedSeq expected=$expectedBrowserSeq fwd=${conn.forwardedBytes}, acking")
+                         sendAckToBrowser(conn, connKey)
+                     }
                  } else {
                      // pure ACK (three-way handshake completion) — no payload
                  }
@@ -1183,6 +1192,76 @@ class PacketProcessor @Inject constructor(
         }
     }
 
+    /**
+     * 构建纯 ACK 包 (无 payload), 确认浏览器已发送的数据
+     */
+    private fun buildAckPacket(conn: TcpConnection, connKey: Long): ByteArray? {
+        try {
+            val srcPort = conn.dstPort
+            val dstPort = conn.srcPort
+            val srcIp = conn.dstIp.address
+            val dstIp = conn.srcIp.address
+            val isIPv6 = srcIp.size == 16
+
+            val seqNum = conn.serverSeq
+            val ackNum = (conn.browserSeq + 1 + conn.forwardedBytes) and 0xFFFFFFFFL
+            val tcpHeaderLen = 20
+            val ipHeaderLen = if (isIPv6) 40 else 20
+            val totalLen = ipHeaderLen + tcpHeaderLen
+
+            val packet = responseBuffer.get()
+            packet.clear()
+            packet.limit(totalLen)
+
+            if (isIPv6) {
+                packet.putInt(0x60000000.toInt())
+                packet.putShort(tcpHeaderLen.toShort())
+                packet.put(6.toByte())
+                packet.put(64.toByte())
+                packet.put(srcIp)
+                packet.put(dstIp)
+            } else {
+                packet.put(0x45.toByte())
+                packet.put(0x00)
+                packet.putShort(totalLen.toShort())
+                packet.putShort((System.currentTimeMillis() and 0xFFFF).toShort())
+                packet.putShort(0x0000.toShort())
+                packet.put(64.toByte())
+                packet.put(6.toByte())
+                packet.putShort(0)
+                packet.put(srcIp)
+                packet.put(dstIp)
+            }
+
+            // TCP Header: ACK (无 payload, 不消耗 seq)
+            packet.putShort(srcPort.toShort())
+            packet.putShort(dstPort.toShort())
+            packet.putInt(seqNum.toInt())
+            packet.putInt(ackNum.toInt())
+            packet.putShort(0x5010.toShort()) // ACK
+            packet.putShort(65535.toShort())
+            packet.putShort(0)
+            packet.putShort(0)
+
+            if (!isIPv6) {
+                packet.position(0)
+                val ipChecksum = calculateIpChecksum(packet, ipHeaderLen)
+                packet.position(10)
+                packet.putShort(ipChecksum)
+            }
+
+            val tcpChecksum = calculateTcpChecksum(srcIp, dstIp, packet.array(), ipHeaderLen, tcpHeaderLen)
+            packet.position(ipHeaderLen + 16)
+            packet.putShort(tcpChecksum)
+
+            if (IS_DEBUG) Log.d(TAG, "ACK packet (${totalLen}B) conn=${conn.id} ack=$ackNum")
+            return packet.array().copyOfRange(0, totalLen)
+        } catch (e: Exception) {
+            Log.e(TAG, "buildAckPacket failed: ${e::class.simpleName}: ${e.message}", e)
+            return null
+        }
+    }
+
     private fun buildRstPacket(conn: TcpConnection, connKey: Long): ByteArray? {
         try {
             val srcPort = conn.dstPort
@@ -1399,14 +1478,28 @@ try {
                while (buffer.hasRemaining()) {
                    socksChannel.write(buffer)
                }
-               if (IS_DEBUG) {
-                   val hexPayload = ByteArray(payloadLength).also { buffer.duplicate().get(it) }.joinToString("") { "%02x".format(it) }.take(40)
-                   Log.d(TAG, "forwardToSocks: wrote ${payloadLength}B for conn ${conn.id} → ${conn.dstIp}:${conn.dstPort} hex=$hexPayload")
-               }
-         } catch (e: IOException) {
-             Log.e(TAG, "forwardToSocks failed", e)
-            errors.value++
-            closeTcpConnection(connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort), conn)
+                if (IS_DEBUG) {
+                    val hexPayload = ByteArray(payloadLength).also {
+                        val dup = buffer.duplicate()
+                        dup.position(payloadStart)
+                        dup.get(it)
+                    }.joinToString("") { "%02x".format(it) }.take(40)
+                    Log.d(TAG, "forwardToSocks: wrote ${payloadLength}B for conn ${conn.id} → ${conn.dstIp}:${conn.dstPort} hex=$hexPayload")
+                }
+          } catch (e: IOException) {
+              Log.e(TAG, "forwardToSocks failed", e)
+             errors.value++
+             closeTcpConnection(connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort), conn)
+         }
+     }
+
+    private fun sendAckToBrowser(conn: TcpConnection, connKey: Long) {
+        val writer = tunWriter ?: return
+        val ackPacket = buildAckPacket(conn, connKey) ?: return
+        try {
+            writer.invoke(ackPacket)
+        } catch (e: Exception) {
+            Log.e(TAG, "sendAckToBrowser failed: ${e::class.simpleName}: ${e.message}", e)
         }
     }
 
