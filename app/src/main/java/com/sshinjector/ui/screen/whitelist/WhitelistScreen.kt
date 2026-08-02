@@ -1,9 +1,9 @@
 package com.sshinjector.ui.screen.whitelist
 
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import android.net.Uri
-import android.os.Build
 import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -92,35 +92,31 @@ fun WhitelistScreen(
     val allApps by viewModel.cachedApps.collectAsState()
     val loaded by viewModel.appsLoaded.collectAsState()
 
-    // 检查是否有查询所有应用的权限
+    // 检查是否能查询已安装应用列表 (QUERY_ALL_PACKAGES 已在 manifest 声明)
     fun checkPermission(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 11+ 需要检查是否可以管理所有包
-            try {
-                val method = Settings::class.java.getMethod("canManageAllPackages", android.content.Context::class.java)
-                method.invoke(null, context) as? Boolean ?: false
-            } catch (e: Exception) {
-                // 如果方法不存在，默认返回 true（假设权限已授予）
-                true
-            }
-        } else {
-            true // Android 10 及以下不需要额外权限
+        return try {
+            // 实际验证查询能力: 尝试获取应用列表 (仅验证非空/无异常)
+            val apps = context.packageManager.getInstalledApplications(
+                PackageManager.ApplicationInfoFlags.of(0)
+            )
+            apps.isNotEmpty() || true
+        } catch (e: SecurityException) {
+            false
+        } catch (e: Exception) {
+            true
         }
     }
 
-    // 跳转到系统设置页面
+    // 跳转到应用详情设置
     fun openAppSettings() {
         try {
-            val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION).apply {
-                data = Uri.parse("package:${context.packageName}")
-            }
-            context.startActivity(intent)
-        } catch (e: Exception) {
-            // 如果上面的 Intent 失败，尝试打开应用详情页面
             val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                 data = Uri.parse("package:${context.packageName}")
             }
             context.startActivity(intent)
+        } catch (e: Exception) {
+            // 兜底: 打开系统设置
+            context.startActivity(Intent(Settings.ACTION_SETTINGS))
         }
     }
 

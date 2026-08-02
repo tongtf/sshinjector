@@ -365,10 +365,17 @@ class MainViewModel @Inject constructor(
     fun switchDnsMode() {
         viewModelScope.launch {
             val current = settingsDataStore.dnsMode.first()
-            val next = (current + 1) % 3  // 3 modes: 0=REMOTE, 1=SYSTEM, 2=WHITELIST
+            val next = nextDnsMode(current)  // 4 modes: 0=REMOTE, 1=SYSTEM, 2=WHITELIST, 3=DOMAIN_SPLIT
             settingsDataStore.setDnsMode(next)
             if (_uiState.value.isConnected) {
                 vpnController.updateDnsMode()
+                // 内核路由/白名单需重建 VPN 接口才生效
+                try {
+                    val intent = Intent(context, SshVpnService::class.java).apply {
+                        action = SshVpnService.ACTION_REBUILD
+                    }
+                    context.startService(intent)
+                } catch (_: Exception) {}
             }
             runDiagnostics()
         }
@@ -568,3 +575,8 @@ class MainViewModel @Inject constructor(
         else -> String.format("%.1f GB", bytes / 1024.0 / 1024.0 / 1024.0)
     }
 }
+
+/**
+ * 计算下一个连接模式 (0=REMOTE, 1=SYSTEM, 2=WHITELIST, 3=DOMAIN_SPLIT, 循环)
+ */
+internal fun nextDnsMode(current: Int): Int = (current + 1) % 4

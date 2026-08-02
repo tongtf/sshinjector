@@ -57,6 +57,8 @@ class VpnController @Inject constructor(
     private var vpnInterface: FileDescriptor? = null
     private var inputStream: FileInputStream? = null
     private var outputStream: FileOutputStream? = null
+    private var packetLoopJob: Job? = null
+    private var tunGeneration = 0L
     private val readBuffer = ByteBuffer.allocate(32768).order(ByteOrder.BIG_ENDIAN)
     
     // 用于 SYSTEM 模式 DNS 绕过的 socket 保护函数
@@ -254,7 +256,8 @@ class VpnController @Inject constructor(
             addLog("VPN 连接已建立，开始处理数据包", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.SUCCESS)
 
             // 7. 启动数据包处理循环
-            launch { packetLoop() }
+            packetLoopJob?.cancel()
+            packetLoopJob = launch { packetLoop(++tunGeneration) }
 
             Result.success(Unit)
 
@@ -277,6 +280,8 @@ class VpnController @Inject constructor(
 
         // 取消所有子协程
         coroutineContext.cancelChildren()
+        packetLoopJob?.cancel()
+        packetLoopJob = null
         addLog("已取消所有子任务", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
 
         // 断开 SSH 连接
@@ -356,6 +361,8 @@ class VpnController @Inject constructor(
     fun forceReset() {
         isRunning = false
         try { coroutineContext.cancelChildren() } catch (_: Exception) {}
+        packetLoopJob?.cancel()
+        packetLoopJob = null
         vpnInterface = null
         inputStream = null
         outputStream = null
@@ -376,13 +383,32 @@ class VpnController @Inject constructor(
         inputStream = FileInputStream(fd)
         outputStream = FileOutputStream(fd)
     }
+    /**
+     * 重建 TUN 接口 (白名单/模式热更新时由 VpnService 调用)
+     * 关闭旧 TUN 流, 替换为新的 fd, 并重启数据包循环。SSH 隧道不受影响。
+     */
+    fun rebuildTunInterface(fd: FileDescriptor) {
+        if (!isRunning) return
+        val generation = ++tunGeneration
+        try {
+            inputStream?.close()
+            outputStream?.close()
+        } catch (_: Exception) {}
+        vpnInterface = fd
+        inputStream = FileInputStream(fd)
+        outputStream = FileOutputStream(fd)
+        packetLoopJob?.cancel()
+        packetLoopJob = launch { packetLoop(generation) }
+        addLog("TUN 接口已重建", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+    }
 
     /**
      * 数据包处理主循环
+     * @param generation 接口代次, 用于检测接口重建后旧循环退出
      */
-    private fun packetLoop() {
-        android.util.Log.d("VpnController", "packetLoop started")
-        while (isRunning && inputStream != null) {
+    private fun packetLoop(generation: Long) {
+        android.util.Log.d("VpnController", "packetLoop started gen=$generation")
+        while (isRunning && inputStream != null && generation == tunGeneration) {
             try {
                 val bytesRead = inputStream!!.read(readBuffer.array())
                 if (bytesRead <= 0) continue

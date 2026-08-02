@@ -23,6 +23,9 @@ import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -39,6 +42,7 @@ class SshVpnService : VpnService() {
     private val scope = CoroutineScope(Dispatchers.IO)
     private var currentServer: ServerConfig? = null
     private var notificationManager: NotificationManager? = null
+    private var whitelistObserverJob: kotlinx.coroutines.Job? = null
 
     val serviceVpnState = MutableStateFlow<DomainVpnState>(DomainVpnState())
     val serviceConnectionStats = MutableStateFlow<ConnectionStats>(ConnectionStats())
@@ -72,6 +76,9 @@ class SshVpnService : VpnService() {
             }
             ACTION_DISCONNECT -> {
                 scope.launch { disconnect() }
+            }
+            ACTION_REBUILD -> {
+                scope.launch { rebuildVpnInterface() }
             }
         }
         return START_STICKY
@@ -148,6 +155,7 @@ class SshVpnService : VpnService() {
             serviceVpnState.value = DomainVpnState(status = DomainVpnState.VpnStatus.Connected, server = config)
             serverRepository.setActiveServer(serverId)
             updateNotification(config)
+            startWhitelistObserver()
         } catch (e: Exception) {
             vpnController.addLog("连接失败: ${e.message}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.ERROR)
             lastError.value = e.message
@@ -160,14 +168,92 @@ class SshVpnService : VpnService() {
     }
 
     private fun establishVpnInterface(config: ServerConfig, allowedPackages: List<String>, dnsMode: Int): java.io.FileDescriptor {
+        val builder = buildVpnBuilder(config, allowedPackages, dnsMode)
+        val newVpnInterface = builder.establish()
+        // 关闭旧接口 (重建场景), 避免 fd 泄漏
+        try { vpnInterface?.close() } catch (_: Exception) {}
+        vpnInterface = newVpnInterface
+        tunFd = vpnInterface?.fileDescriptor
+        return tunFd ?: throw RuntimeException("Failed to establish VPN interface")
+    }
+
+    /**
+     * 重建 VPN 接口 (白名单/连接模式热更新)
+     * 重新读取白名单并重建 Builder, 仅替换 TUN 接口, SSH 隧道连接保持不断。
+     */
+    fun rebuildVpnInterface() {
+        scope.launch { rebuildVpnInterfaceInternal() }
+    }
+
+    private suspend fun rebuildVpnInterfaceInternal() {
+        val config = currentServer ?: run {
+            vpnController.addLog("重建 VPN 接口失败: 无当前服务器", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.ERROR)
+            return
+        }
+        try {
+            val dnsMode = settingsDataStore.dnsMode.first()
+            val allowedPackages = if (dnsMode == 2) {
+                whitelistDao.getEnabledPackageNames()
+            } else emptyList()
+            vpnController.addLog("重建 VPN 接口 (模式: $dnsMode, 白名单: ${allowedPackages.size} 个应用)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
+            // 关闭旧 TUN 接口并更新 VpnController 的流 (由 rebuildTunInterface 处理旧流关闭)
+            val fd = establishVpnInterface(config, allowedPackages, dnsMode)
+            vpnController.rebuildTunInterface(fd)
+            vpnController.addLog("VPN 接口已重建", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.SUCCESS)
+        } catch (e: Exception) {
+            vpnController.addLog("重建 VPN 接口失败: ${e.message}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.ERROR)
+        }
+    }
+
+    private var whitelistObserverInitial = false
+    private var rebuildInProgress = false
+
+    /**
+     * 监听白名单变化, VPN 运行中且在 WHITELIST 模式时热更新 VPN 接口。
+     */
+    private fun startWhitelistObserver() {
+        whitelistObserverJob?.cancel()
+        whitelistObserverInitial = false
+        rebuildInProgress = false
+        whitelistObserverJob = scope.launch {
+            whitelistDao.getEnabled()
+                .map { list -> list.map { it.packageName }.toSet() }
+                .distinctUntilChanged()
+                .collectLatest { packages ->
+                    // 跳过首次发射 (连接时已按当前白名单建立接口)
+                    if (!whitelistObserverInitial) {
+                        whitelistObserverInitial = true
+                        return@collectLatest
+                    }
+                    val mode = settingsDataStore.dnsMode.first()
+                    if (mode == 2 && vpnController.isVpnRunning() && !rebuildInProgress) {
+                        vpnController.addLog("检测到白名单变化 (${packages.size} 个应用), 热更新 VPN 接口", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
+                        rebuildInProgress = true
+                        try {
+                            rebuildVpnInterfaceInternal()
+                        } finally {
+                            rebuildInProgress = false
+                        }
+                    }
+                }
+        }
+    }
+
+    private fun buildVpnBuilder(config: ServerConfig, allowedPackages: List<String>, dnsMode: Int): Builder {
         val builder = Builder()
             .setSession("SSHInjector VPN")
             .addAddress("10.0.0.1", 24)
             .addAddress("fd00::1", 64)
             .addDnsServer("10.0.0.2")
-            .addDisallowedApplication(packageName)
             .setMtu(config.mtu)
             .setBlocking(true)
+
+        // 白名单模式使用 addAllowedApplication 限定允许应用, 与 addDisallowedApplication 互斥,
+        // 因此该模式下不排除自身 (自身不在白名单内时自然走直连, 不进 TUN)。
+        val isWhitelistMode = dnsMode == 2 && allowedPackages.isNotEmpty()
+        if (!isWhitelistMode) {
+            builder.addDisallowedApplication(packageName)
+        }
 
         vpnController.addLog("IPv4 地址: 10.0.0.1/24", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
         vpnController.addLog("IPv6 地址: fd00::1/64", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
@@ -187,11 +273,17 @@ class SshVpnService : VpnService() {
             }
             2 -> {
                 // WHITELIST 模式: 白名单应用走 VPN，其余透传
-                builder.addRoute("0.0.0.0", 0)
-                builder.addRoute("::", 0)
-                vpnController.addLog("DNS 服务器: 10.0.0.2 (WHITELIST)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
-                vpnController.addLog("IPv4 路由: 0.0.0.0/0 (白名单应用走 VPN)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
-                vpnController.addLog("IPv6 路由: ::/0 (白名单应用走 VPN)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
+                // 空名单时 VpnService 未设置 allowed list 会放行全部应用进 TUN,
+                // 因此只有白名单非空时才添加全量路由。
+                if (allowedPackages.isNotEmpty()) {
+                    builder.addRoute("0.0.0.0", 0)
+                    builder.addRoute("::", 0)
+                    vpnController.addLog("DNS 服务器: 10.0.0.2 (WHITELIST)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                    vpnController.addLog("IPv4 路由: 0.0.0.0/0 (白名单应用走 VPN)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
+                    vpnController.addLog("IPv6 路由: ::/0 (白名单应用走 VPN)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
+                } else {
+                    vpnController.addLog("白名单模式: 未选择应用，全部流量透传物理网卡", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.WARNING)
+                }
             }
             3 -> {
                 // DOMAIN_SPLIT 模式: 只捕获假 IP 段与 DNS, 真实 IP 流量直接走物理网卡, 避免 TUN 循环
@@ -205,24 +297,31 @@ class SshVpnService : VpnService() {
             }
         }
 
-        vpnController.addLog("排除应用: $packageName (自身)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+        if (isWhitelistMode) {
+            vpnController.addLog("白名单模式: 仅允许 ${allowedPackages.size} 个应用进入 TUN", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+        } else {
+            vpnController.addLog("排除应用: $packageName (自身)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+        }
 
         if (dnsMode == 2 && allowedPackages.isNotEmpty()) {
             for (pkg in allowedPackages) {
+                // 自身应用加入白名单会走 TUN 形成回路, 跳过
+                if (pkg == packageName) {
+                    vpnController.addLog("跳过自身应用加入白名单: $pkg", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                    continue
+                }
                 try {
                     builder.addAllowedApplication(pkg)
                 } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
                     vpnController.addLog("白名单应用不存在: $pkg", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.WARNING)
+                } catch (e: UnsupportedOperationException) {
+                    vpnController.addLog("白名单应用冲突: $pkg (${e.message})", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.WARNING)
                 }
             }
             vpnController.addLog("白名单路由已应用: ${allowedPackages.size} 个应用", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
-        } else if (dnsMode == 2) {
-            vpnController.addLog("白名单模式: 未选择应用，全部流量透传物理网卡", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.WARNING)
         }
 
-        vpnInterface = builder.establish()
-        tunFd = vpnInterface?.fileDescriptor
-        return tunFd ?: throw RuntimeException("Failed to establish VPN interface")
+        return builder
     }
 
     private fun createNotificationChannel() {
@@ -278,6 +377,10 @@ class SshVpnService : VpnService() {
     private suspend fun disconnect() {
         android.util.Log.d("SshVpnService", "Starting disconnect...")
 
+        // 0. 停止白名单观察者
+        whitelistObserverJob?.cancel()
+        whitelistObserverJob = null
+
         // 0. 清除所有服务器的激活状态
         serverRepository.deactivateAllServers()
 
@@ -326,6 +429,7 @@ class SshVpnService : VpnService() {
     companion object {
         const val ACTION_CONNECT = "com.sshinjector.ACTION_CONNECT"
         const val ACTION_DISCONNECT = "com.sshinjector.ACTION_DISCONNECT"
+        const val ACTION_REBUILD = "com.sshinjector.ACTION_REBUILD"
         const val EXTRA_SERVER_ID = "server_id"
         private const val CHANNEL_ID = "vpn_service_channel"
         private const val NOTIFICATION_ID = 1
