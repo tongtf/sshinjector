@@ -37,6 +37,7 @@ class PacketProcessor @Inject constructor(
         private const val TAG = "PacketProcessor"
         private const val SOCKS5_HANDSHAKE_TIMEOUT = 5000
         private const val RELAY_BUFFER_SIZE = 65535
+        private const val MAX_TCP_SEGMENT = 1460
         private const val MAX_PACKET_SIZE = 65535
         const val DEFAULT_CONNECTION_CLEANUP_TIMEOUT_MS = 300000L // 5 分钟默认值
     }
@@ -759,11 +760,28 @@ class PacketProcessor @Inject constructor(
     }
 
     /**
+     * 将隧道/代理读到的数据按 MTU 安全切片后逐个构造 TCP 段写回 TUN。
+     * 避免单个 IP 报文超过 MAX_PACKET_SIZE 而被丢弃 (导致网页加载缓慢/卡死)。
+     */
+    private fun writeTcpPayloadToTun(conn: TcpConnection, payload: ByteArray, connKey: Long) {
+        val writer = tunWriter ?: return
+        var offset = 0
+        while (offset < payload.size) {
+            val chunkLen = minOf(MAX_TCP_SEGMENT, payload.size - offset)
+            val chunk = payload.copyOfRange(offset, offset + chunkLen)
+            offset += chunkLen
+            val responsePacket = buildTcpResponsePacket(conn, chunk, connKey)
+            if (responsePacket != null) {
+                writer(responsePacket)
+            }
+        }
+    }
+
+    /**
      * 从 SOCKS5 代理读取数据并写回 TUN
      */
     private fun startRelayFromSocks(conn: TcpConnection, connKey: Long) {
         val socksChannel = conn.socksChannel ?: return
-        val writer = tunWriter ?: return
 
         scope.launch(Dispatchers.IO) {
             val buffer = ByteBuffer.allocateDirect(RELAY_BUFFER_SIZE)
@@ -776,10 +794,7 @@ class PacketProcessor @Inject constructor(
                         buffer.flip()
                         val payload = ByteArray(read)
                         buffer.get(payload)
-                        val responsePacket = buildTcpResponsePacket(conn, payload, connKey)
-                        if (responsePacket != null) {
-                            writer(responsePacket)
-                        }
+                        writeTcpPayloadToTun(conn, payload, connKey)
                     }
                 }
             } catch (e: IOException) {
@@ -825,7 +840,6 @@ class PacketProcessor @Inject constructor(
     private fun startRelayFromTunnel(conn: TcpConnection, connKey: Long) {
         val channel = conn.tunnelChannel ?: return
         val input = channel.inputStream ?: return
-        val writer = tunWriter ?: return
 
         scope.launch(Dispatchers.IO) {
             val buffer = ByteArray(RELAY_BUFFER_SIZE)
@@ -835,10 +849,7 @@ class PacketProcessor @Inject constructor(
                     if (read == -1) break
                     if (read > 0) {
                         val data = buffer.copyOf(read)
-                        val responsePacket = buildTcpResponsePacket(conn, data, connKey)
-                        if (responsePacket != null) {
-                            writer(responsePacket)
-                        }
+                        writeTcpPayloadToTun(conn, data, connKey)
                     }
                 }
             } catch (e: IOException) {
@@ -1016,12 +1027,7 @@ class PacketProcessor @Inject constructor(
                         buffer.flip()
                         val payload = ByteArray(read)
                         buffer.get(payload)
-
-                        // 构造反向 IP/TCP 响应包并写回 TUN
-                        val responsePacket = buildTcpResponsePacket(conn, payload, connKey)
-                        if (responsePacket != null) {
-                            writer(responsePacket)
-                        }
+                        writeTcpPayloadToTun(conn, payload, connKey)
                     }
                 }
             } catch (e: IOException) {
