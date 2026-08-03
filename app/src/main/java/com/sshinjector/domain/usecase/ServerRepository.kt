@@ -124,8 +124,7 @@ private fun ServerEntity.toDomain(): ServerConfig {
         },
         allowedPackages = parseJsonStringList(allowedPackages),
         excludedRoutes = parseJsonStringList(excludedRoutes),
-        tunnelType = tunnelType,
-        tunnelConfigJson = tunnelConfigJson,
+        socksPort = socksPort,
     )
 }
 
@@ -150,8 +149,7 @@ private fun ServerConfig.toEntity(): ServerEntity {
         },
         allowedPackages = toJsonStringList(allowedPackages),
         excludedRoutes = toJsonStringList(excludedRoutes),
-        tunnelType = tunnelType,
-        tunnelConfigJson = tunnelConfigJson,
+        socksPort = socksPort,
         createdAt = createdAt,
         updatedAt = updatedAt
     )

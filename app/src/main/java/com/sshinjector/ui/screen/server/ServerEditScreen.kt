@@ -1,6 +1,5 @@
 package com.sshinjector.ui.screen.server
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -82,12 +81,9 @@ fun ServerEditScreen(
     var mtu by remember { mutableStateOf("1500") }
     var keepAlive by remember { mutableStateOf("30") }
     var setAsDefault by remember { mutableStateOf(false) }
-    var tunnelType by remember { mutableStateOf("socks5") }
-    var tunnelConfigValues by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var socksPort by remember { mutableStateOf("1080") }
 
     val availableKeys by viewModel.keyAliases.collectAsState()
-    val plugins by viewModel.pluginList.collectAsState(initial = emptyList())
-    val selectedPlugin = plugins.find { it.id == tunnelType }
 
     LaunchedEffect(serverId) {
         viewModel.load(serverId) { entity ->
@@ -100,8 +96,7 @@ fun ServerEditScreen(
             mtu = entity.mtu.toString()
             keepAlive = entity.keepAliveInterval.toString()
             setAsDefault = entity.isActive
-            tunnelType = entity.tunnelType
-            tunnelConfigValues = parseTunnelConfig(entity.tunnelConfigJson)
+            socksPort = entity.socksPort.toString()
         }
     }
 
@@ -135,8 +130,7 @@ fun ServerEditScreen(
                                 enableIPv6 = enableIPv6,
                                 mtu = mtu.toIntOrNull() ?: 1500,
                                 keepAliveInterval = keepAlive.toIntOrNull() ?: 30,
-                                tunnelType = tunnelType,
-                                tunnelConfigJson = serializeTunnelConfig(tunnelConfigValues),
+                                socksPort = socksPort.toIntOrNull() ?: 1080,
                             )
                             viewModel.save(serverId, entity, onSave, setAsDefault)
                         }
@@ -192,32 +186,7 @@ fun ServerEditScreen(
                 ) {
                     Text("隧道配置", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
-                    TunnelTypeSelector(
-                        selectedType = tunnelType,
-                        options = plugins.map { TunnelTypeOption(it.id, it.displayName, "") },
-                        onTypeSelected = { newType ->
-                            tunnelType = newType
-                            // 切换隧道类型时重置配置字段 (非 SSH 隧道需要独立配置)
-                            tunnelConfigValues = emptyMap()
-                        }
-                    )
-
-                    // 能力标签: 由插件注册驱动
-                    val plugin = plugins.find { it.id == tunnelType }
-                    if (plugin != null) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        TunnelCapabilityChips(plugin.capabilities)
-
-                        // 按 configDescriptor 动态渲染配置字段
-                        if (plugin.configDescriptor.fields.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            TunnelDynamicFields(
-                                plugin = plugin,
-                                values = tunnelConfigValues,
-                                onValuesChange = { tunnelConfigValues = it }
-                            )
-                        }
-                    }
+                    OutlinedTextFieldRow("本地 SOCKS 端口", "1080", socksPort, { socksPort = it }, singleLine = true, numeric = true)
                 }
             }
 

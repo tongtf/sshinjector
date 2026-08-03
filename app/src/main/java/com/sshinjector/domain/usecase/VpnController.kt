@@ -8,7 +8,6 @@ import com.sshinjector.domain.vpn.DnsInterceptor
 import com.sshinjector.domain.vpn.PacketProcessor
 import com.sshinjector.domain.vpn.tunnel.TunnelConfig
 import com.sshinjector.domain.vpn.tunnel.TunnelManager
-import com.sshinjector.domain.vpn.tunnel.TunnelRouter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -45,7 +44,6 @@ import javax.inject.Singleton
 @Singleton
 class VpnController @Inject constructor(
     private val tunnelManager: TunnelManager,
-    private val tunnelRouter: TunnelRouter,
     private val packetProcessor: PacketProcessor,
     private val dnsInterceptor: DnsInterceptor,
     private val serverRepository: ServerRepository,
@@ -148,17 +146,14 @@ class VpnController @Inject constructor(
         return try {
             // 1. 启动隧道插件
             val tunnelConfig = buildTunnelConfig(server, password)
-            addLog("正在连接隧道 (${server.tunnelType})...", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
-            val tunnelResult = tunnelManager.startPlugin(server.tunnelType, tunnelConfig)
+            addLog("正在连接隧道 (socks5)...", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
+            val tunnelResult = tunnelManager.startPlugin("socks5", tunnelConfig)
             if (tunnelResult.isFailure) {
                 val errorMsg = tunnelResult.exceptionOrNull()?.message ?: "Tunnel connection failed"
                 addLog("隧道连接失败: $errorMsg", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.ERROR)
                 throw Exception(errorMsg)
             }
-            addLog("隧道连接成功: ${server.tunnelType}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.SUCCESS)
-
-            // 2.5 加载路由配置
-            loadRouteConfig()
+            addLog("隧道连接成功: socks5", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.SUCCESS)
 
             // 3. 设置 DNS 拦截器
             packetProcessor.setDnsInterceptor(dnsInterceptor)
@@ -792,115 +787,20 @@ private suspend fun connectionCleanupLoop() {
         return dnsList
     }
 
-    private suspend fun loadRouteConfig() {
-        try {
-            val json = settingsDataStore.routeConfig.first()
-            if (!json.isNullOrBlank()) {
-                val obj = org.json.JSONObject(json)
-                val appTags = mutableListOf<com.sshinjector.domain.vpn.tunnel.AppTagEntry>()
-                val appTagsArr = obj.optJSONArray("appTags")
-                if (appTagsArr != null) {
-                    for (i in 0 until appTagsArr.length()) {
-                        val entry = appTagsArr.getJSONObject(i)
-                        val pkg = entry.getString("packageName")
-                        val tags = (0 until entry.getJSONArray("tags").length())
-                            .map { entry.getJSONArray("tags").getString(it) }.toSet()
-                        appTags.add(com.sshinjector.domain.vpn.tunnel.AppTagEntry(pkg, tags))
-                    }
-                }
-                val tagTunnels = mutableListOf<com.sshinjector.domain.vpn.tunnel.TagTunnelEntry>()
-                val tagTunnelsArr = obj.optJSONArray("tagTunnels")
-                if (tagTunnelsArr != null) {
-                    for (i in 0 until tagTunnelsArr.length()) {
-                        val entry = tagTunnelsArr.getJSONObject(i)
-                        tagTunnels.add(
-                            com.sshinjector.domain.vpn.tunnel.TagTunnelEntry(
-                                tag = entry.getString("tag"),
-                                primaryTunnelId = entry.getString("primaryTunnelId"),
-                            )
-                        )
-                    }
-                }
-                val config = com.sshinjector.domain.vpn.tunnel.RouteConfig(
-                    appTags = appTags,
-                    tagTunnels = tagTunnels,
-                    defaultTunnelId = obj.optString("defaultTunnelId", "socks5"),
-                )
-                tunnelRouter.updateConfig(config)
-            }
-        } catch (_: Exception) {}
-    }
-
     private fun buildTunnelConfig(server: ServerConfig, password: String?): TunnelConfig {
-        val cfg = server.tunnelConfigJson?.let { json ->
-            try {
-                val obj = org.json.JSONObject(json)
-                obj.keys().asSequence().associateWith { obj.optString(it) }
-            } catch (_: Exception) {
-                emptyMap()
-            }
-        } ?: emptyMap()
-
-        return when (server.tunnelType) {
-            "socks5" -> TunnelConfig.Socks5(
-                sshHost = server.host,
-                sshPort = server.port,
-                sshUsername = server.username,
-                sshKeyAlias = server.keyAlias,
-                sshPassword = password ?: server.password,
-                sshKeyAlgorithm = server.keyAlgorithm.name,
-                common = TunnelConfig.CommonConfig(
-                    connectTimeout = server.connectTimeout,
-                    keepAliveInterval = server.keepAliveInterval,
-                ),
-            )
-            "direct" -> TunnelConfig.Direct
-            "https_proxy" -> TunnelConfig.HttpsProxy(
-                proxyHost = cfg["proxyHost"]?.takeIf { it.isNotBlank() } ?: server.host,
-                proxyPort = cfg["proxyPort"]?.toIntOrNull() ?: server.port,
-                username = cfg["username"]?.takeIf { it.isNotBlank() },
-                password = cfg["password"]?.takeIf { it.isNotBlank() },
-                useTls = cfg["useTls"]?.toBooleanStrictOrNull() ?: true,
-                sni = cfg["sni"]?.takeIf { it.isNotBlank() },
-                common = TunnelConfig.CommonConfig(connectTimeout = server.connectTimeout),
-            )
-            "v2ray" -> TunnelConfig.V2Ray(
-                serverHost = cfg["serverHost"]?.takeIf { it.isNotBlank() } ?: server.host,
-                serverPort = cfg["serverPort"]?.toIntOrNull() ?: server.port,
-                uuid = cfg["uuid"]?.takeIf { it.isNotBlank() } ?: server.keyAlias,
-                alterId = cfg["alterId"]?.toIntOrNull() ?: 0,
-                security = cfg["security"]?.takeIf { it.isNotBlank() } ?: "auto",
-                network = cfg["network"]?.takeIf { it.isNotBlank() } ?: "tcp",
-                path = cfg["path"]?.takeIf { it.isNotBlank() },
-                useTls = cfg["useTls"]?.toBooleanStrictOrNull() ?: true,
-                sni = cfg["sni"]?.takeIf { it.isNotBlank() },
-                allowInsecure = cfg["allowInsecure"]?.toBooleanStrictOrNull() ?: false,
-                common = TunnelConfig.CommonConfig(connectTimeout = server.connectTimeout),
-            )
-            "trojan" -> TunnelConfig.Trojan(
-                serverHost = cfg["serverHost"]?.takeIf { it.isNotBlank() } ?: server.host,
-                serverPort = cfg["serverPort"]?.toIntOrNull() ?: server.port,
-                password = cfg["password"]?.takeIf { it.isNotBlank() } ?: server.keyAlias,
-                sni = cfg["sni"]?.takeIf { it.isNotBlank() },
-                allowInsecure = cfg["allowInsecure"]?.toBooleanStrictOrNull() ?: false,
-                common = TunnelConfig.CommonConfig(connectTimeout = server.connectTimeout),
-            )
-            "shadowsocks" -> TunnelConfig.Shadowsocks(
-                serverHost = cfg["serverHost"]?.takeIf { it.isNotBlank() } ?: server.host,
-                serverPort = cfg["serverPort"]?.toIntOrNull() ?: server.port,
-                password = cfg["password"]?.takeIf { it.isNotBlank() } ?: server.keyAlias,
-                method = cfg["method"]?.takeIf { it.isNotBlank() } ?: "aes-256-gcm",
-                common = TunnelConfig.CommonConfig(connectTimeout = server.connectTimeout),
-            )
-            else -> TunnelConfig.Socks5(
-                sshHost = server.host,
-                sshPort = server.port,
-                sshUsername = server.username,
-                sshKeyAlias = server.keyAlias,
-                sshPassword = password ?: server.password,
-                sshKeyAlgorithm = server.keyAlgorithm.name,
-            )
-        }
+        return TunnelConfig.Socks5(
+            sshHost = server.host,
+            sshPort = server.port,
+            sshUsername = server.username,
+            sshKeyAlias = server.keyAlias,
+            sshPassword = password ?: server.password,
+            sshKeyAlgorithm = server.keyAlgorithm.name,
+            common = TunnelConfig.CommonConfig(
+                connectTimeout = server.connectTimeout,
+                keepAliveInterval = server.keepAliveInterval,
+            ),
+            socksPort = server.socksPort,
+        )
     }
 
     fun getCurrentServer(): ServerConfig? = currentServer

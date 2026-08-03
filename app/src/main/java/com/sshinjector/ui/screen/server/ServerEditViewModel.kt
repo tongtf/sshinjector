@@ -5,7 +5,6 @@ import androidx.lifecycle.viewModelScope
 import com.sshinjector.data.local.dao.ServerDao
 import com.sshinjector.data.local.entity.ServerEntity
 import com.sshinjector.data.remote.ssh.SshKeyManager
-import com.sshinjector.domain.vpn.tunnel.TunnelPlugin
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,7 +17,6 @@ import javax.inject.Inject
 class ServerEditViewModel @Inject constructor(
     private val serverDao: ServerDao,
     private val keyManager: SshKeyManager,
-    private val plugins: Map<String, @JvmSuppressWildcards TunnelPlugin>
 ) : ViewModel() {
     private val _saved = MutableStateFlow(false)
     val saved = _saved.asStateFlow()
@@ -29,9 +27,6 @@ class ServerEditViewModel @Inject constructor(
     private val _error = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val error = _error.asSharedFlow()
 
-    private val _plugins = MutableStateFlow(plugins.values.toList())
-    val pluginList = _plugins.asStateFlow()
-
     init {
         refreshKeys()
     }
@@ -39,8 +34,6 @@ class ServerEditViewModel @Inject constructor(
     fun refreshKeys() {
         _keyAliases.value = keyManager.listKeyAliases()
     }
-
-    fun getPlugin(id: String): TunnelPlugin? = plugins[id]
 
     fun generateAndAssociate(onGenerated: (String) -> Unit) {
         viewModelScope.launch {
