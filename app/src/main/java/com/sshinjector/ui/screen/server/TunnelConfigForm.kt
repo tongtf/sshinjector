@@ -61,7 +61,10 @@ fun TunnelTypeSelector(
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val selected = options.find { it.id == selectedType } ?: options.first()
+    val effectiveOptions = options.ifEmpty {
+        listOf(TunnelTypeOption("socks5", "SOCKS5 (SSH)", ""))
+    }
+    val selected = effectiveOptions.find { it.id == selectedType } ?: effectiveOptions.first()
 
     Column(modifier = modifier.fillMaxWidth()) {
         Text("隧道模式", fontSize = 16.sp, fontWeight = FontWeight.Medium)
@@ -89,7 +92,7 @@ fun TunnelTypeSelector(
                 expanded = expanded,
                 onDismissRequest = { expanded = false }
             ) {
-                options.forEach { option ->
+                effectiveOptions.forEach { option ->
                     DropdownMenuItem(
                         text = {
                             Column {

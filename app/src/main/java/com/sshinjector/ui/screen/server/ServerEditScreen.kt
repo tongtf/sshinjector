@@ -122,24 +122,28 @@ fun ServerEditScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = {
-                        val entity = ServerEntity(
-                            id = if (isNew) 0 else serverId,
-                            name = name,
-                            host = host,
-                            port = port.toIntOrNull() ?: 22,
-                            username = username,
-                            keyAlias = keyAlias,
-                            isActive = setAsDefault,
-                            enableIPv6 = enableIPv6,
-                            mtu = mtu.toIntOrNull() ?: 1500,
-                            keepAliveInterval = keepAlive.toIntOrNull() ?: 30,
-                            tunnelType = tunnelType,
-                            tunnelConfigJson = serializeTunnelConfig(tunnelConfigValues),
-                        )
-                        viewModel.save(serverId, entity, onSave, setAsDefault)
-                    }) {
-                        Icon(imageVector = Icons.Default.Check, contentDescription = "保存")
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            val entity = ServerEntity(
+                                id = if (isNew) 0 else serverId,
+                                name = name,
+                                host = host,
+                                port = port.toIntOrNull() ?: 22,
+                                username = username,
+                                keyAlias = keyAlias,
+                                isActive = setAsDefault,
+                                enableIPv6 = enableIPv6,
+                                mtu = mtu.toIntOrNull() ?: 1500,
+                                keepAliveInterval = keepAlive.toIntOrNull() ?: 30,
+                                tunnelType = tunnelType,
+                                tunnelConfigJson = serializeTunnelConfig(tunnelConfigValues),
+                            )
+                            viewModel.save(serverId, entity, onSave, setAsDefault)
+                        }
+                    ) {
+                        Icon(imageVector = Icons.Default.Check, contentDescription = "保存", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("保存", color = MaterialTheme.colorScheme.primary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -156,7 +160,12 @@ fun ServerEditScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Card(modifier = Modifier.fillMaxWidth()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -171,7 +180,12 @@ fun ServerEditScreen(
                 }
             }
 
-            Card(modifier = Modifier.fillMaxWidth()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -207,7 +221,12 @@ fun ServerEditScreen(
                 }
             }
 
-            Card(modifier = Modifier.fillMaxWidth()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -224,9 +243,11 @@ fun ServerEditScreen(
             if (!isNew) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.errorContainer
-                    )
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp),
@@ -266,25 +287,17 @@ fun OutlinedTextFieldRow(
     singleLine: Boolean = false,
     numeric: Boolean = false
 ) {
-    Row(
+    androidx.compose.material3.OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(text = label, fontSize = 16.sp, modifier = Modifier.width(120.dp))
-        Spacer(modifier = Modifier.width(16.dp))
-        TextField(
-            value = value,
-            onValueChange = onValueChange,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp),
-            placeholder = { Text(placeholder) },
-            singleLine = singleLine,
-            keyboardOptions = KeyboardOptions(
-                keyboardType = if (numeric) KeyboardType.Number else KeyboardType.Text
-            )
+        label = { Text(label) },
+        placeholder = { Text(placeholder) },
+        singleLine = singleLine,
+        keyboardOptions = KeyboardOptions(
+            keyboardType = if (numeric) KeyboardType.Number else KeyboardType.Text
         )
-    }
+    )
 }
 
 @Composable
@@ -309,73 +322,63 @@ fun KeyAliasSelector(
     onGenerate: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(text = "密钥", fontSize = 16.sp, modifier = Modifier.width(120.dp))
-            Spacer(modifier = Modifier.width(16.dp))
-            Box(modifier = Modifier.weight(1f)) {
-                if (availableKeys.isEmpty()) {
-                    // 没有密钥时显示生成按钮
-                    Button(
-                        onClick = onGenerate,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("生成新密钥并关联", fontSize = 14.sp)
-                        }
-                    }
-                } else {
-                    // 有密钥时显示下拉选择
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp)
-                            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
-                            .clickable { onToggleDropdown() }
-                            .padding(horizontal = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = if (selectedAlias.isBlank()) "点击选择密钥..." else selectedAlias,
-                            fontSize = 16.sp,
-                            color = if (selectedAlias.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
-                        )
+        if (availableKeys.isEmpty()) {
+            Button(
+                onClick = onGenerate,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("生成新密钥并关联", fontSize = 14.sp)
+                }
+            }
+        } else {
+            Box(modifier = Modifier.fillMaxWidth()) {
+                androidx.compose.material3.OutlinedTextField(
+                    value = selectedAlias,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("密钥") },
+                    placeholder = { Text("点击选择密钥...") },
+                    trailingIcon = {
                         Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(24.dp))
-                    }
-                    DropdownMenu(
-                        expanded = isDropdownExpanded,
-                        onDismissRequest = { onToggleDropdown() }
-                    ) {
-                        availableKeys.forEach { key ->
-                            DropdownMenuItem(
-                                text = { Text(key) },
-                                onClick = { onSelect(key) },
-                                trailingIcon = if (key == selectedAlias) {
-                                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp)) }
-                                } else null
-                            )
-                        }
-                        HorizontalDivider()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onToggleDropdown() }
+                )
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .clickable { onToggleDropdown() }
+                )
+                DropdownMenu(
+                    expanded = isDropdownExpanded,
+                    onDismissRequest = { onToggleDropdown() }
+                ) {
+                    availableKeys.forEach { key ->
                         DropdownMenuItem(
-                            text = { Text("生成新密钥", color = MaterialTheme.colorScheme.primary) },
-                            onClick = onGenerate,
-                            leadingIcon = { Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                            text = { Text(key) },
+                            onClick = { onSelect(key) },
+                            trailingIcon = if (key == selectedAlias) {
+                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                            } else null
                         )
                     }
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text("生成新密钥", color = MaterialTheme.colorScheme.primary) },
+                        onClick = onGenerate,
+                        leadingIcon = { Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                    )
                 }
             }
         }
