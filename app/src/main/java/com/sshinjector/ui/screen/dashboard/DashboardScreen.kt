@@ -108,6 +108,8 @@ fun DashboardScreen(
     }
 
     val context = LocalContext.current
+    val fragmentActivity = context as? androidx.fragment.app.FragmentActivity
+    val biometricAuth = fragmentActivity?.let { com.sshinjector.ui.biometric.BiometricAuth.from(it) }
 
     LaunchedEffect(Unit) { keyViewModel.refresh() }
 
@@ -264,7 +266,12 @@ fun DashboardScreen(
                                             if (isConnectedToThis) {
                                                 viewModel.disconnect()
                                             } else {
-                                                viewModel.connect(server.id)
+                                                val onGranted = { viewModel.connect(server.id) }
+                                                if (fragmentActivity != null && biometricAuth != null) {
+                                                    biometricAuth.connectIfAllowed(fragmentActivity, server.keyAlias, onGranted)
+                                                } else {
+                                                    onGranted()
+                                                }
                                             }
                                         },
                                         onLongClick = { showServerMenu = server.id }
