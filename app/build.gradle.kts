@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "com.sshinjector"
+    namespace = "cn.srv0.sshinjector"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.sshinjector"
+        applicationId = "cn.srv0.sshinjector"
         minSdk = 34
         targetSdk = 35
         versionCode = 1
