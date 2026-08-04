@@ -83,6 +83,7 @@ fun WhitelistScreen(
 ) {
     val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
+    var isSearchActive by remember { mutableStateOf(false) }
     var selectAll by remember { mutableStateOf(false) }
     var hideSystemApps by remember { mutableStateOf(true) }
     var hasPermission by remember { mutableStateOf(false) }
@@ -154,7 +155,7 @@ fun WhitelistScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    if (searchQuery.isBlank()) {
+                    if (!isSearchActive) {
                         Text("应用白名单")
                     } else {
                         TextField(
@@ -165,10 +166,8 @@ fun WhitelistScreen(
                             singleLine = true,
                             leadingIcon = { Icon(Icons.Default.Search, contentDescription = "搜索") },
                             trailingIcon = {
-                                if (searchQuery.isNotBlank()) {
-                                    IconButton(onClick = { searchQuery = "" }) {
-                                        Icon(Icons.Default.Close, contentDescription = "清除")
-                                    }
+                                IconButton(onClick = { searchQuery = ""; isSearchActive = false }) {
+                                    Icon(Icons.Default.Close, contentDescription = "关闭搜索")
                                 }
                             }
                         )
@@ -180,6 +179,14 @@ fun WhitelistScreen(
                     }
                 },
                 actions = {
+                    if (!isSearchActive) {
+                        IconButton(onClick = { isSearchActive = true }) {
+                            Icon(
+                                imageVector = Icons.Default.Search,
+                                contentDescription = "搜索应用"
+                            )
+                        }
+                    }
                     IconButton(onClick = {
                         viewModel.refreshApps()
                     }) {
