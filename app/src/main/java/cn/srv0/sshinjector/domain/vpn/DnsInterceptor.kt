@@ -67,6 +67,11 @@ class DnsInterceptor @Inject constructor() {
     private val pendingResponses = ConcurrentLinkedQueue<DnsResponse>()
     private val queryIdCounter = AtomicInteger(0)
 
+    // 定期清理过期待处理查询
+    private val cleanupExecutor = Executors.newSingleThreadScheduledExecutor()
+    private val PENDING_QUERY_TIMEOUT_MS = 30_000L
+    private val IP_DOMAIN_TTL_MS = 300_000L
+
     // 当前传输模式
     private var transportMode = DnsTransport.REMOTE
 
@@ -86,6 +91,21 @@ class DnsInterceptor @Inject constructor() {
     val cacheHits = java.util.concurrent.atomic.AtomicLong(0)
     val cacheMisses = java.util.concurrent.atomic.AtomicLong(0)
 
+    // 定期清理过期待查
+    private val cleanupScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
+
+    init {
+        cleanupScheduler.scheduleAtFixedRate({
+            val now = System.currentTimeMillis()
+            // 清理超时 pendingQueries
+            pendingQueries.entries.removeIf { (_, query) ->
+                now - query.timestamp > PENDING_QUERY_TIMEOUT_MS
+            }
+            // 清理过期缓存
+            dnsCache.entries.removeIf { it.value.expireAt < now }
+        }, 30, 30, java.util.concurrent.TimeUnit.SECONDS)
+    }
+
     data class DnsPendingQuery(
         val queryId: Int,
         val originalQueryId: Int,
@@ -93,7 +113,8 @@ class DnsInterceptor @Inject constructor() {
         val srcPort: Int,
         val dstIp: InetAddress?,
         val dstPort: Int,
-        val question: Record
+        val question: Record,
+        val timestamp: Long = System.currentTimeMillis()
     )
 
     data class CacheEntry(
@@ -283,24 +304,26 @@ class DnsInterceptor @Inject constructor() {
                 }
 
                 val socket = java.net.DatagramSocket()
+                try {
+                    // 关键：使用 VpnService.protect() 让此 socket 绕过 VPN
+                    val protected = protectSocket?.invoke(socket) ?: false
+                    if (!protected) {
+                        Log.w(TAG, "[$queryId] VpnService.protect() 返回 false，socket 可能仍走 VPN")
+                    }
 
-                // 关键：使用 VpnService.protect() 让此 socket 绕过 VPN
-                val protected = protectSocket?.invoke(socket) ?: false
-                if (!protected) {
-                    Log.w(TAG, "[$queryId] VpnService.protect() 返回 false，socket 可能仍走 VPN")
+                    socket.soTimeout = CONNECT_TIMEOUT
+                    val dstAddr = java.net.InetAddress.getByName(dnsServer)
+                    val packet = java.net.DatagramPacket(queryData, queryData.size, dstAddr, 53)
+                    socket.send(packet)
+
+                    val responseBuf = ByteArray(512)
+                    val responsePacket = java.net.DatagramPacket(responseBuf, responseBuf.size)
+                    socket.receive(responsePacket)
+                    val responseData = responseBuf.copyOfRange(0, responsePacket.length)
+                    onDnsResponse(queryId, responseData)
+                } finally {
+                    socket.close()
                 }
-
-                socket.soTimeout = CONNECT_TIMEOUT
-                val dstAddr = java.net.InetAddress.getByName(dnsServer)
-                val packet = java.net.DatagramPacket(queryData, queryData.size, dstAddr, 53)
-                socket.send(packet)
-
-                val responseBuf = ByteArray(512)
-                val responsePacket = java.net.DatagramPacket(responseBuf, responseBuf.size)
-                socket.receive(responsePacket)
-                val responseData = responseBuf.copyOfRange(0, responsePacket.length)
-                onDnsResponse(queryId, responseData)
-                socket.close()
             } catch (e: Exception) {
                 Log.e(TAG, "[$queryId] SYSTEM 模式 DNS 查询失败: ${e.message}", e)
                 onDnsResponse(queryId, ByteArray(0))

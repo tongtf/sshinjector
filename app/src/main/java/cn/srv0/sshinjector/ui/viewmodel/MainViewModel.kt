@@ -554,6 +554,16 @@ class MainViewModel @Inject constructor(
             }
         }
     }
+
+    override fun onCleared() {
+        super.onCleared()
+        try {
+            connectivityManager.unregisterNetworkCallback(networkCallback)
+            android.util.Log.d("MainViewModel", "Network callback unregistered")
+        } catch (e: Exception) {
+            android.util.Log.w("MainViewModel", "Failed to unregister network callback: ${e.message}")
+        }
+    }
 }
 
 enum class LogLevel {

@@ -34,9 +34,9 @@ class SshKeyManager @Inject constructor(
     private val importedKeysDir: File = File(context.filesDir, "imported_keys").apply { mkdirs() }
     private val generatedKeysDir: File = File(context.filesDir, "generated_keys").apply { mkdirs() }
 
-    private val publicKeyCache = mutableMapOf<String, String>()
-    private val algorithmCache = mutableMapOf<String, String>()
-    private val creationDateCache = mutableMapOf<String, String>()
+    private val publicKeyCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val algorithmCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val creationDateCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     // Legacy ECDSA 格式支持 (部分服务器使用非标准格式)
     var useLegacyEcdsaFormat: Boolean = false // 使用标准 RFC 5656 格式
@@ -140,6 +140,10 @@ class SshKeyManager @Inject constructor(
             passphrase?.toByteArray(StandardCharsets.UTF_8),
             algorithm
         )
+        // 限制缓存大小，移除最早的条目
+        while (importedPemCache.size > MAX_PEM_CACHE_SIZE) {
+            importedPemCache.keys.firstOrNull()?.let { importedPemCache.remove(it) }
+        }
         publicKeyCache[fullAlias] = pubKeyStr
         algorithmCache[fullAlias] = algorithm
         creationDateCache[fullAlias] = Date().toString().take(10)
@@ -273,7 +277,10 @@ class SshKeyManager @Inject constructor(
     /** 导入的原始 PEM + 口令 + 算法 (内存缓存) */
     private class ImportedPem(val pem: String, val passphrase: ByteArray?, val algorithm: String)
 
-    private val importedPemCache = mutableMapOf<String, ImportedPem>()
+    private val importedPemCache = java.util.concurrent.ConcurrentHashMap<String, ImportedPem>()
+
+    // PEM 缓存最大条目数，防止内存泄漏
+    private val MAX_PEM_CACHE_SIZE = 10
 
     /** 从磁盘解密并加载导入的私钥 PEM, 未找到返回 null */
     private fun loadImportedPem(fullAlias: String): ImportedPem? {

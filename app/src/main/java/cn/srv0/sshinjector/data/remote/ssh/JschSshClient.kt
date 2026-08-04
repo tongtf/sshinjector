@@ -45,7 +45,7 @@ class JschSshClient @Inject constructor(
 
     private val pool = ConcurrentLinkedQueue<PooledSession>()
     private val sessionIndex = AtomicInteger(0)
-    private var scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    @Volatile private var scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val isConnectedFlag = AtomicBoolean(false)
     private var currentConfig: ServerConfig? = null
 
@@ -251,26 +251,27 @@ class JschSshClient @Inject constructor(
         }
 
         // 选择活跃 channel 数最少的健康 session
-        val size = pool.size
-        var bestIdx = -1
+        val snapshot = pool.toList()
+        val size = snapshot.size
+        if (size == 0) return null
+        var bestPooled: PooledSession? = null
         var bestCount = Int.MAX_VALUE
         for (i in 0 until size) {
-            val idx = sessionIndex.getAndIncrement() % size
-            val pooled = pool.elementAtOrNull(idx) ?: continue
+            val idx = Math.floorMod(sessionIndex.getAndIncrement(), size)
+            val pooled = snapshot[idx]
             if (!pooled.session.isConnected || !pooled.healthy) continue
             val count = pooled.activeChannels.get()
             if (count < bestCount) {
                 bestCount = count
-                bestIdx = idx
+                bestPooled = pooled
             }
         }
 
-        if (bestIdx < 0) {
+        val pooled = bestPooled
+        if (pooled == null) {
             android.util.Log.w(TAG, "createDirectChannel: all sessions failed for $host:$port")
             return null
         }
-
-        val pooled = pool.elementAtOrNull(bestIdx)!!
         return try {
             val channel = pooled.session.openChannel("direct-tcpip") as com.jcraft.jsch.ChannelDirectTCPIP
             channel.setHost(host)
@@ -291,7 +292,7 @@ class JschSshClient @Inject constructor(
                 pooled.activeChannels.decrementAndGet()
             }
         } catch (e: Exception) {
-            android.util.Log.w(TAG, "createDirectChannel failed on pool-$bestIdx: $host:$port", e)
+            android.util.Log.w(TAG, "createDirectChannel failed: $host:$port", e)
             null
         }
     }

@@ -256,7 +256,7 @@ class Socks5Connection(
     private val ipToDomainLookup: ((String) -> String?)? = null
 ) {
     private val buffer = ByteBuffer.allocateDirect(32768)
-    private var state = SocksState.Handshake
+    @Volatile private var state = SocksState.Handshake
     private var targetTunnel: TunnelChannel? = null
     private var remoteHost: String? = null
     private var remotePort: Int = 0
@@ -760,6 +760,7 @@ class Socks5Connection(
 
         timeoutCheckJob?.cancel()
         timeoutCheckJob = null
+        scope.cancel()
 
         try { channel.close() } catch (_: Exception) {}
         try {

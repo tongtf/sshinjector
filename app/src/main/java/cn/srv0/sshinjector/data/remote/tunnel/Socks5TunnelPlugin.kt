@@ -102,8 +102,8 @@ class Socks5TunnelPlugin @Inject constructor(
 
     override suspend fun disconnect() {
         _state.value = _state.value.copy(status = TunnelState.Status.Disconnecting)
-        socksServer?.stop()
-        jschClient?.disconnect()
+        try { socksServer?.stop() } catch (_: Exception) {}
+        try { jschClient?.disconnect() } catch (_: Exception) {}
         jschClient = null
         socksServer = null
         startTime = 0
