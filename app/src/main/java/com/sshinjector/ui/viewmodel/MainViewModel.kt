@@ -415,6 +415,29 @@ class MainViewModel @Inject constructor(
             }
         }
     }
+
+    fun deleteServer(id: Long) {
+        viewModelScope.launch {
+            serverRepository.deleteServer(id)
+        }
+    }
+
+    fun refreshNetworkInfo() {
+        viewModelScope.launch {
+            val ipv4 = getDeviceIpv4()
+            val ipv6 = getDeviceIpv6()
+            val dnsModeValue = settingsDataStore.dnsMode.first()
+            val dnsModeText = dnsModeLabel(dnsModeValue)
+
+            _uiState.update {
+                it.copy(
+                    deviceIpv4 = ipv4,
+                    deviceIpv6 = ipv6,
+                    dnsMode = dnsModeText
+                )
+            }
+        }
+    }
 }
 
 enum class LogLevel {
