@@ -88,8 +88,12 @@ class AndroidKeyStoreIdentity(
     private fun parseEd25519DerSignature(derSig: ByteArray): ByteArray {
         var pos = 0
         if (derSig[pos++].toInt() != 0x30) throw IllegalArgumentException("bad DER SEQUENCE")
-        val totalLen = derSig[pos++].toInt() and 0xFF
-        if (totalLen and 0x80 != 0) pos += (totalLen and 0x7F)
+        // 跳过 SEQUENCE 长度（支持多字节编码）
+        val firstLenByte = derSig[pos++].toInt() and 0xFF
+        if (firstLenByte and 0x80 != 0) {
+            val numLenBytes = firstLenByte and 0x7F
+            pos += numLenBytes
+        }
 
         if (derSig[pos++].toInt() != 0x02) throw IllegalArgumentException("bad INTEGER tag for r")
         val rLen = derSig[pos++].toInt() and 0xFF
@@ -126,8 +130,12 @@ class AndroidKeyStoreIdentity(
     private fun parseDerSignature(derSig: ByteArray): Pair<ByteArray, ByteArray> {
         var pos = 0
         if (derSig[pos++].toInt() != 0x30) throw IllegalArgumentException("bad DER")
-        if ((derSig[pos].toInt() and 0x80) != 0) pos += (derSig[pos].toInt() and 0x7F)
-        pos++ // skip total length byte
+        // 跳过 SEQUENCE 长度（支持多字节编码）
+        val firstLenByte = derSig[pos++].toInt() and 0xFF
+        if (firstLenByte and 0x80 != 0) {
+            val numLenBytes = firstLenByte and 0x7F
+            pos += numLenBytes
+        }
 
         if (derSig[pos++].toInt() != 0x02) throw IllegalArgumentException("bad r tag")
         val rLen = derSig[pos++].toInt() and 0xFF
@@ -159,7 +167,13 @@ class AndroidKeyStoreIdentity(
 
     override fun getAlgName(): String = when (privateKey.algorithm) {
         "EC" -> {
-            val keySize = (privateKey as? java.security.interfaces.ECPublicKey)?.w?.affineX?.bitLength() ?: 256
+            // 从 ECParameterSpec 获取曲线大小，避免强转 ECPublicKey 失败
+            val keySize = try {
+                val ecKey = privateKey as? java.security.interfaces.ECKey
+                ecKey?.params?.order?.bitLength() ?: 256
+            } catch (_: Exception) {
+                256
+            }
             if (keySize > 320) "ecdsa-sha2-nistp384" else "ecdsa-sha2-nistp256"
         }
         "RSA" -> "ssh-rsa"
@@ -169,7 +183,10 @@ class AndroidKeyStoreIdentity(
 
     override fun isEncrypted(): Boolean = false
 
-    override fun clear() {}
+    override fun clear() {
+        // JSch 调用 clear() 表示不再需要此身份
+        // 私钥由 Android Keystore 管理，无需手动清除
+    }
 
     companion object {
         // 公钥 blob 格式: STANDARD (RFC 5656) 或 LEGACY (部分服务器)

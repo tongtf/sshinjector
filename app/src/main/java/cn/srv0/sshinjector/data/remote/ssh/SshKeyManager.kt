@@ -100,9 +100,16 @@ class SshKeyManager @Inject constructor(
         // Ed25519: 可能在 AndroidKeyStore 或文件中
         if (algorithm == 3) {
             if (!keyStore.containsAlias(fullAlias)) {
-                // 不在 AndroidKeyStore，持久化到文件
+                // 不在 AndroidKeyStore，使用 AES-GCM 加密后持久化到文件
                 val safeName = fullAlias.replace("/", "_")
-                File(generatedKeysDir, safeName).writeBytes(keyPair.private.encoded)
+                val wrappingKey = getOrCreateImportWrapperKey()
+                val privKeyBytes = keyPair.private.encoded
+
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                cipher.init(Cipher.ENCRYPT_MODE, wrappingKey)
+                val ciphertext = cipher.doFinal(privKeyBytes)
+
+                File(generatedKeysDir, safeName).writeBytes(cipher.iv + ciphertext)
                 File(generatedKeysDir, "$safeName.pub").writeBytes(keyPair.public.encoded)
             }
         } else if (!keyStore.containsAlias(fullAlias)) {
