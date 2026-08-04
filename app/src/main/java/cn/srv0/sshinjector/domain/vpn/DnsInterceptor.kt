@@ -45,6 +45,10 @@ class DnsInterceptor @Inject constructor() {
 
         // IPv6 假 IP 池: fd00::2 ~ fd00::ffff:ffff (VPN 网关 fd00::1/64 范围内)
         // 用递增计数器生成 fd00::N 形式的假 IPv6 地址
+
+        // 映射表大小限制，防止长时间运行 OOM
+        private const val MAX_IP_DOMAIN_MAP_SIZE = 4096
+        private const val MAX_DOMAIN_IP_MAP_SIZE = 4096
     }
 
     enum class DnsTransport {
@@ -68,7 +72,6 @@ class DnsInterceptor @Inject constructor() {
     private val queryIdCounter = AtomicInteger(0)
 
     // 定期清理过期待处理查询
-    private val cleanupExecutor = Executors.newSingleThreadScheduledExecutor()
     private val PENDING_QUERY_TIMEOUT_MS = 30_000L
     private val IP_DOMAIN_TTL_MS = 300_000L
 
@@ -103,6 +106,27 @@ class DnsInterceptor @Inject constructor() {
             }
             // 清理过期缓存
             dnsCache.entries.removeIf { it.value.expireAt < now }
+            // 防止映射表无限增长：超过限制时清空一半（简单驱逐策略）
+            if (ipToDomain.size > MAX_IP_DOMAIN_MAP_SIZE) {
+                val half = ipToDomain.size / 2
+                val iter = ipToDomain.keys.iterator()
+                var removed = 0
+                while (iter.hasNext() && removed < half) {
+                    iter.next()
+                    iter.remove()
+                    removed++
+                }
+            }
+            if (domainToIp.size > MAX_DOMAIN_IP_MAP_SIZE) {
+                val half = domainToIp.size / 2
+                val iter = domainToIp.keys.iterator()
+                var removed = 0
+                while (iter.hasNext() && removed < half) {
+                    iter.next()
+                    iter.remove()
+                    removed++
+                }
+            }
         }, 30, 30, java.util.concurrent.TimeUnit.SECONDS)
     }
 

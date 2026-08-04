@@ -41,6 +41,7 @@ class JschSshClient @Inject constructor(
         private const val TAG = "JschSshClient"
         private const val SESSION_POOL_SIZE = 3
         private const val CHANNEL_WINDOW_SIZE = 8 * 1024 * 1024
+        @Volatile private var loggerSet = false
     }
 
     private val pool = ConcurrentLinkedQueue<PooledSession>()
@@ -100,20 +101,28 @@ class JschSshClient @Inject constructor(
     private fun createSession(config: ServerConfig, index: Int): PooledSession? {
         return try {
             val jsch = JSch()
-            jsch.setKnownHosts(java.io.ByteArrayInputStream(byteArrayOf()))
-            JSch.setLogger(object : com.jcraft.jsch.Logger {
-                private val levels = mapOf(
-                    com.jcraft.jsch.Logger.DEBUG to "DEBUG",
-                    com.jcraft.jsch.Logger.INFO to "INFO",
-                    com.jcraft.jsch.Logger.WARN to "WARN",
-                    com.jcraft.jsch.Logger.ERROR to "ERROR",
-                    com.jcraft.jsch.Logger.FATAL to "FATAL"
-                )
-                override fun isEnabled(level: Int) = true
-                override fun log(level: Int, message: String) {
-                    android.util.Log.d(TAG, "[pool-$index] [${levels[level] ?: level}] $message")
+            // JSch.setLogger 是全局静态，只设置一次
+            synchronized(JSch::class.java) {
+                if (!loggerSet) {
+                    JSch.setLogger(object : com.jcraft.jsch.Logger {
+                        private val levels = mapOf(
+                            com.jcraft.jsch.Logger.DEBUG to "DEBUG",
+                            com.jcraft.jsch.Logger.INFO to "INFO",
+                            com.jcraft.jsch.Logger.WARN to "WARN",
+                            com.jcraft.jsch.Logger.ERROR to "ERROR",
+                            com.jcraft.jsch.Logger.FATAL to "FATAL"
+                        )
+                        override fun isEnabled(level: Int) =
+                            level >= com.jcraft.jsch.Logger.WARN
+                        override fun log(level: Int, message: String) {
+                            if (level >= com.jcraft.jsch.Logger.WARN) {
+                                android.util.Log.w(TAG, "[${levels[level] ?: level}] $message")
+                            }
+                        }
+                    })
+                    loggerSet = true
                 }
-            })
+            }
             val keyAdded = keyManager.createJSchIdentity(jsch, config.keyAlias)
             if (!keyAdded) {
                 throw Exception("无法访问私钥")
@@ -123,13 +132,16 @@ class JschSshClient @Inject constructor(
             if (!config.password.isNullOrEmpty()) {
                 s.setPassword(config.password)
             }
+            // StrictHostKeyChecking=no: 首次连接不验证指纹（已知限制：无 MITM 防护）
+            // TODO: 实现 known_hosts 持久化以提供 MITM 防护
             s.setConfig("StrictHostKeyChecking", "no")
             s.setConfig("PreferredAuthentications", "publickey,password")
             s.setConfig("PubkeyAuthentication", "yes")
             s.setConfig("PasswordAuthentication", "yes")
-            s.setConfig("KexAlgorithms", "curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256,diffie-hellman-group14-sha1,diffie-hellman-group1-sha1")
-            s.setConfig("HostKeyAlgorithms", "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,ssh-rsa,ssh-dss")
-            s.setConfig("PubkeyAcceptedAlgorithms", "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,ssh-rsa,ssh-dss")
+            // 仅保留安全算法：移除 diffie-hellman-group1-sha1 (1024-bit, 已被攻破) 和 ssh-dss (DSA)
+            s.setConfig("KexAlgorithms", "curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256")
+            s.setConfig("HostKeyAlgorithms", "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,ssh-rsa")
+            s.setConfig("PubkeyAcceptedAlgorithms", "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,ssh-rsa")
             s.setTimeout(config.connectTimeout)
 
             connectionState.value = ConnectionState.Authenticating

@@ -653,8 +653,6 @@ class SshKeyManager @Inject constructor(
             val identity = AndroidKeyStoreIdentity(keyStore, fullAlias, privateKey, publicKeyBytes)
             jsch.addIdentity(identity, null)
             android.util.Log.d("SshKeyManager", "Added identity using AndroidKeyStoreIdentity")
-            android.util.Log.d("SshKeyManager", "Public key blob hex: ${publicKeyBytes.joinToString("") { "%02x".format(it) }}")
-            android.util.Log.d("SshKeyManager", "OpenSSH public key: ${encodePublicKeyToOpenSSH(cert.publicKey)}")
             return true
         } catch (e: Exception) {
             android.util.Log.e("SshKeyManager", "Failed to add identity to JSch: ${e.message}", e)
