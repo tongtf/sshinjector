@@ -68,6 +68,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -117,7 +118,7 @@ fun DashboardScreen(
     var showServerMenu by remember { mutableStateOf<Long?>(null) }
 
     val serverConnectionStatus = state.serverConnectionStatus
-    val servers by viewModel.allServers.collectAsState(initial = emptyList())
+    val servers by viewModel.allServers.collectAsState(initial = emptyList<com.sshinjector.domain.model.ServerConfig>())
 
     Box(modifier = modifier.fillMaxSize()) {
         Column(
@@ -133,7 +134,21 @@ fun DashboardScreen(
                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("网络信息", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("网络信息", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        IconButton(onClick = { viewModel.refreshNetworkInfo() }, modifier = Modifier.size(32.dp)) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "刷新网络信息",
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
                     Spacer(modifier = Modifier.height(12.dp))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("IPv4", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -146,7 +161,7 @@ fun DashboardScreen(
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text("DNS", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("模式", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         val (dnsBg, dnsFg) = when (state.dnsMode) {
                             "远程代理" -> Color(0xFF7C4DFF) to Color.White
                             "本地直连" -> Color(0xFF9E9E9E) to Color.White
@@ -173,17 +188,30 @@ fun DashboardScreen(
                         Text("代理", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(state.proxyAddress, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                     }
-                    if (state.isConnected) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("连接", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("${state.currentServerUser}@${state.currentServerHost}", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("运行时间", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(state.connectionDuration, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                        }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("网络", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            text = state.networkDetail,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(start = 8.dp),
+                            textAlign = TextAlign.End
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("连接", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        val connectText = if (state.isConnected) "${state.currentServerUser}@${state.currentServerHost}" else "-"
+                        Text(connectText, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("时长", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        val durationText = if (state.isConnected && state.connectionDuration != "00:00:00") state.connectionDuration else "-"
+                        Text(durationText, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                     }
                 }
             }

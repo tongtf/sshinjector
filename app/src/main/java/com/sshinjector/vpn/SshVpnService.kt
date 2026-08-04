@@ -414,7 +414,6 @@ class SshVpnService : VpnService() {
             connectivityManager = getSystemService(ConnectivityManager::class.java)
             val request = NetworkRequest.Builder()
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
                 .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
                 .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
                 .build()
@@ -430,7 +429,11 @@ class SshVpnService : VpnService() {
     }
 
     private fun handleNetworkEvent(network: Network?) {
-        val id = network?.networkHandle ?: -1L
+        val id = try { network?.networkHandle ?: -1L } catch (_: Exception) { -1L }
+        // 跳过 VPN 自身的 TUN 网络
+        val caps = try { connectivityManager?.getNetworkCapabilities(network) } catch (_: Exception) { null }
+        if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
+        android.util.Log.d("SshVpnService", "Network event: id=$id, last=$lastNetworkId, running=${vpnController.isVpnRunning()}, reconnecting=$isReconnecting")
         // 同一网络的重复事件不触发 (去抖已覆盖时序)
         if (id == lastNetworkId) return
         lastNetworkId = id
@@ -440,6 +443,7 @@ class SshVpnService : VpnService() {
         reconnectJob = scope.launch {
             delay(NETWORK_RECONNECT_DEBOUNCE_MS)
             if (vpnController.isVpnRunning() && !isReconnecting && currentServer != null) {
+                android.util.Log.d("SshVpnService", "Triggering auto reconnect after debounce")
                 autoReconnect()
             }
         }

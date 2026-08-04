@@ -23,8 +23,6 @@ class SettingsViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
     val biometricUnlock: StateFlow<Boolean> = settingsDataStore.biometricUnlock
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val notificationEnabled: StateFlow<Boolean> = settingsDataStore.notificationEnabled
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
     val mtu: StateFlow<Int> = settingsDataStore.mtu
         .stateIn(viewModelScope, SharingStarted.Eagerly, 1500)
     val keepAlive: StateFlow<Int> = settingsDataStore.keepAlive
@@ -36,7 +34,6 @@ class SettingsViewModel @Inject constructor(
 
     fun setAutoConnect(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setAutoConnect(enabled) }
     fun setBiometricUnlock(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setBiometricUnlock(enabled) }
-    fun setNotificationEnabled(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setNotificationEnabled(enabled) }
     fun setMtu(value: Int) = viewModelScope.launch { settingsDataStore.setMtu(value) }
     fun setKeepAlive(value: Int) = viewModelScope.launch { settingsDataStore.setKeepAlive(value) }
     fun setEnableIPv6(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setEnableIPv6(enabled) }

@@ -2,7 +2,14 @@ package com.sshinjector.ui.viewmodel
 
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
+import android.net.wifi.WifiManager
+import android.os.Build
+import android.telephony.TelephonyManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sshinjector.data.local.preferences.SettingsDataStore
@@ -14,6 +21,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.combine
@@ -36,6 +44,42 @@ class MainViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState = _uiState.asStateFlow()
+
+    private val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    private var lastNetworkId: Long = -1
+
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            android.util.Log.d("MainViewModel", "Network available: ${network?.networkHandle}")
+            onNetworkChanged()
+        }
+        override fun onLost(network: Network) {
+            android.util.Log.d("MainViewModel", "Network lost: ${network?.networkHandle}")
+            onNetworkChanged()
+        }
+    }
+
+    private fun onNetworkChanged() {
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(500)
+            android.util.Log.d("MainViewModel", "Refreshing network info")
+            loadNetworkInfo()
+        }
+    }
+
+    private fun registerNetworkCallback() {
+        try {
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
+                .build()
+            connectivityManager.registerNetworkCallback(request, networkCallback)
+            android.util.Log.d("MainViewModel", "Network callback registered")
+        } catch (e: Exception) {
+            android.util.Log.e("MainViewModel", "Failed to register network callback: ${e.message}")
+        }
+    }
 
     data class DnsDiagnostics(
         val dnsLatencyMs: Long? = null,
@@ -63,10 +107,12 @@ class MainViewModel @Inject constructor(
         val startTime: Date? = null,
         val connectionDuration: String = "00:00:00",
         // 网络信息
-        val deviceIpv4: String = "---",
-        val deviceIpv6: String = "---",
+        val deviceIpv4: String = "-",
+        val deviceIpv6: String = "-",
         val dnsMode: String = "默认",
-        val proxyAddress: String = "---",
+        val proxyAddress: String = "-",
+        val networkType: String = "-",
+        val networkDetail: String = "-",
         // VPN 权限
         val vpnPermissionIntent: Intent? = null,
         val pendingConnectServerId: Long? = null,
@@ -81,6 +127,7 @@ class MainViewModel @Inject constructor(
         loadDefaultServer()
         loadNetworkInfo()
         observeDnsModeChanges()
+        registerNetworkCallback()
     }
 
     private fun observeDnsModeChanges() {
@@ -111,14 +158,73 @@ class MainViewModel @Inject constructor(
             val ipv6 = getDeviceIpv6()
             val dnsModeValue = settingsDataStore.dnsMode.first()
             val dnsModeText = dnsModeLabel(dnsModeValue)
+            val networkDisplay = getNetworkDisplay()
 
             _uiState.update {
                 it.copy(
                     deviceIpv4 = ipv4,
                     deviceIpv6 = ipv6,
-                    dnsMode = dnsModeText
+                    dnsMode = dnsModeText,
+                    networkType = networkDisplay.first,
+                    networkDetail = networkDisplay.second
                 )
             }
+        }
+    }
+
+    private fun getNetworkDisplay(): Pair<String, String> {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val activeNetwork = cm.activeNetwork ?: return Pair("-", "-")
+        val caps = cm.getNetworkCapabilities(activeNetwork) ?: return Pair("-", "-")
+
+        return when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> {
+                try {
+                    val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                    @Suppress("DEPRECATION")
+                    val info = wm.connectionInfo
+                    val ssid = info.ssid?.replace("\"", "") ?: "-"
+                    val speed = info.linkSpeed
+                    val freq = info.frequency
+                    val standard = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        when (info.wifiStandard) {
+                            1 -> "Wi-Fi 4"
+                            2 -> "Wi-Fi 5"
+                            3 -> "Wi-Fi 6"
+                            4 -> "Wi-Fi 7"
+                            else -> "Wi-Fi"
+                        }
+                    } else "Wi-Fi"
+                    val parts = mutableListOf(standard)
+                    if (ssid != "-" && !ssid.contains("unknown")) parts.add(0, ssid)
+                    if (speed > 0) parts.add("${speed}Mbps")
+                    parts.add("${freq}MHz")
+                    Pair("Wi-Fi", parts.joinToString(" · "))
+                } catch (_: Exception) {
+                    Pair("Wi-Fi", "Wi-Fi")
+                }
+            }
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> {
+                try {
+                    val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+                    val type = when (tm.dataNetworkType) {
+                        TelephonyManager.NETWORK_TYPE_LTE -> "4G"
+                        TelephonyManager.NETWORK_TYPE_NR -> "5G"
+                        TelephonyManager.NETWORK_TYPE_HSDPA,
+                        TelephonyManager.NETWORK_TYPE_UMTS,
+                        TelephonyManager.NETWORK_TYPE_EVDO_0,
+                        TelephonyManager.NETWORK_TYPE_EVDO_A -> "3G"
+                        TelephonyManager.NETWORK_TYPE_GPRS,
+                        TelephonyManager.NETWORK_TYPE_EDGE -> "2G"
+                        else -> "移动网络"
+                    }
+                    Pair(type, type)
+                } catch (_: Exception) {
+                    Pair("-", "-")
+                }
+            }
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> Pair("VPN", "VPN")
+            else -> Pair("-", "-")
         }
     }
 
@@ -148,13 +254,16 @@ class MainViewModel @Inject constructor(
             while (interfaces.hasMoreElements()) {
                 val networkInterface = interfaces.nextElement()
                 if (networkInterface.isLoopback || !networkInterface.isUp) continue
+                if (networkInterface.name.startsWith("tun") || networkInterface.name.startsWith("vpn")) continue
                 val addresses = networkInterface.inetAddresses
                 while (addresses.hasMoreElements()) {
                     val address = addresses.nextElement()
                     if (address is Inet6Address && !address.isLoopbackAddress) {
                         val hostAddr = address.hostAddress ?: continue
-                        if (!hostAddr.startsWith("fe80")) {
-                            return hostAddr
+                        // 取掉 scope id (如 %wlan0)
+                        val cleanAddr = hostAddr.substringBefore('%')
+                        if (!cleanAddr.startsWith("fe80") && !cleanAddr.startsWith("::")) {
+                            return cleanAddr
                         }
                     }
                 }
@@ -204,9 +313,14 @@ class MainViewModel @Inject constructor(
                             connectionStatus = status,
                             startTime = state.stats.startTime,
                             connectionDuration = duration,
-                            proxyAddress = if (isConnected) "127.0.0.1:1080" else "---",
+                            proxyAddress = if (isConnected) "127.0.0.1:1080" else "-",
                             serverConnectionStatus = newServerStatus
                         )
+                    }
+
+                    // VPN 状态变化时刷新网络信息 (重连后 IP 可能变化)
+                    if (isConnected) {
+                        loadNetworkInfo()
                     }
                 }
             }
@@ -403,7 +517,9 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    val allServers = serverRepository.allServersFlow
+    val allServers = serverRepository.allServersFlow.map { servers ->
+        servers.sortedWith(compareByDescending<com.sshinjector.domain.model.ServerConfig> { it.isActive }.thenBy { it.id })
+    }
 
     fun toggleDefaultServer(id: Long) {
         viewModelScope.launch {
