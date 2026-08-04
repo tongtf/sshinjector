@@ -65,8 +65,8 @@ class VpnController @Inject constructor(
     val vpnState = MutableStateFlow<VpnState>(VpnState())
     val connectionStats = MutableStateFlow<ConnectionStats>(ConnectionStats())
     
-    private val _logFlow = MutableSharedFlow<Pair<String, com.sshinjector.ui.viewmodel.MainViewModel.LogLevel>>(extraBufferCapacity = 10)
-    val logFlow: SharedFlow<Pair<String, com.sshinjector.ui.viewmodel.MainViewModel.LogLevel>> = _logFlow.asSharedFlow()
+    private val _logFlow = MutableSharedFlow<Pair<String, com.sshinjector.ui.viewmodel.LogLevel>>(extraBufferCapacity = 10)
+    val logFlow: SharedFlow<Pair<String, com.sshinjector.ui.viewmodel.LogLevel>> = _logFlow.asSharedFlow()
     
     private var currentServer: ServerConfig? = null
     private var isRunning = false
@@ -77,11 +77,11 @@ class VpnController @Inject constructor(
     private val executor = Executors.newCachedThreadPool()
 
     fun setProtectFunction(protectDatagramChannel: (java.net.DatagramSocket) -> Boolean) {
-        addLog(">>> [VpnController] setProtectFunction 被调用", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+        addLog(">>> [VpnController] setProtectFunction 被调用", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
         this.protectDatagramChannel = protectDatagramChannel
     }
 
-    fun addLog(message: String, level: com.sshinjector.ui.viewmodel.MainViewModel.LogLevel) {
+    fun addLog(message: String, level: com.sshinjector.ui.viewmodel.LogLevel) {
         _logFlow.tryEmit(message to level)
     }
 
@@ -135,7 +135,7 @@ class VpnController @Inject constructor(
      */
     suspend fun connect(server: ServerConfig, password: String? = null): Result<Unit> {
         if (isRunning) {
-            addLog("VPN 已在运行中", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.WARNING)
+            addLog("VPN 已在运行中", com.sshinjector.ui.viewmodel.LogLevel.WARNING)
             return Result.failure(IllegalStateException("VPN already running"))
         }
 
@@ -146,14 +146,14 @@ class VpnController @Inject constructor(
         return try {
             // 1. 启动隧道插件
             val tunnelConfig = buildTunnelConfig(server, password)
-            addLog("正在连接隧道 (socks5)...", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
+            addLog("正在连接隧道 (socks5)...", com.sshinjector.ui.viewmodel.LogLevel.INFO)
             val tunnelResult = tunnelManager.startPlugin("socks5", tunnelConfig)
             if (tunnelResult.isFailure) {
                 val errorMsg = tunnelResult.exceptionOrNull()?.message ?: "Tunnel connection failed"
-                addLog("隧道连接失败: $errorMsg", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.ERROR)
+                addLog("隧道连接失败: $errorMsg", com.sshinjector.ui.viewmodel.LogLevel.ERROR)
                 throw Exception(errorMsg)
             }
-            addLog("隧道连接成功: socks5", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.SUCCESS)
+            addLog("隧道连接成功: socks5", com.sshinjector.ui.viewmodel.LogLevel.SUCCESS)
 
             // 3. 设置 DNS 拦截器
             packetProcessor.setDnsInterceptor(dnsInterceptor)
@@ -174,11 +174,11 @@ class VpnController @Inject constructor(
             
             // SYSTEM/DOMAIN_SPLIT 模式: 设置 socket 保护函数，用于 DNS 查询绕过 VPN
             if (transportMode == DnsInterceptor.DnsTransport.SYSTEM || transportMode == DnsInterceptor.DnsTransport.DOMAIN_SPLIT) {
-                addLog(">>> [VpnController] 设置 DNS Interceptor 保护函数 ($transportMode)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                addLog(">>> [VpnController] 设置 DNS Interceptor 保护函数 ($transportMode)", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
                 dnsInterceptor.setProtectFunction { socket ->
-                    addLog(">>> [VpnController] 保护函数被调用: socket=$socket", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                    addLog(">>> [VpnController] 保护函数被调用: socket=$socket", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
                     val result = protectDatagramChannel?.invoke(socket) ?: false
-                    addLog(">>> [VpnController] 保护函数返回: $result", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                    addLog(">>> [VpnController] 保护函数返回: $result", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
                     result
                 }
             }
@@ -187,15 +187,15 @@ class VpnController @Inject constructor(
             if (transportMode == DnsInterceptor.DnsTransport.DOMAIN_SPLIT) {
                 launch {
                     val needRefresh = domainListManager.shouldRefresh()
-                    addLog("域名列表刷新检查: ${if (needRefresh) "需要" else "无需"}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                    addLog("域名列表刷新检查: ${if (needRefresh) "需要" else "无需"}", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
                     if (needRefresh) {
-                        addLog("正在更新域名列表...", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
+                        addLog("正在更新域名列表...", com.sshinjector.ui.viewmodel.LogLevel.INFO)
                         domainListManager.update()
                     }
                 }
             }
             
-            addLog("DNS 拦截器已配置 (模式: $transportMode)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+            addLog("DNS 拦截器已配置 (模式: $transportMode)", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
 
             // 4. 解析排除路由 (CIDR)
             excludedRoutes = currentServer?.excludedRoutes?.mapNotNull { parseCidr(it) } ?: emptyList()
@@ -208,13 +208,13 @@ class VpnController @Inject constructor(
                         val addr = InetAddress.getByName(dnsIp)
                         excludedRoutes += CidrRoute(addr, if (addr is java.net.Inet6Address) 128 else 32)
                     } catch (e: Exception) {
-                        addLog("解析 DNS IP 失败: $dnsIp", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.WARNING)
+                        addLog("解析 DNS IP 失败: $dnsIp", com.sshinjector.ui.viewmodel.LogLevel.WARNING)
                     }
                 }
                 if (systemDns.isNotEmpty()) {
-                    addLog("SYSTEM 模式: 绕过 VPN 的 DNS 服务器: ${systemDns.joinToString(", ")}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
+                    addLog("SYSTEM 模式: 绕过 VPN 的 DNS 服务器: ${systemDns.joinToString(", ")}", com.sshinjector.ui.viewmodel.LogLevel.INFO)
                 } else {
-                    addLog("SYSTEM 模式: 未获取到系统 DNS，使用默认 8.8.8.8", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.WARNING)
+                    addLog("SYSTEM 模式: 未获取到系统 DNS，使用默认 8.8.8.8", com.sshinjector.ui.viewmodel.LogLevel.WARNING)
                     // 兜底：添加常用公共 DNS 到排除路由
                     for (dnsIp in listOf("8.8.8.8", "1.1.1.1", "114.114.114.114")) {
                         try {
@@ -226,20 +226,20 @@ class VpnController @Inject constructor(
             }
             
             if (excludedRoutes.isNotEmpty()) {
-                addLog("排除路由: ${excludedRoutes.size} 条规则", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
+                addLog("排除路由: ${excludedRoutes.size} 条规则", com.sshinjector.ui.viewmodel.LogLevel.INFO)
             }
 
             // 5. 注册 TUN 写回回调
             packetProcessor.setTunWriter { data -> writeToTun(data) }
-            addLog("TUN 写回通道已就绪", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+            addLog("TUN 写回通道已就绪", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
 
             // 6. 启动连接清理定时任务
             launch { connectionCleanupLoop() }
-            addLog("连接清理任务已启动", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+            addLog("连接清理任务已启动", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
 
             // 6.1 启动独立 DNS 响应投递协程 (修复 DNS 死锁)
             launch { dnsResponseDeliveryLoop() }
-            addLog("DNS 响应投递协程已启动", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+            addLog("DNS 响应投递协程已启动", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
 
             updateState {
                 it.copy(
@@ -248,7 +248,7 @@ class VpnController @Inject constructor(
                 )
             }
 
-            addLog("VPN 连接已建立，开始处理数据包", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.SUCCESS)
+            addLog("VPN 连接已建立，开始处理数据包", com.sshinjector.ui.viewmodel.LogLevel.SUCCESS)
 
             // 7. 启动数据包处理循环
             packetLoopJob?.cancel()
@@ -257,7 +257,7 @@ class VpnController @Inject constructor(
             Result.success(Unit)
 
         } catch (e: Exception) {
-            addLog("连接失败: ${e.message}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.ERROR)
+            addLog("连接失败: ${e.message}", com.sshinjector.ui.viewmodel.LogLevel.ERROR)
             disconnect()
             Result.failure(e)
         }
@@ -269,7 +269,7 @@ class VpnController @Inject constructor(
     suspend fun disconnect() {
         if (!isRunning) return
 
-        addLog("正在断开 VPN 连接...", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.WARNING)
+        addLog("正在断开 VPN 连接...", com.sshinjector.ui.viewmodel.LogLevel.WARNING)
         isRunning = false
         updateState { it.copy(status = VpnState.VpnStatus.Disconnecting) }
 
@@ -277,23 +277,23 @@ class VpnController @Inject constructor(
         coroutineContext.cancelChildren()
         packetLoopJob?.cancel()
         packetLoopJob = null
-        addLog("已取消所有子任务", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+        addLog("已取消所有子任务", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
 
         // 断开 SSH 连接
         // 停止所有隧道插件
         try {
-            addLog("正在断开隧道连接...", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
+            addLog("正在断开隧道连接...", com.sshinjector.ui.viewmodel.LogLevel.INFO)
             tunnelManager.stopAll()
-            addLog("隧道连接已断开", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.SUCCESS)
+            addLog("隧道连接已断开", com.sshinjector.ui.viewmodel.LogLevel.SUCCESS)
         } catch (e: Exception) {
-            addLog("隧道断开错误: ${e.message}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.ERROR)
+            addLog("隧道断开错误: ${e.message}", com.sshinjector.ui.viewmodel.LogLevel.ERROR)
         }
 
         // 关闭输入输出流
         try {
             inputStream?.close()
             outputStream?.close()
-            addLog("TUN 数据流已关闭", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+            addLog("TUN 数据流已关闭", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
         } catch (_: Exception) {}
 
         // 清理状态
@@ -311,7 +311,7 @@ class VpnController @Inject constructor(
                 )
             )
         }
-        addLog("VPN 连接已完全断开", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.WARNING)
+        addLog("VPN 连接已完全断开", com.sshinjector.ui.viewmodel.LogLevel.WARNING)
     }
 
     /**
@@ -332,11 +332,11 @@ class VpnController @Inject constructor(
         
         // SYSTEM/DOMAIN_SPLIT 模式: 设置/更新 socket 保护函数，用于 DNS 查询绕过 VPN
         if (this.transportMode == DnsInterceptor.DnsTransport.SYSTEM || this.transportMode == DnsInterceptor.DnsTransport.DOMAIN_SPLIT) {
-            addLog(">>> [VpnController] updateDnsMode: 设置 DNS Interceptor 保护函数 ($transportMode)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+            addLog(">>> [VpnController] updateDnsMode: 设置 DNS Interceptor 保护函数 ($transportMode)", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
             dnsInterceptor.setProtectFunction { socket ->
-                addLog(">>> [VpnController] 保护函数被调用: socket=$socket", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                addLog(">>> [VpnController] 保护函数被调用: socket=$socket", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
                 val result = protectDatagramChannel?.invoke(socket) ?: false
-                addLog(">>> [VpnController] 保护函数返回: $result", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                addLog(">>> [VpnController] 保护函数返回: $result", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
                 result
             }
         }
@@ -347,7 +347,7 @@ class VpnController @Inject constructor(
 
         val baseRoutes = currentServer?.excludedRoutes?.mapNotNull { parseCidr(it) } ?: emptyList()
         excludedRoutes = baseRoutes + commonDohEndpoints + dnsExcludes
-        addLog("DNS 模式已切换: $transportMode, 排除路由: ${excludedRoutes.size} 条", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.INFO)
+        addLog("DNS 模式已切换: $transportMode, 排除路由: ${excludedRoutes.size} 条", com.sshinjector.ui.viewmodel.LogLevel.INFO)
     }
 
     /**
@@ -394,7 +394,7 @@ class VpnController @Inject constructor(
         outputStream = FileOutputStream(fd)
         packetLoopJob?.cancel()
         packetLoopJob = launch { packetLoop(generation) }
-        addLog("TUN 接口已重建", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+        addLog("TUN 接口已重建", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
     }
 
     /**
@@ -508,7 +508,7 @@ class VpnController @Inject constructor(
                 if (direct) {
                     val data = ByteArray(workBuffer.remaining())
                     workBuffer.duplicate().get(data)
-                    addLog("域名分流直连: proto=$proto dst=${dstIp.hostAddress}:$dstPort", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                    addLog("域名分流直连: proto=$proto dst=${dstIp.hostAddress}:$dstPort", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
                     writeToTun(data)
                     return
                 }
@@ -528,7 +528,7 @@ class VpnController @Inject constructor(
                     }
                 }
                 else -> {
-                    addLog(">>> [VpnController] 未知 IP 版本: $workVersion，丢弃", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                    addLog(">>> [VpnController] 未知 IP 版本: $workVersion，丢弃", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
                     // 未知版本，丢弃
                 }
             }
@@ -665,12 +665,12 @@ class VpnController @Inject constructor(
         
         executor.submit {
             try {
-                addLog(">>> [VpnController] forwardDnsBypassPacket: dstIp=$dstIp, version=$version, packetSize=${packetData.size}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                addLog(">>> [VpnController] forwardDnsBypassPacket: dstIp=$dstIp, version=$version, packetSize=${packetData.size}", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
                 val socket = java.net.DatagramSocket()
                 val protected = protectDatagramChannel?.invoke(socket) ?: false
-                addLog(">>> [VpnController] VpnService.protect()=$protected", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                addLog(">>> [VpnController] VpnService.protect()=$protected", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
                 if (!protected) {
-                    addLog("SYSTEM DNS: VpnService.protect() 失败", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.WARNING)
+                    addLog("SYSTEM DNS: VpnService.protect() 失败", com.sshinjector.ui.viewmodel.LogLevel.WARNING)
                 }
                 socket.soTimeout = 5000
                 
@@ -684,7 +684,7 @@ class VpnController @Inject constructor(
                 val payloadStart = ipHeaderLen
                 val payloadLen = packetData.size - ipHeaderLen
                 if (payloadLen <= 0) {
-                    addLog(">>> [VpnController] payloadLen <= 0, 返回", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.WARNING)
+                    addLog(">>> [VpnController] payloadLen <= 0, 返回", com.sshinjector.ui.viewmodel.LogLevel.WARNING)
                     return@submit
                 }
                 
@@ -692,16 +692,16 @@ class VpnController @Inject constructor(
                 
                 val dnsServer = dstIp.hostAddress
                 val packet = java.net.DatagramPacket(payload, payload.size, java.net.InetAddress.getByName(dnsServer), 53)
-                addLog(">>> [VpnController] 发送 DNS 查询到 $dnsServer:53, payload=${payload.size} bytes", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                addLog(">>> [VpnController] 发送 DNS 查询到 $dnsServer:53, payload=${payload.size} bytes", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
                 socket.send(packet)
-                addLog(">>> [VpnController] 已发送，等待响应...", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                addLog(">>> [VpnController] 已发送，等待响应...", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
                 
                 // 接收响应
                 val responseBuf = ByteArray(512)
                 val responsePacket = java.net.DatagramPacket(responseBuf, responseBuf.size)
                 socket.receive(responsePacket)
                 val responseData = responseBuf.copyOfRange(0, responsePacket.length)
-                addLog("<<< [VpnController] 收到 DNS 响应来自 ${responsePacket.address}:${responsePacket.port} (${responseData.size} bytes)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                addLog("<<< [VpnController] 收到 DNS 响应来自 ${responsePacket.address}:${responsePacket.port} (${responseData.size} bytes)", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
                 
                 // 从复制的原始包提取源 IP 和源端口
                 var srcIp: InetAddress
@@ -716,9 +716,9 @@ class VpnController @Inject constructor(
                         srcIp = InetAddress.getByAddress(srcIpBytes)
                         srcPort = ((packetData[40].toInt() and 0xFF) shl 8) or (packetData[41].toInt() and 0xFF)
                     }
-                    addLog(">>> [VpnController] 解析原始包: srcIp=$srcIp, srcPort=$srcPort", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                    addLog(">>> [VpnController] 解析原始包: srcIp=$srcIp, srcPort=$srcPort", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
                 } catch (e: Exception) {
-                    addLog(">>> [VpnController] 解析源 IP/端口失败: ${e.message}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.ERROR)
+                    addLog(">>> [VpnController] 解析源 IP/端口失败: ${e.message}", com.sshinjector.ui.viewmodel.LogLevel.ERROR)
                     srcIp = InetAddress.getByName("10.0.0.1")
                     srcPort = 53
                 }
@@ -731,15 +731,15 @@ class VpnController @Inject constructor(
                     dstPort = srcPort,
                     payload = responseData
                 )
-                addLog(">>> [VpnController] 构造响应包完成: srcPort=53, dstPort=$srcPort, packetSize=${responsePkt.size}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                addLog(">>> [VpnController] 构造响应包完成: srcPort=53, dstPort=$srcPort, packetSize=${responsePkt.size}", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
                 writeToTun(responsePkt)
-                addLog(">>> [VpnController] 已写回 TUN", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.DEBUG)
+                addLog(">>> [VpnController] 已写回 TUN", com.sshinjector.ui.viewmodel.LogLevel.DEBUG)
                 socket.close()
                 
             } catch (e: java.net.SocketTimeoutException) {
-                addLog(">>> [VpnController] DNS 响应超时 (SocketTimeoutException)", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.WARNING)
+                addLog(">>> [VpnController] DNS 响应超时 (SocketTimeoutException)", com.sshinjector.ui.viewmodel.LogLevel.WARNING)
             } catch (e: Exception) {
-                addLog(">>> [VpnController] forwardDnsBypassPacket exception: ${e.message}", com.sshinjector.ui.viewmodel.MainViewModel.LogLevel.ERROR)
+                addLog(">>> [VpnController] forwardDnsBypassPacket exception: ${e.message}", com.sshinjector.ui.viewmodel.LogLevel.ERROR)
                 android.util.Log.e("VpnController", "forwardDnsBypassPacket exception", e)
             }
         }

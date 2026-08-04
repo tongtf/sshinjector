@@ -66,7 +66,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
-
+import com.sshinjector.ui.component.rememberClickGuard
 data class InstalledApp(
     val packageName: String,
     val name: String,
@@ -307,9 +307,12 @@ fun WhitelistScreen(
             title = { Text("需要权限") },
             text = { Text("白名单功能需要「所有文件访问」权限才能获取已安装应用列表。请在系统设置中为本应用开启此权限。") },
             confirmButton = {
+                val guard = rememberClickGuard()
                 Button(onClick = {
-                    showPermissionDialog = false
-                    openAppSettings()
+                    guard {
+                        showPermissionDialog = false
+                        openAppSettings()
+                    }
                 }) {
                     Text("去设置")
                 }
@@ -363,8 +366,9 @@ fun PermissionRequestScreen(
             textAlign = TextAlign.Center
         )
         Spacer(modifier = Modifier.height(32.dp))
+        val guard = rememberClickGuard()
         Button(
-            onClick = onOpenSettings,
+            onClick = { guard { onOpenSettings() } },
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("前往设置", fontSize = 16.sp)

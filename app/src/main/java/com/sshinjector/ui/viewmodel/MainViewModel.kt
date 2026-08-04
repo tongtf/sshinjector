@@ -1,17 +1,14 @@
 package com.sshinjector.ui.viewmodel
 
-import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
-import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sshinjector.data.local.preferences.SettingsDataStore
 import com.sshinjector.domain.usecase.ServerRepository
 import com.sshinjector.domain.usecase.VpnController
 import com.sshinjector.domain.vpn.tunnel.TunnelManager
-import com.sshinjector.domain.vpn.tunnel.TunnelState
 import com.sshinjector.vpn.SshVpnService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -40,15 +37,6 @@ class MainViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(UiState())
     val uiState = _uiState.asStateFlow()
 
-    data class TunnelInfo(
-        val id: String,
-        val displayName: String,
-        val status: TunnelState.Status,
-        val activeConnections: Int,
-        val bytesSent: Long,
-        val bytesReceived: Long,
-    )
-
     data class DnsDiagnostics(
         val dnsLatencyMs: Long? = null,
         val dnsSuccess: Boolean = false,
@@ -63,50 +51,30 @@ class MainViewModel @Inject constructor(
 
     data class UiState(
         val isConnected: Boolean = false,
-        val activeTunnels: List<TunnelInfo> = emptyList(),
         val hasDefaultServer: Boolean = false,
         val defaultServerId: Long = 0,
         val defaultServerName: String = "",
         val currentServer: String = "未连接",
+        val currentServerId: Long = 0,
         val currentServerHost: String = "",
         val currentServerUser: String = "",
-        val bytesSent: Long = 0,
-        val bytesReceived: Long = 0,
-        val uploadSpeed: Long = 0,
-        val downloadSpeed: Long = 0,
         val connectionStatus: String = "断开",
         val errorMessage: String? = null,
         val startTime: Date? = null,
-        val localIp: String? = null,
-        val remoteIp: String? = null,
+        val connectionDuration: String = "00:00:00",
         // 网络信息
         val deviceIpv4: String = "---",
         val deviceIpv6: String = "---",
         val dnsMode: String = "默认",
         val proxyAddress: String = "---",
-
         // VPN 权限
         val vpnPermissionIntent: Intent? = null,
-        // 连接日志
-        val connectionLogs: List<ConnectionLog> = emptyList(),
-        val logLevel: Int = 1, // 0=简洁 1=详细
+        val pendingConnectServerId: Long? = null,
         // 诊断信息
-        val diagnostics: DnsDiagnostics = DnsDiagnostics()
+        val diagnostics: DnsDiagnostics = DnsDiagnostics(),
+        // 服务器连接状态: serverId -> status
+        val serverConnectionStatus: Map<Long, String?> = emptyMap()
     )
-
-    data class ConnectionLog(
-        val timestamp: String,
-        val message: String,
-        val level: LogLevel
-    )
-
-    enum class LogLevel {
-        INFO,      // 基本信息
-        DEBUG,     // 调试信息
-        SUCCESS,   // 成功
-        ERROR,     // 错误
-        WARNING    // 警告
-    }
 
     init {
         observeVpnState()
@@ -139,11 +107,8 @@ class MainViewModel @Inject constructor(
 
     private fun loadNetworkInfo() {
         viewModelScope.launch {
-            // 获取设备 IP 地址
             val ipv4 = getDeviceIpv4()
             val ipv6 = getDeviceIpv6()
-
-            // 获取 DNS 模式
             val dnsModeValue = settingsDataStore.dnsMode.first()
             val dnsModeText = dnsModeLabel(dnsModeValue)
 
@@ -163,7 +128,6 @@ class MainViewModel @Inject constructor(
             while (interfaces.hasMoreElements()) {
                 val networkInterface = interfaces.nextElement()
                 if (networkInterface.isLoopback || !networkInterface.isUp) continue
-
                 val addresses = networkInterface.inetAddresses
                 while (addresses.hasMoreElements()) {
                     val address = addresses.nextElement()
@@ -184,13 +148,11 @@ class MainViewModel @Inject constructor(
             while (interfaces.hasMoreElements()) {
                 val networkInterface = interfaces.nextElement()
                 if (networkInterface.isLoopback || !networkInterface.isUp) continue
-
                 val addresses = networkInterface.inetAddresses
                 while (addresses.hasMoreElements()) {
                     val address = addresses.nextElement()
                     if (address is Inet6Address && !address.isLoopbackAddress) {
                         val hostAddr = address.hostAddress ?: continue
-                        // 排除链路本地地址
                         if (!hostAddr.startsWith("fe80")) {
                             return hostAddr
                         }
@@ -203,162 +165,74 @@ class MainViewModel @Inject constructor(
         return "---"
     }
 
-    private val _connectionLogs = mutableListOf<ConnectionLog>()
-
     private fun observeVpnState() {
         viewModelScope.launch {
-            // 加载日志级别
-            val logLevel = settingsDataStore.logLevel.first()
-            _uiState.update { it.copy(logLevel = logLevel) }
-
-            // 观察 VPN 控制器的日志流
+            // 观察 VPN 控制器状态
             launch {
-                vpnController.logFlow.collect { (message, level) ->
-                    addLog(message, level)
+                vpnController.vpnState.collect { state ->
+                    val isConnected = state.status == com.sshinjector.domain.model.VpnState.VpnStatus.Connected
+                    val serverId = state.server?.id ?: 0
+                    val status = state.status.name
+
+                    // 更新当前连接的服务器状态
+                    val newServerStatus = if (serverId > 0) {
+                        _uiState.value.serverConnectionStatus.toMutableMap().apply {
+                            // 清除其他服务器的状态
+                            keys.filter { it != serverId }.forEach { remove(it) }
+                            // 设置当前服务器状态
+                            put(serverId, if (isConnected) "Connected" else status)
+                        }
+                    } else {
+                        emptyMap()
+                    }
+
+                    // 计算连接时长
+                    val duration = if (state.stats.startTime != null) {
+                        val elapsed = (java.util.Date().time - state.stats.startTime.time) / 1000
+                        String.format(java.util.Locale.ROOT, "%02d:%02d:%02d", elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60)
+                    } else {
+                        "00:00:00"
+                    }
+
+                    _uiState.update {
+                        it.copy(
+                            isConnected = isConnected,
+                            currentServer = state.server?.name ?: "未连接",
+                            currentServerId = serverId,
+                            currentServerHost = state.server?.host ?: "",
+                            currentServerUser = state.server?.username ?: "",
+                            connectionStatus = status,
+                            startTime = state.stats.startTime,
+                            connectionDuration = duration,
+                            proxyAddress = if (isConnected) "127.0.0.1:1080" else "---",
+                            serverConnectionStatus = newServerStatus
+                        )
+                    }
                 }
             }
 
-            // 观察活跃隧道状态
+            // 定时更新连接时长
             launch {
                 while (true) {
-                    try {
-                        val tunnels = tunnelManager.getAllActivePlugins().map { plugin ->
-                            val s = plugin.state.value
-                            val st = plugin.stats.value
-                            TunnelInfo(
-                                id = plugin.id,
-                                displayName = plugin.displayName,
-                                status = s.status,
-                                activeConnections = st.activeTcpConnections,
-                                bytesSent = st.bytesUp,
-                                bytesReceived = st.bytesDown,
-                            )
-                        }
-                        _uiState.update { it.copy(activeTunnels = tunnels) }
-                    } catch (_: Exception) {}
-                    kotlinx.coroutines.delay(2000)
+                    kotlinx.coroutines.delay(1000)
+                    val startTime = _uiState.value.startTime
+                    if (startTime != null && _uiState.value.isConnected) {
+                        val elapsed = (java.util.Date().time - startTime.time) / 1000
+                        val duration = String.format(java.util.Locale.ROOT, "%02d:%02d:%02d", elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60)
+                        _uiState.update { it.copy(connectionDuration = duration) }
+                    }
                 }
             }
-
-            combine(
-                vpnController.vpnState,
-                vpnController.connectionStats
-            ) { state, stats ->
-                val isConnected = state.status == com.sshinjector.domain.model.VpnState.VpnStatus.Connected
-                val proxyAddr = if (isConnected) "127.0.0.1:1080" else "---"
-
-                // 根据状态变化添加日志
-                addLogForState(state.status.name, state.error)
-
-                UiState(
-                    isConnected = isConnected,
-                    hasDefaultServer = _uiState.value.hasDefaultServer,
-                    defaultServerId = _uiState.value.defaultServerId,
-                    defaultServerName = _uiState.value.defaultServerName,
-                    currentServer = state.server?.name ?: "未连接",
-                    currentServerHost = state.server?.host ?: "",
-                    currentServerUser = state.server?.username ?: "",
-                    connectionStatus = state.status.name,
-                    startTime = state.stats.startTime,
-                    errorMessage = state.error,
-                    bytesSent = stats.bytesSent,
-                    bytesReceived = stats.bytesReceived,
-                    localIp = if (isConnected) "10.0.0.1" else null,
-                    remoteIp = if (isConnected) state.server?.host else null,
-                    proxyAddress = proxyAddr,
-                    deviceIpv4 = _uiState.value.deviceIpv4,
-                    deviceIpv6 = _uiState.value.deviceIpv6,
-                    activeTunnels = _uiState.value.activeTunnels,
-                    dnsMode = _uiState.value.dnsMode,
-                    connectionLogs = _connectionLogs.toList(),
-                    logLevel = _uiState.value.logLevel,
-                    diagnostics = _uiState.value.diagnostics
-                )
-            }.collect { newState ->
-                _uiState.value = newState
-            }
-        }
-    }
-
-    private fun addLogForState(status: String, error: String?) {
-        val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
-
-        when (status) {
-            "Connecting" -> {
-                addLogInternal(time, "正在连接 SSH 服务器...", LogLevel.INFO)
-                addLogInternal(time, "解析服务器地址...", LogLevel.DEBUG)
-            }
-            "Authenticating" -> {
-                addLogInternal(time, "SSH 连接已建立", LogLevel.SUCCESS)
-                addLogInternal(time, "正在使用密钥进行认证...", LogLevel.INFO)
-                addLogInternal(time, "发送公钥到服务器...", LogLevel.DEBUG)
-            }
-            "EstablishingTunnel" -> {
-                addLogInternal(time, "SSH 认证成功", LogLevel.SUCCESS)
-                addLogInternal(time, "正在建立端口转发隧道...", LogLevel.INFO)
-                addLogInternal(time, "设置本地 SOCKS5 代理端口...", LogLevel.DEBUG)
-            }
-            "Connected" -> {
-                addLogInternal(time, "SSH 隧道已建立", LogLevel.SUCCESS)
-                addLogInternal(time, "SOCKS5 代理服务启动", LogLevel.SUCCESS)
-                addLogInternal(time, "VPN 接口已创建", LogLevel.SUCCESS)
-                addLogInternal(time, "代理服务运行中", LogLevel.INFO)
-            }
-            "Disconnecting" -> {
-                addLogInternal(time, "正在断开 SSH 连接...", LogLevel.WARNING)
-                addLogInternal(time, "正在清理 VPN 资源...", LogLevel.WARNING)
-            }
-            "Reconnecting" -> {
-                addLogInternal(time, "检测到网络变化，正在重连...", LogLevel.WARNING)
-                addLogInternal(time, "正在重新建立 SSH 连接...", LogLevel.INFO)
-            }
-            "Failed" -> {
-                addLogInternal(time, "连接失败: ${error ?: "未知错误"}", LogLevel.ERROR)
-                addLogInternal(time, "请检查服务器配置和网络连接", LogLevel.INFO)
-            }
-        }
-        _uiState.update { it.copy(connectionLogs = _connectionLogs.toList()) }
-    }
-
-    fun addLog(message: String, level: LogLevel) {
-        val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
-        // 新日志插入到列表头部（逆序存储，避免每次显示时排序）
-        _connectionLogs.add(0, ConnectionLog(time, message, level))
-        // 保持最近 50 条日志
-        if (_connectionLogs.size > 50) {
-            _connectionLogs.removeAt(_connectionLogs.lastIndex)
-        }
-        _uiState.update { it.copy(connectionLogs = _connectionLogs.toList()) }
-    }
-
-    private fun addLogInternal(time: String, message: String, level: LogLevel) {
-        // 新日志插入到列表头部
-        _connectionLogs.add(0, ConnectionLog(time, message, level))
-        if (_connectionLogs.size > 50) {
-            _connectionLogs.removeAt(_connectionLogs.lastIndex)
-        }
-    }
-
-    fun clearLogs() {
-        _connectionLogs.clear()
-        _uiState.update { it.copy(connectionLogs = emptyList()) }
-    }
-
-    fun setLogLevel(level: Int) {
-        viewModelScope.launch {
-            settingsDataStore.setLogLevel(level)
-            _uiState.update { it.copy(logLevel = level) }
         }
     }
 
     fun switchDnsMode() {
         viewModelScope.launch {
             val current = settingsDataStore.dnsMode.first()
-            val next = nextDnsMode(current)  // 4 modes: 0=REMOTE, 1=SYSTEM, 2=WHITELIST, 3=DOMAIN_SPLIT
+            val next = nextDnsMode(current)
             settingsDataStore.setDnsMode(next)
             if (_uiState.value.isConnected) {
                 vpnController.updateDnsMode()
-                // 内核路由/白名单需重建 VPN 接口才生效
                 try {
                     val intent = Intent(context, SshVpnService::class.java).apply {
                         action = SshVpnService.ACTION_REBUILD
@@ -370,14 +244,6 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    fun connectDefaultServerWithDiag() {
-        viewModelScope.launch {
-            runDiagnostics()
-            kotlinx.coroutines.delay(50)
-            connectDefaultServer()
-        }
-    }
-
     fun runDiagnostics() {
         viewModelScope.launch {
             _uiState.update { it.copy(diagnostics = DnsDiagnostics(isRunning = true)) }
@@ -385,7 +251,6 @@ class MainViewModel @Inject constructor(
             val dnsMode = settingsDataStore.dnsMode.first()
             val testCount = 5
 
-            // DNS: 异步并行 5 次取平均
             val dnsResults = withContext(kotlinx.coroutines.Dispatchers.IO) {
                 (1..testCount).map { testDnsResolution(dnsMode) }
             }
@@ -395,7 +260,6 @@ class MainViewModel @Inject constructor(
                 .takeIf { it.isNotEmpty() }
                 ?.let { list -> list.sum() / list.size }
 
-            // HTTP: 异步并行 5 次取平均
             val httpResults = withContext(kotlinx.coroutines.Dispatchers.IO) {
                 (1..testCount).map { testHttpConnectivity() }
             }
@@ -425,12 +289,8 @@ class MainViewModel @Inject constructor(
     private fun testDnsResolution(dnsMode: Int): Pair<Long?, Boolean> {
         return try {
             val start = System.currentTimeMillis()
-            android.util.Log.d("MainViewModel", "testDnsResolution: dnsMode=$dnsMode")
-
             when (dnsMode) {
                 0, 2 -> {
-                    // REMOTE / WHITELIST 模式: 测试 DoH (dns.alidns.com)
-                    android.util.Log.d("MainViewModel", "testDnsResolution: testing DoH dns.alidns.com")
                     val url = java.net.URL("https://dns.alidns.com/dns-query")
                     val connection = url.openConnection() as javax.net.ssl.HttpsURLConnection
                     connection.requestMethod = "POST"
@@ -439,7 +299,6 @@ class MainViewModel @Inject constructor(
                     connection.readTimeout = 5000
                     connection.setRequestProperty("Content-Type", "application/dns-message")
                     connection.setRequestProperty("Accept", "application/dns-message")
-
                     val query = byteArrayOf(
                         0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
                         0x00, 0x00, 0x00, 0x00,
@@ -449,15 +308,12 @@ class MainViewModel @Inject constructor(
                     )
                     connection.outputStream.write(query)
                     connection.outputStream.flush()
-
                     val responseCode = connection.responseCode
                     val elapsed = System.currentTimeMillis() - start
                     connection.disconnect()
                     Pair(elapsed, responseCode == 200)
                 }
                 1 -> {
-                    // SYSTEM 模式: 测试系统 DNS 服务器 (UDP)
-                    android.util.Log.d("MainViewModel", "testDnsResolution: testing UDP DNS 8.8.8.8:53")
                     val socket = java.net.DatagramSocket()
                     socket.soTimeout = 5000
                     val query = byteArrayOf(
@@ -481,7 +337,6 @@ class MainViewModel @Inject constructor(
                 else -> Pair(null, false)
             }
         } catch (e: Exception) {
-            android.util.Log.w("MainViewModel", "DNS test failed: ${e.message}")
             Pair(null, false)
         }
     }
@@ -489,40 +344,39 @@ class MainViewModel @Inject constructor(
     private fun testHttpConnectivity(): Triple<Long?, Boolean, Int> {
         return try {
             val start = System.currentTimeMillis()
-            android.util.Log.d("MainViewModel", "testHttpConnectivity: testing https://www.baidu.com")
-            // 使用 HTTPS 测试 HTTP 连通性
             val url = java.net.URL("https://www.baidu.com")
             val connection = url.openConnection() as javax.net.ssl.HttpsURLConnection
             connection.requestMethod = "GET"
             connection.connectTimeout = 5000
             connection.readTimeout = 5000
             connection.instanceFollowRedirects = true
-
             val responseCode = connection.responseCode
             val elapsed = System.currentTimeMillis() - start
             connection.disconnect()
-
-            // 200 或 301/302 都算成功
             Triple(elapsed, responseCode in listOf(200, 301, 302), responseCode)
         } catch (e: Exception) {
-            android.util.Log.w("MainViewModel", "HTTP test failed: ${e.message}")
             Triple(null, false, 0)
         }
     }
 
     fun connect(serverId: Long) {
+        // 更新服务器连接状态为 Connecting
+        val newServerStatus = _uiState.value.serverConnectionStatus.toMutableMap().apply {
+            put(serverId, "Connecting")
+        }
+        _uiState.update { it.copy(serverConnectionStatus = newServerStatus) }
+
         // 检查 VPN 权限
         val prepareIntent = VpnService.prepare(context)
         if (prepareIntent != null) {
-            // 需要请求 VPN 权限，返回 intent 让 Activity 处理
-            _uiState.update { it.copy(vpnPermissionIntent = prepareIntent) }
+            _uiState.update { it.copy(vpnPermissionIntent = prepareIntent, pendingConnectServerId = serverId) }
             return
         }
         startVpnService(serverId)
     }
 
     fun onVpnPermissionGranted(serverId: Long) {
-        _uiState.update { it.copy(vpnPermissionIntent = null) }
+        _uiState.update { it.copy(vpnPermissionIntent = null, pendingConnectServerId = null) }
         startVpnService(serverId)
     }
 
@@ -534,20 +388,12 @@ class MainViewModel @Inject constructor(
         context.startForegroundService(intent)
     }
 
-    fun connectDefaultServer() {
-        val serverId = _uiState.value.defaultServerId
-        if (serverId > 0) {
-            connect(serverId)
-        }
-    }
-
     fun disconnect() {
         _uiState.update { it.copy(connectionStatus = "Disconnecting") }
         val intent = Intent(context, SshVpnService::class.java).apply {
             action = SshVpnService.ACTION_DISCONNECT
         }
         context.startService(intent)
-        // 3s 超时强制停止
         viewModelScope.launch {
             kotlinx.coroutines.delay(3000)
             if (_uiState.value.connectionStatus == "Disconnecting") {
@@ -557,22 +403,30 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    fun formatBytes(bytes: Long): String = when {
-        bytes < 1024 -> "$bytes B"
-        bytes < 1024 * 1024 -> String.format(java.util.Locale.ROOT, "%.1f KB", bytes / 1024.0)
-        bytes < 1024 * 1024 * 1024 -> String.format(java.util.Locale.ROOT, "%.1f MB", bytes / 1024.0 / 1024.0)
-        else -> String.format(java.util.Locale.ROOT, "%.1f GB", bytes / 1024.0 / 1024.0 / 1024.0)
+    val allServers = serverRepository.allServersFlow
+
+    fun toggleDefaultServer(id: Long) {
+        viewModelScope.launch {
+            val server = serverRepository.getServerById(id)
+            if (server?.isActive == true) {
+                serverRepository.deactivateAllServers()
+            } else {
+                serverRepository.setActiveServer(id)
+            }
+        }
     }
 }
 
-/**
- * 计算下一个连接模式 (0=REMOTE, 1=SYSTEM, 2=WHITELIST, 3=DOMAIN_SPLIT, 循环)
- */
+enum class LogLevel {
+    INFO,
+    DEBUG,
+    SUCCESS,
+    ERROR,
+    WARNING
+}
+
 internal fun nextDnsMode(current: Int): Int = (current + 1) % 4
 
-/**
- * 连接模式文案 (0=远程代理, 1=本地直连, 2=白名单模式, 3=域名分流)
- */
 internal fun dnsModeLabel(mode: Int): String = when (mode) {
     0 -> "远程代理"
     1 -> "本地直连"

@@ -4,12 +4,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sshinjector.data.local.dao.ServerDao
 import com.sshinjector.data.local.entity.ServerEntity
+import com.sshinjector.data.local.preferences.SettingsDataStore
 import com.sshinjector.data.remote.ssh.SshKeyManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -17,6 +19,7 @@ import javax.inject.Inject
 class ServerEditViewModel @Inject constructor(
     private val serverDao: ServerDao,
     private val keyManager: SshKeyManager,
+    private val settingsDataStore: SettingsDataStore,
 ) : ViewModel() {
     private val _saved = MutableStateFlow(false)
     val saved = _saved.asStateFlow()
@@ -39,7 +42,8 @@ class ServerEditViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val newAlias = "server_key_${System.currentTimeMillis()}"
-                keyManager.generateKeyPair(newAlias, 0, false)
+                val useBiometric = settingsDataStore.biometricUnlock.first()
+                keyManager.generateKeyPair(newAlias, 0, useBiometric)
                 refreshKeys()
                 onGenerated(newAlias)
             } catch (e: Exception) {

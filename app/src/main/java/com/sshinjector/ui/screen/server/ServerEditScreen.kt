@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.sshinjector.data.local.entity.ServerEntity
+import com.sshinjector.ui.component.rememberClickGuard
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -84,6 +85,7 @@ fun ServerEditScreen(
     var socksPort by remember { mutableStateOf("1080") }
 
     val availableKeys by viewModel.keyAliases.collectAsState()
+    val guard = rememberClickGuard()
 
     LaunchedEffect(serverId) {
         viewModel.load(serverId) { entity ->
@@ -119,20 +121,22 @@ fun ServerEditScreen(
                 actions = {
                     androidx.compose.material3.TextButton(
                         onClick = {
-                            val entity = ServerEntity(
-                                id = if (isNew) 0 else serverId,
-                                name = name,
-                                host = host,
-                                port = port.toIntOrNull() ?: 22,
-                                username = username,
-                                keyAlias = keyAlias,
-                                isActive = setAsDefault,
-                                enableIPv6 = enableIPv6,
-                                mtu = mtu.toIntOrNull() ?: 1500,
-                                keepAliveInterval = keepAlive.toIntOrNull() ?: 30,
-                                socksPort = socksPort.toIntOrNull() ?: 1080,
-                            )
-                            viewModel.save(serverId, entity, onSave, setAsDefault)
+                            guard {
+                                val entity = ServerEntity(
+                                    id = if (isNew) 0 else serverId,
+                                    name = name,
+                                    host = host,
+                                    port = port.toIntOrNull() ?: 22,
+                                    username = username,
+                                    keyAlias = keyAlias,
+                                    isActive = setAsDefault,
+                                    enableIPv6 = enableIPv6,
+                                    mtu = mtu.toIntOrNull() ?: 1500,
+                                    keepAliveInterval = keepAlive.toIntOrNull() ?: 30,
+                                    socksPort = socksPort.toIntOrNull() ?: 1080,
+                                )
+                                viewModel.save(serverId, entity, onSave, setAsDefault)
+                            }
                         }
                     ) {
                         Icon(imageVector = Icons.Default.Check, contentDescription = "保存", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
@@ -224,7 +228,7 @@ fun ServerEditScreen(
                     ) {
                         Button(
                             modifier = Modifier.fillMaxWidth(),
-                            onClick = { viewModel.delete(serverId, onSave) },
+                            onClick = { guard { viewModel.delete(serverId, onSave) } },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.error,
                                 contentColor = MaterialTheme.colorScheme.onError

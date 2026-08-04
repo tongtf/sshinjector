@@ -19,7 +19,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
@@ -49,6 +48,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.sshinjector.data.local.entity.ServerEntity
 
@@ -64,6 +64,9 @@ fun ServerListScreen(
     val servers by viewModel.servers.collectAsState()
     val connectingServerId by viewModel.connectingServerId.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    val fragmentActivity = context as? androidx.fragment.app.FragmentActivity
+    val biometricAuth = fragmentActivity?.let { com.sshinjector.ui.biometric.BiometricAuth.from(it) }
 
     LaunchedEffect(servers, connectingServerId) {
         if (connectingServerId != null) {
@@ -130,9 +133,26 @@ fun ServerListScreen(
                         onConnect = { 
                             if (server.isActive || connectingServerId == server.id) {
                                 viewModel.disconnect()
+                                android.widget.Toast.makeText(context, "正在断开连接", android.widget.Toast.LENGTH_SHORT).show()
                             } else {
-                                viewModel.connect(server.id)
+                                val onGranted = {
+                                    viewModel.connect(server.id)
+                                    android.widget.Toast.makeText(context, "正在连接 ${server.name}", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                                if (fragmentActivity != null && biometricAuth != null) {
+                                    biometricAuth.connectIfAllowed(fragmentActivity, server.keyAlias, onGranted)
+                                } else {
+                                    onGranted()
+                                }
                             }
+                        },
+                        onToggleDefault = {
+                            viewModel.toggleDefault(server.id)
+                            android.widget.Toast.makeText(
+                                context,
+                                if (server.isActive) "已取消默认" else "已设为默认",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
                         }
                     )
                 }
@@ -146,7 +166,8 @@ fun ServerCard(
     server: ServerEntity,
     isConnecting: Boolean = false,
     onEdit: () -> Unit,
-    onConnect: () -> Unit
+    onConnect: () -> Unit,
+    onToggleDefault: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -169,12 +190,17 @@ fun ServerCard(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
                 ) {
-                    Icon(
-                        imageVector = if (server.isActive) Icons.Default.CheckCircle else Icons.Default.Star,
-                        contentDescription = null,
-                        modifier = Modifier.size(24.dp),
-                        tint = if (server.isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    IconButton(onClick = onToggleDefault) {
+                        Icon(
+                            imageVector = Icons.Default.Star,
+                            contentDescription = if (server.isActive) "取消默认" else "设为默认",
+                            modifier = Modifier.size(24.dp),
+                            tint = if (server.isActive)
+                                MaterialTheme.colorScheme.primary
+                            else
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    }
                     Spacer(modifier = Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(

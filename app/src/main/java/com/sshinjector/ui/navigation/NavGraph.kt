@@ -6,6 +6,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.NavHostController
 import com.sshinjector.ui.screen.dashboard.DashboardScreen
+import com.sshinjector.ui.screen.keymanager.KeyAddScreen
 import com.sshinjector.ui.screen.keymanager.KeyManagerScreen
 import com.sshinjector.ui.screen.server.ServerEditScreen
 import com.sshinjector.ui.screen.server.ServerListScreen
@@ -23,9 +24,12 @@ fun AppNavGraph(navController: NavHostController, modifier: Modifier = Modifier)
         composable("dashboard") {
             DashboardScreen(
                 onNavigateToServers = { navController.navigate("servers") },
+                onNavigateToServerAdd = { navController.navigate("server/edit/-1") },
+                onNavigateToServerEdit = { id -> navController.navigate("server/edit/$id") },
                 onNavigateToWhitelist = { navController.navigate("whitelist") },
                 onNavigateToSettings = { navController.navigate("settings") },
-                onNavigateToKeys = { navController.navigate("keys") }
+                onNavigateToKeys = { navController.navigate("keys") },
+                onNavigateToKeyAdd = { navController.navigate("key/add") }
             )
         }
         composable("servers") {
@@ -48,8 +52,10 @@ fun AppNavGraph(navController: NavHostController, modifier: Modifier = Modifier)
         }
         composable("settings") {
             SettingsScreen(
-                onNavigateBack = { navController.popBackStack() },
-                onNavigateToDomainListSettings = { navController.navigate("domain_list_settings") }
+                onNavigateToDomainListSettings = { navController.navigate("domain_list_settings") },
+                onNavigateToWhitelist = { navController.navigate("whitelist") },
+                onNavigateToServerManagement = { navController.navigate("servers") },
+                onNavigateToKeyManagement = { navController.navigate("keys") }
             )
         }
         composable("domain_list_settings") {
@@ -57,6 +63,9 @@ fun AppNavGraph(navController: NavHostController, modifier: Modifier = Modifier)
         }
         composable("keys") {
             KeyManagerScreen(onNavigateBack = { navController.popBackStack() })
+        }
+        composable("key/add") {
+            KeyAddScreen(onNavigateBack = { navController.popBackStack() })
         }
     }
 }

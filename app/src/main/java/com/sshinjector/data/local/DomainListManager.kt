@@ -18,6 +18,7 @@ import java.util.Base64
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 
 sealed interface DomainListState {
     data object Idle : DomainListState
@@ -76,14 +77,16 @@ class DomainListManager @Inject constructor(
     suspend fun update(): DomainListState {
         _state.value = DomainListState.Loading
         return try {
-            val url = settings.domainListUrl.first()
-            val raw = fetch(url)
-            val decoded = decodeBase64OrPlain(raw)
-            val matcher = GfwListMatcher.parse(decoded)
-            listFile().writeText(decoded)
-            settings.setDomainListLastUpdate(System.currentTimeMillis())
-            DomainListState.Ready(matcher, DomainListSource.URL, settings.getDomainListLastUpdate()).also {
-                _state.value = it
+            withContext(Dispatchers.IO) {
+                val url = settings.domainListUrl.first()
+                val raw = fetch(url)
+                val decoded = decodeBase64OrPlain(raw)
+                val matcher = GfwListMatcher.parse(decoded)
+                listFile().writeText(decoded)
+                settings.setDomainListLastUpdate(System.currentTimeMillis())
+                DomainListState.Ready(matcher, DomainListSource.URL, settings.getDomainListLastUpdate()).also {
+                    _state.value = it
+                }
             }
         } catch (e: Exception) {
             DomainListState.Error(e.message ?: "列表更新失败").also { _state.value = it }

@@ -42,6 +42,7 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE servers DROP COLUMN tunnelType")
                 db.execSQL("ALTER TABLE servers DROP COLUMN tunnelConfigJson")
+                db.execSQL("ALTER TABLE servers ADD COLUMN socksPort INTEGER NOT NULL DEFAULT 1080")
             }
         }
 

@@ -2,7 +2,6 @@ package com.sshinjector.ui.screen.settings
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -14,22 +13,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -44,46 +38,34 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.sshinjector.domain.vpn.tunnel.TunnelState
 import com.sshinjector.ui.viewmodel.dnsModeLabel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier,
     onNavigateToDomainListSettings: () -> Unit = {},
+    onNavigateToWhitelist: () -> Unit = {},
+    onNavigateToServerManagement: () -> Unit = {},
+    onNavigateToKeyManagement: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
-    val autoConnect by viewModel.autoConnect.collectAsState()
     val biometricUnlock by viewModel.biometricUnlock.collectAsState()
-    val notificationEnabled by viewModel.notificationEnabled.collectAsState()
     val mtu by viewModel.mtu.collectAsState()
     val keepAlive by viewModel.keepAlive.collectAsState()
     val enableIPv6 by viewModel.enableIPv6.collectAsState()
     val dnsMode by viewModel.dnsMode.collectAsState()
-    val theme by viewModel.theme.collectAsState()
-    val logLevel by viewModel.logLevel.collectAsState()
-    val availablePlugins by viewModel.availablePlugins.collectAsState()
-    val activePlugin by viewModel.activePlugin.collectAsState()
-    var showThemeDialog by remember { mutableStateOf(false) }
     var showDnsDialog by remember { mutableStateOf(false) }
-    var showLogLevelDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("设置") },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surfaceContainer
                 )
             )
-        }
+        },
     ) { innerPadding ->
         Column(
             modifier = Modifier
@@ -91,21 +73,32 @@ fun SettingsScreen(
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
         ) {
-            SettingsSection("常规") {
+            SettingsSection("管理") {
                 SettingsRow(
-                    title = "自动连接",
-                    subtitle = "启动时自动连接上次服务器",
-                    trailing = { Switch(checked = autoConnect, onCheckedChange = { viewModel.setAutoConnect(it) }) }
+                    title = "服务器管理",
+                    subtitle = "添加、编辑或连接服务器",
+                    trailing = { Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                    onClick = onNavigateToServerManagement
                 )
+                SettingsRow(
+                    title = "密钥管理",
+                    subtitle = "查看、生成、导入或复制密钥",
+                    trailing = { Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                    onClick = onNavigateToKeyManagement
+                )
+                SettingsRow(
+                    title = "应用白名单",
+                    subtitle = "选择进入 VPN 隧道的应用",
+                    trailing = { Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                    onClick = onNavigateToWhitelist
+                )
+            }
+
+            SettingsSection("常规") {
                 SettingsRow(
                     title = "生物识别解锁",
                     subtitle = "使用指纹/面部识别保护密钥",
                     trailing = { Switch(checked = biometricUnlock, onCheckedChange = { viewModel.setBiometricUnlock(it) }) }
-                )
-                SettingsRow(
-                    title = "常驻通知",
-                    subtitle = "在通知栏显示连接状态",
-                    trailing = { Switch(checked = notificationEnabled, onCheckedChange = { viewModel.setNotificationEnabled(it) }) }
                 )
             }
 
@@ -159,71 +152,6 @@ fun SettingsScreen(
                 )
             }
 
-            SettingsSection("外观") {
-                SettingsRow(
-                    title = "主题",
-                    subtitle = when(theme) { "light" -> "浅色"; "dark" -> "深色"; else -> "跟随系统" },
-                    trailing = {
-                        IconButton(onClick = { showThemeDialog = true }) {
-                            Icon(
-                                imageVector = Icons.Default.Settings,
-                                contentDescription = "切换主题",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-                )
-
-                SettingsRow(
-                    title = "日志级别",
-                    subtitle = if (logLevel == 0) "简洁" else "详细",
-                    trailing = {
-                        IconButton(onClick = { showLogLevelDialog = true }) {
-                            Icon(
-                                imageVector = Icons.Default.Settings,
-                                contentDescription = "设置日志级别",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-                )
-            }
-
-            SettingsSection("隧道插件") {
-                availablePlugins.forEach { plugin ->
-                    val isActive = activePlugin?.id == plugin.id
-                    val statusText = when {
-                        isActive -> "运行中"
-                        else -> "就绪"
-                    }
-                    val statusColor = when {
-                        isActive && plugin.state.value.status == TunnelState.Status.Connected ->
-                            MaterialTheme.colorScheme.primary
-                        isActive -> MaterialTheme.colorScheme.tertiary
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-                    SettingsRow(
-                        title = plugin.displayName,
-                        subtitle = statusText,
-                        trailing = {
-                            Text(
-                                text = if (isActive) "●" else "○",
-                                fontSize = 16.sp,
-                                color = statusColor
-                            )
-                        }
-                    )
-                }
-                if (availablePlugins.isEmpty()) {
-                    Text(
-                        "无可用插件",
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 16.dp, top = 8.dp)
-                    )
-                }
-            }
-
             SettingsSection("关于") {
                 SettingsRow("版本", "1.0.0", trailing = {})
                 SettingsRow("开源协议", "MIT License", trailing = {})
@@ -236,35 +164,8 @@ fun SettingsScreen(
         }
     }
 
-    if (showThemeDialog) {
-        AlertDialog(
-            onDismissRequest = { showThemeDialog = false },
-            title = { Text("选择主题") },
-            text = {
-                Column {
-                    listOf("system" to "跟随系统", "light" to "浅色", "dark" to "深色").forEach { (value, label) ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { viewModel.setTheme(value); showThemeDialog = false }
-                                .padding(vertical = 12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(label, fontSize = 16.sp)
-                            if (theme == value) {
-                                Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { showThemeDialog = false }) { Text("取消") } }
-        )
-    }
-
     if (showDnsDialog) {
-        AlertDialog(
+        androidx.compose.material3.AlertDialog(
             onDismissRequest = { showDnsDialog = false },
             title = { Text("连接模式") },
             text = {
@@ -290,51 +191,13 @@ fun SettingsScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             if (dnsMode == value) {
-                                Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                             }
                         }
                     }
                 }
             },
             confirmButton = { TextButton(onClick = { showDnsDialog = false }) { Text("取消") } }
-        )
-    }
-
-    if (showLogLevelDialog) {
-        AlertDialog(
-            onDismissRequest = { showLogLevelDialog = false },
-            title = { Text("日志级别") },
-            text = {
-                Column {
-                    listOf(0 to "简洁", 1 to "详细").forEach { (value, label) ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { viewModel.setLogLevel(value); showLogLevelDialog = false }
-                                .padding(vertical = 12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(label, fontSize = 16.sp)
-                                if (value == 0) {
-                                    Text("仅显示关键状态信息",
-                                        fontSize = 12.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                } else {
-                                    Text("显示详细连接过程和调试信息",
-                                        fontSize = 12.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                            if (logLevel == value) {
-                                Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { showLogLevelDialog = false }) { Text("取消") } }
         )
     }
 }
@@ -391,4 +254,9 @@ fun SettingsRow(
         Spacer(Modifier.width(12.dp))
         trailing()
     }
+}
+
+@Composable
+private fun TextButton(onClick: () -> Unit, content: @Composable () -> Unit) {
+    androidx.compose.material3.TextButton(onClick = onClick) { content() }
 }

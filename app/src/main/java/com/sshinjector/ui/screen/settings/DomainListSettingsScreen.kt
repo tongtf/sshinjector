@@ -41,6 +41,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.sshinjector.data.local.DomainListSource
 import com.sshinjector.data.local.DomainListState
 import com.sshinjector.data.local.preferences.SettingsDataStore
+import com.sshinjector.ui.component.rememberClickGuard
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -54,6 +55,7 @@ fun DomainListSettingsScreen(
     val state by viewModel.state.collectAsState()
     val domainListUrl by viewModel.domainListUrl.collectAsState()
     var urlInput by remember { mutableStateOf(domainListUrl) }
+    val guard = rememberClickGuard()
 
     Scaffold(
         topBar = {
@@ -102,7 +104,7 @@ fun DomainListSettingsScreen(
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Button(
-                            onClick = { viewModel.setDomainListUrl(urlInput.trim()) },
+                            onClick = { guard { viewModel.setDomainListUrl(urlInput.trim()) } },
                             modifier = Modifier.weight(1f)
                         ) { Text("保存 URL") }
                         TextButton(onClick = {
@@ -137,7 +139,7 @@ fun DomainListSettingsScreen(
                     }
                     Spacer(Modifier.height(16.dp))
                     Button(
-                        onClick = { viewModel.updateList() },
+                        onClick = { guard { viewModel.updateList() } },
                         enabled = state !is DomainListState.Loading,
                         modifier = Modifier.fillMaxWidth()
                     ) { Text(if (state is DomainListState.Loading) "更新中..." else "立即更新") }

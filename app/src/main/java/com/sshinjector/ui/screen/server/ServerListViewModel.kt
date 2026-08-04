@@ -52,6 +52,20 @@ class ServerListViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 快速设为默认 / 取消默认。已是默认则清空, 否则设为默认(其他全部取消)。
+     */
+    fun toggleDefault(id: Long) {
+        viewModelScope.launch {
+            val server = serverDao.getByIdBlocking(id)
+            if (server?.isActive == true) {
+                serverDao.deactivateAll()
+            } else {
+                serverDao.setActive(id)
+            }
+        }
+    }
+
     fun connect(id: Long) {
         try {
             val server = _servers.value.find { it.id == id }

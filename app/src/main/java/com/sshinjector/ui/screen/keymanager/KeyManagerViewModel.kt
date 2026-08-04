@@ -5,9 +5,12 @@ import android.content.ClipboardManager
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.sshinjector.data.local.preferences.SettingsDataStore
+import com.sshinjector.data.remote.ssh.KeyKind
 import com.sshinjector.data.remote.ssh.SshKeyManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -21,13 +24,15 @@ data class KeyInfo(
     val algorithm: String,
     val createdAt: String,
     val publicKey: String,
-    val isHardwareBacked: Boolean
+    val kind: KeyKind,
+    val isBiometricProtected: Boolean
 )
 
 @HiltViewModel
 class KeyManagerViewModel @Inject constructor(
     private val keyManager: SshKeyManager,
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val settingsDataStore: SettingsDataStore
 ) : ViewModel() {
     private val keyStore: KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
@@ -47,7 +52,9 @@ class KeyManagerViewModel @Inject constructor(
                 val publicKey = keyManager.getPublicKey(alias)
                 val algo = keyManager.getKeyAlgorithm(alias)
                 val createdAt = keyManager.getKeyCreationDate(alias)
-                KeyInfo(alias, algo, createdAt, publicKey, true)
+                val kind = keyManager.getKeyKind(alias)
+                val bio = kind == KeyKind.GENERATED && keyManager.isBiometricProtected(alias)
+                KeyInfo(alias, algo, createdAt, publicKey, kind, bio)
             } catch (e: Exception) {
                 null
             }
@@ -59,7 +66,8 @@ class KeyManagerViewModel @Inject constructor(
     fun generateKeyPair(alias: String, algorithm: Int, requireBiometric: Boolean) {
         viewModelScope.launch {
             try {
-                keyManager.generateKeyPair(alias, algorithm, requireBiometric)
+                val useBiometric = requireBiometric || settingsDataStore.biometricUnlock.first()
+                keyManager.generateKeyPair(alias, algorithm, useBiometric)
                 refresh()
             } catch (e: Exception) {
                 _error.tryEmit("生成失败: ${e.message}")
@@ -71,6 +79,17 @@ class KeyManagerViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 keyManager.importPrivateKey(alias, pem, passphrase)
+                refresh()
+            } catch (e: Exception) {
+                _error.tryEmit("导入失败: ${e.message}")
+            }
+        }
+    }
+
+    fun importPublicKey(alias: String, pubKey: String) {
+        viewModelScope.launch {
+            try {
+                keyManager.importPublicKey(alias, pubKey)
                 refresh()
             } catch (e: Exception) {
                 _error.tryEmit("导入失败: ${e.message}")
