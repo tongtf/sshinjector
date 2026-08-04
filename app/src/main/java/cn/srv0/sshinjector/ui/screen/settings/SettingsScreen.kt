@@ -217,6 +217,33 @@ fun SettingsScreen(
             confirmButton = { TextButton(onClick = { showDnsDialog = false }) { Text("取消") } }
         )
     }
+
+    if (showBiometricDialog) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showBiometricDialog = false },
+            title = { Text("关闭生物识别解锁") },
+            text = { Text("关闭后将不再使用指纹/面部识别保护密钥，请验证身份以确认。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showBiometricDialog = false
+                        val activity = fragmentActivity
+                        if (activity != null && biometricAuth != null) {
+                            biometricAuth.authenticate(
+                                activity = activity,
+                                title = "验证身份",
+                                onSuccess = { viewModel.setBiometricUnlock(false) },
+                                onCancelled = {}
+                            )
+                        }
+                    }
+                ) { Text("验证并关闭") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBiometricDialog = false }) { Text("取消") }
+            }
+        )
+    }
 }
 
 @Composable

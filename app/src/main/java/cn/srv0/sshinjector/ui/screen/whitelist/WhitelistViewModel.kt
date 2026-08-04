@@ -73,8 +73,7 @@ class WhitelistViewModel @Inject constructor(
                     InstalledApp(
                         packageName = info.packageName,
                         name = pm.getApplicationLabel(info).toString(),
-                        isSystem = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0,
-                        icon = pm.getApplicationIcon(info.packageName)
+                        isSystem = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0
                     )
                 }.sortedBy { it.name.lowercase() }
             }

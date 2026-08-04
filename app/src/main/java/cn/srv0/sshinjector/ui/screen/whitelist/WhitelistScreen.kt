@@ -2,7 +2,6 @@ package cn.srv0.sshinjector.ui.screen.whitelist
 
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.provider.Settings
 import androidx.compose.foundation.background
@@ -53,6 +52,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -67,11 +67,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.srv0.sshinjector.ui.component.rememberClickGuard
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 data class InstalledApp(
     val packageName: String,
     val name: String,
-    val isSystem: Boolean,
-    val icon: Drawable?
+    val isSystem: Boolean
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -395,15 +396,20 @@ fun AppListItem(
     isEnabled: Boolean,
     onToggle: (String, Boolean) -> Unit
 ) {
-    val iconBitmap = remember(app.packageName) {
-        val d = app.icon ?: return@remember null
-        val w = d.intrinsicWidth.coerceAtLeast(1)
-        val h = d.intrinsicHeight.coerceAtLeast(1)
-        val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
-        val canvas = android.graphics.Canvas(bmp)
-        d.setBounds(0, 0, w, h)
-        d.draw(canvas)
-        bmp.asImageBitmap()
+    val context = LocalContext.current
+    val iconBitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, app.packageName) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val d = context.packageManager.getApplicationIcon(app.packageName)
+                val w = d.intrinsicWidth.coerceAtLeast(1)
+                val h = d.intrinsicHeight.coerceAtLeast(1)
+                val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+                val canvas = android.graphics.Canvas(bmp)
+                d.setBounds(0, 0, w, h)
+                d.draw(canvas)
+                bmp.asImageBitmap()
+            }.getOrNull()
+        }
     }
 
     Card(
@@ -429,9 +435,10 @@ fun AppListItem(
                     .clip(RoundedCornerShape(12.dp)),
                 contentAlignment = Alignment.Center
             ) {
-                if (iconBitmap != null) {
+                val bitmap = iconBitmap
+                if (bitmap != null) {
                     androidx.compose.foundation.Image(
-                        bitmap = iconBitmap,
+                        bitmap = bitmap,
                         contentDescription = app.name,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Fit
