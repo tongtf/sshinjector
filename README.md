@@ -112,8 +112,8 @@ grep -E '^(AllowTcpForwarding|GatewayPorts|PermitTunnel)' /etc/ssh/sshd_config
 
 ```bash
 # 克隆项目
-git clone https://github.com/yourusername/SSHInjector.git
-cd SSHInjector
+git clone https://github.com/tongtf/ssh-injector.git
+cd ssh-injector
 
 # 配置签名 (本地 properties 或环境变量)
 echo "KEYSTORE_PATH=keystore.jks
@@ -306,5 +306,5 @@ SOFTWARE.
 ---
 
 <div align="center">
-  <sub>Built with ❤️ for Android 14+ | <a href="https://github.com/yourusername/SSHInjector">GitHub</a> | <a href="https://github.com/yourusername/SSHInjector/issues">Issues</a></sub>
+  <sub>Built with ❤️ for Android 14+ | <a href="https://github.com/tongtf/ssh-injector">GitHub</a> | <a href="https://github.com/tongtf/ssh-injector/issues">Issues</a></sub>
 </div>

@@ -18,9 +18,9 @@
 -keep class org.xbill.DNS.** { *; }
 
 # VPN Service + domain models
--keep class com.sshinjector.vpn.** { *; }
--keep class com.sshinjector.domain.model.** { *; }
--keep class com.sshinjector.data.local.entity.** { *; }
+-keep class cn.srv0.sshinjector.vpn.** { *; }
+-keep class cn.srv0.sshinjector.domain.model.** { *; }
+-keep class cn.srv0.sshinjector.data.local.entity.** { *; }
 
 # 忽略桌面/Windows 平台引用（Android 不存在）
 -dontwarn com.sun.jna.**
