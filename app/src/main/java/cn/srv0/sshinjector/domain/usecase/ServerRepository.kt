@@ -5,6 +5,7 @@ import cn.srv0.sshinjector.data.local.dao.WhitelistDao
 import cn.srv0.sshinjector.data.local.entity.ServerEntity
 import cn.srv0.sshinjector.data.local.entity.WhitelistAppEntity
 import cn.srv0.sshinjector.data.local.entity.DnsMode as EntityDnsMode
+import cn.srv0.sshinjector.data.remote.ssh.CredentialCrypto
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.model.WhitelistApp
 import kotlinx.coroutines.Dispatchers
@@ -18,31 +19,32 @@ import javax.inject.Inject
 
 class ServerRepository @Inject constructor(
     private val serverDao: ServerDao,
-    private val whitelistDao: WhitelistDao
+    private val whitelistDao: WhitelistDao,
+    private val credentialCrypto: CredentialCrypto
 ) {
     
     suspend fun getAllServers(): List<ServerConfig> = withContext(Dispatchers.IO) {
-        serverDao.getAllBlocking().map { it.toDomain() }
+        serverDao.getAllBlocking().map { it.toDomain(credentialCrypto) }
     }
 
     val allServersFlow: Flow<List<ServerConfig>> = serverDao.getAll().map { 
-        it.map { it.toDomain() } 
+        it.map { it.toDomain(credentialCrypto) } 
     }
 
     val activeServerFlow: Flow<ServerConfig?> = serverDao.getActive().map { 
-        it?.toDomain() 
+        it?.toDomain(credentialCrypto) 
     }
 
     suspend fun getServerById(id: Long): ServerConfig? = withContext(Dispatchers.IO) {
-        serverDao.getByIdBlocking(id)?.toDomain()
+        serverDao.getByIdBlocking(id)?.toDomain(credentialCrypto)
     }
 
     suspend fun getActiveServer(): ServerConfig? = withContext(Dispatchers.IO) {
-        serverDao.getActiveSync()?.toDomain()
+        serverDao.getActiveSync()?.toDomain(credentialCrypto)
     }
 
     suspend fun saveServer(config: ServerConfig): Long = withContext(Dispatchers.IO) {
-        val entity = config.toEntity()
+        val entity = config.toEntity(credentialCrypto)
         if (entity.id == 0L) {
             serverDao.insert(entity)
         } else {
@@ -52,7 +54,7 @@ class ServerRepository @Inject constructor(
     }
 
     suspend fun updateServer(config: ServerConfig) = withContext(Dispatchers.IO) {
-        serverDao.update(config.toEntity())
+        serverDao.update(config.toEntity(credentialCrypto))
     }
 
     suspend fun deleteServer(id: Long) = withContext(Dispatchers.IO) {
@@ -98,7 +100,7 @@ class ServerRepository @Inject constructor(
     }
 }
 
-private fun ServerEntity.toDomain(): ServerConfig {
+private fun ServerEntity.toDomain(credentialCrypto: CredentialCrypto): ServerConfig {
     return ServerConfig(
         id = id,
         name = name,
@@ -107,7 +109,7 @@ private fun ServerEntity.toDomain(): ServerConfig {
         username = username,
         keyAlias = keyAlias,
         keyAlgorithm = try { ServerConfig.KeyAlgorithm.valueOf(keyAlgorithm) } catch (_: Exception) { ServerConfig.KeyAlgorithm.Ed25519 },
-        password = password,
+        password = credentialCrypto.decrypt(password),
         isActive = isActive,
         createdAt = createdAt,
         updatedAt = updatedAt,
@@ -125,10 +127,11 @@ private fun ServerEntity.toDomain(): ServerConfig {
         allowedPackages = parseJsonStringList(allowedPackages),
         excludedRoutes = parseJsonStringList(excludedRoutes),
         socksPort = socksPort,
+        hostKeyFingerprint = hostKeyFingerprint,
     )
 }
 
-private fun ServerConfig.toEntity(): ServerEntity {
+private fun ServerConfig.toEntity(credentialCrypto: CredentialCrypto): ServerEntity {
     return ServerEntity(
         id = id,
         name = name,
@@ -137,7 +140,7 @@ private fun ServerConfig.toEntity(): ServerEntity {
         username = username,
         keyAlias = keyAlias,
         keyAlgorithm = keyAlgorithm.name,
-        password = password,
+        password = credentialCrypto.encrypt(password),
         isActive = isActive,
         mtu = mtu,
         keepAliveInterval = keepAliveInterval,
@@ -151,7 +154,8 @@ private fun ServerConfig.toEntity(): ServerEntity {
         excludedRoutes = toJsonStringList(excludedRoutes),
         socksPort = socksPort,
         createdAt = createdAt,
-        updatedAt = updatedAt
+        updatedAt = updatedAt,
+        hostKeyFingerprint = hostKeyFingerprint
     )
 }
 

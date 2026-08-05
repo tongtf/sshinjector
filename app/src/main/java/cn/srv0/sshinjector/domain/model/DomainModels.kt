@@ -24,6 +24,7 @@ data class ServerConfig(
     val excludedRoutes: List<String> = emptyList(),
     val password: String? = null, // 可选：SSH 密码认证
     val socksPort: Int = 1080, // 本地 SOCKS5 监听端口
+    val hostKeyFingerprint: String? = null, // SSH Host Key 指纹 (SHA256)
 ) {
     enum class KeyAlgorithm { Ed25519, RSA4096, ECDSA_P256 }
     enum class DnsMode { Remote, Local, System }

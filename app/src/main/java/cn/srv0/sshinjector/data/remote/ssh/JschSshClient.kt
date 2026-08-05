@@ -1,11 +1,16 @@
 package cn.srv0.sshinjector.data.remote.ssh
 
+import android.content.Context
+import android.util.Base64
+import android.util.Log
+import com.jcraft.jsch.HostKey
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.JSchException
 import com.jcraft.jsch.Session
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.vpn.SshChannelFactory
 import cn.srv0.sshinjector.domain.vpn.TunnelChannel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -15,11 +20,108 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.File
+import java.io.FileOutputStream
+import java.io.FileWriter
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/**
+ * SSH Host Key 管理工具
+ * 使用 OpenSSH 兼容的 known_hosts 文件格式
+ */
+class KnownHostsManager @Inject constructor(
+    @ApplicationContext private val context: Context
+) {
+
+    private val knownHostsFile = File(context.filesDir, "known_hosts")
+    private val lock = Any()
+
+    init {
+        if (!knownHostsFile.exists()) {
+            knownHostsFile.createNewFile()
+        }
+    }
+
+    /**
+     * 检查主机密钥是否匹配
+     * @return true 如果匹配或首次连接(TOFU), false 如果不匹配
+     */
+    fun verifyHostKey(host: String, port: Int, hostKey: HostKey): Boolean {
+        val fingerprint = computeFingerprint(hostKey)
+        val storedLine = findHostLine(host, port)
+        
+        return if (storedLine == null) {
+            // 首次连接：TOFU - 保存并接受
+            saveHostKey(host, port, hostKey)
+            true
+        } else {
+            // 验证指纹匹配
+            val storedFingerprint = extractFingerprint(storedLine)
+            storedFingerprint == fingerprint
+        }
+    }
+
+    /**
+     * 保存主机密钥到 known_hosts 文件
+     */
+    fun saveHostKey(host: String, port: Int, hostKey: HostKey) {
+        val fingerprint = computeFingerprint(hostKey)
+        val keyType = hostKey.getType()
+        // JSch HostKey.getKey() 可能返回 String 或 ByteArray
+        val keyBytes = when (val kb = hostKey.getKey()) {
+            is ByteArray -> kb
+            is String -> kb.toByteArray()
+            else -> throw IllegalStateException("Unexpected key type: ${kb::class}")
+        }
+        val keyBlob = Base64.encodeToString(keyBytes, Base64.NO_WRAP)
+        val line = "$host,$port $keyType $keyBlob $fingerprint\n"
+        
+        synchronized(lock) {
+            // 移除旧记录
+            val lines = knownHostsFile.readText().lines().filter { !it.startsWith("$host,$port ") }
+            FileWriter(knownHostsFile).use { writer ->
+                lines.forEach { writer.write("$it\n") }
+                writer.write(line)
+            }
+        }
+        Log.d("KnownHosts", "Saved host key for $host:$port ($fingerprint)")
+    }
+
+    /**
+     * 获取存储的主机指纹
+     */
+    fun getStoredFingerprint(host: String, port: Int): String? {
+        val line = findHostLine(host, port)
+        return line?.let { extractFingerprint(it) }
+    }
+
+    private fun findHostLine(host: String, port: Int): String? {
+        return knownHostsFile.readText().lines().firstOrNull { it.startsWith("$host,$port ") }
+    }
+
+    private fun extractFingerprint(line: String): String {
+        // 格式: host,port keytype base64key SHA256:fingerprint
+        return line.split(" ").last()
+    }
+
+    private fun computeFingerprint(key: HostKey): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val keyBytes = key.getKey()
+        // JSch HostKey.getKey() 可能返回 String 或 ByteArray，统一转为 ByteArray
+        val bytes = when (keyBytes) {
+            is ByteArray -> keyBytes
+            is String -> keyBytes.toByteArray()
+            else -> throw IllegalStateException("Unexpected key type: ${keyBytes::class}")
+        }
+        digest.update(bytes)
+        return "SHA256:" + Base64.encodeToString(digest.digest(), Base64.NO_WRAP)
+    }
+}
 
 /**
  * SSH session pool wrapper: one SSH session + its own keepalive + health tracking
@@ -34,7 +136,8 @@ private data class PooledSession(
 
 @Singleton
 class JschSshClient @Inject constructor(
-    private val keyManager: SshKeyManager
+    private val keyManager: SshKeyManager,
+    private val knownHostsManager: KnownHostsManager
 ) : SshChannelFactory {
 
     companion object {
@@ -130,11 +233,16 @@ class JschSshClient @Inject constructor(
 
             val s = jsch.getSession(config.username, config.host, config.port)
             if (!config.password.isNullOrEmpty()) {
-                s.setPassword(config.password)
+                val passwordBytes = config.password.toByteArray(Charsets.UTF_8)
+                try {
+                    // JSch setPassword(byte[]) 内部会 clone，之后本地字节数组可安全清零
+                    s.setPassword(passwordBytes)
+                } finally {
+                    java.util.Arrays.fill(passwordBytes, 0)
+                }
             }
-            // StrictHostKeyChecking=no: 首次连接不验证指纹（已知限制：无 MITM 防护）
-            // TODO: 实现 known_hosts 持久化以提供 MITM 防护
-            s.setConfig("StrictHostKeyChecking", "no")
+            // 先连接，获取主机密钥，然后验证
+            s.setConfig("StrictHostKeyChecking", "no") // 临时禁用，手动验证
             s.setConfig("PreferredAuthentications", "publickey,password")
             s.setConfig("PubkeyAuthentication", "yes")
             s.setConfig("PasswordAuthentication", "yes")
@@ -146,6 +254,30 @@ class JschSshClient @Inject constructor(
 
             connectionState.value = ConnectionState.Authenticating
             s.connect()
+
+            // 连接成功后验证主机密钥
+            val hostKey = s.getHostKey()
+            if (hostKey == null) {
+                throw Exception("SSH 服务器未提供主机密钥")
+            }
+            
+            // 如果配置中已有预期指纹，优先验证
+            if (!config.hostKeyFingerprint.isNullOrEmpty()) {
+                val expectedFingerprint = config.hostKeyFingerprint!!
+                val actualFingerprint = computeFingerprint(hostKey)
+                if (expectedFingerprint != actualFingerprint) {
+                    throw JSchException("主机密钥指纹不匹配! 预期: $expectedFingerprint, 实际: $actualFingerprint. 可能遭受中间人攻击!")
+                }
+                Log.d(TAG, "Host key verified against configured fingerprint: $expectedFingerprint")
+            } else {
+                // TOFU 模式：使用 KnownHostsManager 验证/保存
+                val verified = knownHostsManager.verifyHostKey(config.host, config.port, hostKey)
+                if (!verified) {
+                    throw JSchException("主机密钥已变更! 可能遭受中间人攻击! Host: ${config.host}:${config.port}")
+                }
+                // 更新当前配置中的指纹（首次连接时保存）
+                currentConfig = currentConfig?.copy(hostKeyFingerprint = computeFingerprint(hostKey))
+            }
 
             val sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             val pooled = PooledSession(session = s, scope = sessionScope)
@@ -326,6 +458,19 @@ class JschSshClient @Inject constructor(
         } catch (e: Exception) {
             android.util.Log.w(TAG, "setChannelWindowSize failed: ${e.message}")
         }
+    }
+
+    private fun computeFingerprint(hostKey: HostKey): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val keyBytes = hostKey.getKey()
+        // JSch HostKey.getKey() 可能返回 String 或 ByteArray，统一转为 ByteArray
+        val bytes = when (keyBytes) {
+            is ByteArray -> keyBytes
+            is String -> keyBytes.toByteArray()
+            else -> throw IllegalStateException("Unexpected key type: ${keyBytes::class}")
+        }
+        digest.update(bytes)
+        return "SHA256:" + Base64.encodeToString(digest.digest(), Base64.NO_WRAP)
     }
 
     private fun handleError(message: String) {

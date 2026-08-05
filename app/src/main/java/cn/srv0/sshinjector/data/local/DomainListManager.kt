@@ -63,10 +63,11 @@ class DomainListManager @Inject constructor(
      */
     private suspend fun loadFromDisk() {
         val file = listFile()
-        if (file.exists()) {
+        if (file.exists() && verifyChecksum(file.readText())) {
             val matcher = GfwListMatcher.parse(file.readText())
             _state.value = DomainListState.Ready(matcher, DomainListSource.DISK, settings.getDomainListLastUpdate())
         } else {
+            file.delete()
             _state.value = DomainListState.Ready(GfwListMatcher.parse(BUILTIN_LIST), DomainListSource.BUILTIN, null)
         }
     }
@@ -81,8 +82,13 @@ class DomainListManager @Inject constructor(
                 val url = settings.domainListUrl.first()
                 val raw = fetch(url)
                 val decoded = decodeBase64OrPlain(raw)
+                require(decoded.isNotBlank()) { "列表内容为空" }
+                // 拒绝 HTML 错误页 (网关/中间人常见响应), 防止恶意内容混入
+                require(!decoded.looksLikeHtml()) { "列表内容不是有效文本 (疑似 HTML 错误页)" }
                 val matcher = GfwListMatcher.parse(decoded)
+                require(matcher.ruleCount > 0) { "列表未包含任何有效规则" }
                 listFile().writeText(decoded)
+                writeChecksum(decoded)
                 settings.setDomainListLastUpdate(System.currentTimeMillis())
                 DomainListState.Ready(matcher, DomainListSource.URL, settings.getDomainListLastUpdate()).also {
                     _state.value = it
@@ -125,6 +131,40 @@ class DomainListManager @Inject constructor(
     }
 
     private fun listFile(): File = File(context.filesDir, LIST_FILE_NAME)
+
+    private fun checksumFile(): File = File(context.filesDir, LIST_FILE_NAME + ".sha256")
+
+    /**
+     * 持久化列表内容时记录 SHA-256 摘要, 用于加载时检测磁盘文件被篡改/损坏。
+     */
+    private fun writeChecksum(content: String) {
+        checksumFile().writeText(sha256Hex(content))
+    }
+
+    /**
+     * 校验磁盘缓存与持久化时的摘要一致。摘要缺失 (旧版缓存) 时视为通过, 兼容升级。
+     */
+    private fun verifyChecksum(content: String): Boolean {
+        val expected = runCatching { checksumFile().readText().trim() }.getOrNull()
+        if (expected.isNullOrEmpty()) return true
+        return sha256Hex(content) == expected
+    }
+
+    private fun sha256Hex(content: String): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        return digest.digest(content.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+    }
+
+    /**
+     * 判断文本是否像 HTML (网关/中间人错误页特征), 用于拒绝下载内容。
+     */
+    private fun String.looksLikeHtml(): Boolean {
+        val head = trimStart().take(256)
+        if (head.startsWith("<!DOCTYPE", ignoreCase = true) || head.startsWith("<html", ignoreCase = true)) {
+            return true
+        }
+        return head.contains("<title", ignoreCase = true) && head.contains("</title>", ignoreCase = true)
+    }
 
     private companion object {
         const val LIST_FILE_NAME = "domain_list.txt"

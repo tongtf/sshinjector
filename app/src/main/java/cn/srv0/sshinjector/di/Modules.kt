@@ -3,7 +3,9 @@ package cn.srv0.sshinjector.di
 import android.content.Context
 import cn.srv0.sshinjector.data.local.database.AppDatabase
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
+import cn.srv0.sshinjector.data.remote.ssh.CredentialCrypto
 import cn.srv0.sshinjector.data.remote.ssh.JschSshClient
+import cn.srv0.sshinjector.data.remote.ssh.KnownHostsManager
 import cn.srv0.sshinjector.data.remote.ssh.SshKeyManager
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
@@ -46,11 +48,18 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideCredentialCrypto(): CredentialCrypto {
+        return CredentialCrypto()
+    }
+
+    @Provides
+    @Singleton
     fun provideServerRepository(
         serverDao: cn.srv0.sshinjector.data.local.dao.ServerDao,
-        whitelistDao: cn.srv0.sshinjector.data.local.dao.WhitelistDao
+        whitelistDao: cn.srv0.sshinjector.data.local.dao.WhitelistDao,
+        credentialCrypto: CredentialCrypto
     ): ServerRepository {
-        return ServerRepository(serverDao, whitelistDao)
+        return ServerRepository(serverDao, whitelistDao, credentialCrypto)
     }
 
     @Provides
@@ -61,8 +70,14 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideJschSshClient(keyManager: SshKeyManager): JschSshClient {
-        return JschSshClient(keyManager)
+    fun provideKnownHostsManager(@ApplicationContext context: Context): KnownHostsManager {
+        return KnownHostsManager(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideJschSshClient(keyManager: SshKeyManager, knownHostsManager: KnownHostsManager): JschSshClient {
+        return JschSshClient(keyManager, knownHostsManager)
     }
 
     @Provides

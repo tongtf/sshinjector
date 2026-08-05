@@ -22,7 +22,6 @@ class AndroidKeyStoreIdentity(
     override fun setPassphrase(passphrase: ByteArray?): Boolean = true
 
     override fun getPublicKeyBlob(): ByteArray {
-        android.util.Log.d("AndroidKeyStoreIdentity", "Public key blob: ${publicKeyBytes.size} bytes, alg=${getAlgName()}")
         return publicKeyBytes
     }
 
@@ -34,7 +33,6 @@ class AndroidKeyStoreIdentity(
             return null
         }
         return try {
-            android.util.Log.d("AndroidKeyStoreIdentity", "getSignature called, data.length=${data.size}")
             val sigAlgorithm = when {
                 privateKey.algorithm == "EC" -> {
                     val keySize = (privateKey as? java.security.interfaces.ECPublicKey)?.w?.affineX?.bitLength() ?: 256
@@ -48,14 +46,11 @@ class AndroidKeyStoreIdentity(
             sig.initSign(privateKey)
             sig.update(data)
             val derSig = sig.sign()
-            android.util.Log.d("AndroidKeyStoreIdentity", "DER signature length: ${derSig.size}")
 
             when (privateKey.algorithm) {
                 "EC" -> buildEcdsaSignatureBlob(derSig)
                 "Ed25519" -> buildEd25519SignatureBlob(derSig)
                 else -> derSig
-            }.also { result ->
-                android.util.Log.d("AndroidKeyStoreIdentity", "SSH signature blob length: ${result.size}")
             }
         } catch (e: Exception) {
             android.util.Log.e("AndroidKeyStoreIdentity", "Sign failed: ${e.message}", e)

@@ -2,7 +2,6 @@ package cn.srv0.sshinjector.data.remote.tunnel
 
 import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.data.remote.ssh.JschSshClient
-import cn.srv0.sshinjector.data.remote.ssh.SshKeyManager
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
 import cn.srv0.sshinjector.domain.vpn.Socks5ProxyServer
@@ -22,7 +21,7 @@ import javax.inject.Singleton
 
 @Singleton
 class Socks5TunnelPlugin @Inject constructor(
-    private val keyManager: SshKeyManager,
+    private val jschClient: JschSshClient,
     private val dnsInterceptor: DnsInterceptor
 ) : TunnelPlugin {
 
@@ -58,7 +57,6 @@ class Socks5TunnelPlugin @Inject constructor(
     private val _stats = MutableStateFlow(TunnelStats())
     override val stats: StateFlow<TunnelStats> = _stats.asStateFlow()
 
-    private var jschClient: JschSshClient? = null
     private var socksServer: Socks5ProxyServer? = null
     private var startTime: Long = 0
 
@@ -71,7 +69,6 @@ class Socks5TunnelPlugin @Inject constructor(
 
         return try {
             _state.value = _state.value.copy(status = TunnelState.Status.Authenticating)
-            val client = JschSshClient(keyManager)
             val sshConfig = ServerConfig(
                 name = "SOCKS5",
                 host = c.sshHost, port = c.sshPort,
@@ -81,14 +78,13 @@ class Socks5TunnelPlugin @Inject constructor(
                 connectTimeout = c.common.connectTimeout,
                 keepAliveInterval = c.common.keepAliveInterval,
             )
-            val result = client.connect(sshConfig)
+            val result = jschClient.connect(sshConfig)
             if (!result.success) throw Exception(result.error ?: "SSH connection failed")
 
-            val proxy = Socks5ProxyServer(client, dnsInterceptor)
+            val proxy = Socks5ProxyServer(jschClient, dnsInterceptor)
             val proxyResult = proxy.start(c.socksPort, "127.0.0.1")
             if (proxyResult.isFailure) throw proxyResult.exceptionOrNull()!!
 
-            jschClient = client
             socksServer = proxy
             startTime = System.currentTimeMillis()
             _state.value = TunnelState(status = TunnelState.Status.Connected, serverAddress = c.sshHost)
@@ -103,15 +99,14 @@ class Socks5TunnelPlugin @Inject constructor(
     override suspend fun disconnect() {
         _state.value = _state.value.copy(status = TunnelState.Status.Disconnecting)
         try { socksServer?.stop() } catch (_: Exception) {}
-        try { jschClient?.disconnect() } catch (_: Exception) {}
-        jschClient = null
+        try { jschClient.disconnect() } catch (_: Exception) {}
         socksServer = null
         startTime = 0
         _state.value = TunnelState()
     }
 
     override fun openTcpChannel(host: String, port: Int): TunnelChannel? {
-        return jschClient?.createDirectChannel(host, port)
+        return jschClient.createDirectChannel(host, port)
     }
 
     override fun sendUdp(dstHost: String, dstPort: Int, payload: ByteArray) {

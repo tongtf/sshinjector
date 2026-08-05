@@ -170,7 +170,14 @@ class Socks5ProxyServer @Inject constructor(
     private fun handleAccept(key: SelectionKey) {
         val serverChannel = key.channel() as ServerSocketChannel
         val clientChannel = serverChannel.accept() ?: return
-        
+
+        // 访问控制：仅接受本应用进程发起的连接（PacketProcessor 的本地 SOCKS5 连接）
+        if (getPeerUid(clientChannel) != android.os.Process.myUid()) {
+            android.util.Log.w("Socks5Proxy", "拒绝来自其他应用的连接")
+            runCatching { clientChannel.close() }
+            return
+        }
+
         clientChannel.configureBlocking(false)
         val connectionId = connectionIdCounter.incrementAndGet()
         
@@ -239,13 +246,44 @@ class Socks5ProxyServer @Inject constructor(
         val totalBytesUp: Long,
         val totalBytesDown: Long
     )
+
+    /**
+     * 通过 /proc/net/tcp 解析连接对端的 UID，用于访问控制。
+     * 仅本应用进程发起的连接（UID = 本应用 UID）才被接受。
+     */
+    private fun getPeerUid(clientChannel: java.nio.channels.SocketChannel): Int {
+        return try {
+            val ourPort = clientChannel.socket().localPort
+            val peerPort = (clientChannel.socket().remoteSocketAddress as java.net.InetSocketAddress).port
+            val hexOurPort = ourPort.toString(16).padStart(4, '0')
+            val hexPeerPort = peerPort.toString(16).padStart(4, '0')
+
+            for (file in listOf("/proc/net/tcp", "/proc/net/tcp6")) {
+                val rows = java.io.File(file).readLines().drop(1)
+                for (row in rows) {
+                    val cols = row.trim().split(Regex("\\s+"))
+                    if (cols.size < 8) continue
+                    // 客户端侧: local=127.0.0.1:peerPort, remote=127.0.0.1:ourPort
+                    val localAddr = cols[1]
+                    val remAddr = cols[2]
+                    if (remAddr.endsWith(":$hexOurPort") && localAddr.endsWith(":$hexPeerPort")) {
+                        return cols[7].toInt()
+                    }
+                }
+            }
+            -1
+        } catch (_: Exception) {
+            // 解析失败时保守拒绝
+            -1
+        }
+    }
 }
 
 /**
  * 单个 SOCKS5 连接处理 (状态机)
  * 通过 SSH 隧道 (TunnelChannel) 转发流量到目标服务器
  */
-class Socks5Connection(
+private class Socks5Connection(
     val id: Long,
     val channel: SocketChannel,
     private val sshChannelFactory: SshChannelFactory?,
@@ -273,7 +311,7 @@ class Socks5Connection(
     
     private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
 
-    enum class SocksState {
+    private enum class SocksState {
         Handshake,      // 等待客户端握手
         AuthMethods,    // 认证方法协商
         Request,        // 等待连接请求
@@ -546,7 +584,7 @@ class Socks5Connection(
             host
         }
 
-        if (resolvedHost != host) {
+        if (resolvedHost != host && IS_DEBUG) {
             android.util.Log.d("Socks5Proxy", "Resolved fake IP $host to domain $resolvedHost")
         }
 

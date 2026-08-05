@@ -207,7 +207,17 @@ class MainViewModel @Inject constructor(
             caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> {
                 try {
                     val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-                    val type = when (tm.dataNetworkType) {
+                    val networkType = if (
+                        androidx.core.content.ContextCompat.checkSelfPermission(
+                            context,
+                            android.Manifest.permission.READ_PHONE_STATE
+                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    ) {
+                        tm.dataNetworkType
+                    } else {
+                        TelephonyManager.NETWORK_TYPE_UNKNOWN
+                    }
+                    val type = when (networkType) {
                         TelephonyManager.NETWORK_TYPE_LTE -> "4G"
                         TelephonyManager.NETWORK_TYPE_NR -> "5G"
                         TelephonyManager.NETWORK_TYPE_HSDPA,

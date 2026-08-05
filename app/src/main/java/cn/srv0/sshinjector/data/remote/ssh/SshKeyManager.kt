@@ -48,25 +48,34 @@ class SshKeyManager @Inject constructor(
 
     fun generateKeyPair(alias: String, algorithm: Int = 0, requireBiometric: Boolean = false): String {
         val fullAlias = "$aliasPrefix$alias"
-        android.util.Log.d("SshKeyManager", "Generating key pair: $fullAlias, algo=$algorithm, biometric=$requireBiometric")
-
         if (keyStore.containsAlias(fullAlias)) {
-            android.util.Log.w("SshKeyManager", "Key already exists: $fullAlias")
-            throw IllegalStateException("密钥别名已存在: $fullAlias")
+            android.util.Log.w("SshKeyManager", "Key already exists")
+            throw IllegalStateException("密钥别名已存在")
         }
 
         val keyPair = if (algorithm == 3) {
-            // Ed25519: 尝试 AndroidKeyStore (Android 12+) 或 JVM provider
+            // Ed25519: 强制使用 AndroidKeyStore (API 31+)，禁用软件密钥降级以保护私钥
             val kg = try {
                 KeyPairGenerator.getInstance("Ed25519", "AndroidKeyStore")
-            } catch (_: Exception) {
-                try {
-                    KeyPairGenerator.getInstance("Ed25519")
-                } catch (_: Exception) {
-                    throw IllegalStateException("设备不支持 Ed25519 算法")
-                }
+            } catch (e: Exception) {
+                throw IllegalStateException("设备不支持 Ed25519 硬件密钥, 请改用 ECDSA P-256")
             }
-            kg.initialize(256)
+            kg.initialize(
+                KeyGenParameterSpec.Builder(
+                    fullAlias,
+                    KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
+                ).apply {
+                    setDigests(
+                        KeyProperties.DIGEST_SHA256,
+                        KeyProperties.DIGEST_SHA384,
+                        KeyProperties.DIGEST_SHA512
+                    )
+                    if (requireBiometric) {
+                        setUserAuthenticationRequired(true)
+                        setUserAuthenticationParameters(300, KeyProperties.AUTH_BIOMETRIC_STRONG)
+                    }
+                }.build()
+            )
             kg.generateKeyPair()
         } else {
             val (algoName, curveSpec) = when (algorithm) {
@@ -255,10 +264,34 @@ class SshKeyManager @Inject constructor(
         val safeName = fullAlias.replace("/", "_")
         val file = File(importedKeysDir, safeName)
         file.writeBytes(cipher.iv + ciphertext)
-        File(importedKeysDir, "$safeName.meta").writeText(
-            "$algorithm\n$pubKeyStr\n",
-            StandardCharsets.UTF_8
-        )
+        writeEncryptedMetaFile(File(importedKeysDir, "$safeName.meta"), "$algorithm\n$pubKeyStr\n")
+    }
+
+    /** AES-GCM 加密写 .meta 文件 */
+    private fun writeEncryptedMetaFile(file: File, content: String) {
+        val wrappingKey = getOrCreateImportWrapperKey()
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, wrappingKey)
+        val ciphertext = cipher.doFinal(content.toByteArray(StandardCharsets.UTF_8))
+        file.writeBytes(cipher.iv + ciphertext)
+    }
+
+    /** 读取 .meta 文件: 优先解密, 兼容旧版明文 */
+    private fun readEncryptedMetaFile(file: File): String? {
+        if (!file.exists()) return null
+        val data = file.readBytes()
+        if (data.size < 12) return null
+        // 旧版明文格式以可打印文本开头, 无 IV 前缀; 尝试解密, 失败则按明文处理
+        return runCatching {
+            val iv = data.copyOfRange(0, 12)
+            val ciphertext = data.copyOfRange(12, data.size)
+            val wrappingKey = getOrCreateImportWrapperKey()
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, wrappingKey, GCMParameterSpec(128, iv))
+            String(cipher.doFinal(ciphertext), StandardCharsets.UTF_8)
+        }.getOrElse {
+            data.toString(StandardCharsets.UTF_8)
+        }
     }
 
     private fun getOrCreateImportWrapperKey(): SecretKey {
@@ -289,6 +322,9 @@ class SshKeyManager @Inject constructor(
     // PEM 缓存最大条目数，防止内存泄漏
     private val MAX_PEM_CACHE_SIZE = 10
 
+    // 导入私钥解密后 payload 上限 (PEM+口令)，防止解密出异常大对象
+    private val MAX_IMPORTED_KEY_SIZE = 4096
+
     /** 从磁盘解密并加载导入的私钥 PEM, 未找到返回 null */
     private fun loadImportedPem(fullAlias: String): ImportedPem? {
         importedPemCache[fullAlias]?.let { return it }
@@ -304,11 +340,13 @@ class SshKeyManager @Inject constructor(
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, wrappingKey, GCMParameterSpec(128, iv))
             val payload = cipher.doFinal(ciphertext)
+            if (payload.size > MAX_IMPORTED_KEY_SIZE) return null
             val passLen = ((payload[0].toInt() and 0xFF) shl 24) or
                 ((payload[1].toInt() and 0xFF) shl 16) or
                 ((payload[2].toInt() and 0xFF) shl 8) or
                 (payload[3].toInt() and 0xFF)
             var pos = 4
+            if (passLen < 0 || pos + passLen > payload.size) return null
             val pass = payload.copyOfRange(pos, pos + passLen)
             pos += passLen
             val pem = String(payload.copyOfRange(pos, payload.size), StandardCharsets.UTF_8)
@@ -321,13 +359,11 @@ class SshKeyManager @Inject constructor(
 
     private fun readImportedAlgorithm(safeName: String): String {
         val metaFile = File(importedKeysDir, "$safeName.meta")
-        if (!metaFile.exists()) return "ECDSA"
-        return metaFile.readText(StandardCharsets.UTF_8).lineSequence().firstOrNull() ?: "ECDSA"
+        return readEncryptedMetaFile(metaFile)?.lineSequence()?.firstOrNull() ?: "ECDSA"
     }
 
     fun getPrivateKeyForAuth(alias: String): PrivateKey? {
         val fullAlias = "$aliasPrefix$alias"
-        android.util.Log.d("SshKeyManager", "Getting private key for: $fullAlias")
 
         return try {
             // 导入密钥由 JSch 用 PEM 直接签名, 不走 JCA PrivateKey
@@ -338,7 +374,7 @@ class SshKeyManager @Inject constructor(
             val safeName = fullAlias.replace("/", "_")
             val keyFile = File(generatedKeysDir, safeName)
             if (keyFile.exists()) {
-                android.util.Log.d("SshKeyManager", "Loading Ed25519 key from file: $safeName")
+                android.util.Log.d("SshKeyManager", "Loading Ed25519 key from file")
                 val keyBytes = keyFile.readBytes()
                 val kf = KeyFactory.getInstance("Ed25519")
                 return kf.generatePrivate(java.security.spec.PKCS8EncodedKeySpec(keyBytes))
@@ -354,7 +390,7 @@ class SshKeyManager @Inject constructor(
                     null
                 }
             } else {
-                android.util.Log.e("SshKeyManager", "Key not found in KeyStore: $fullAlias")
+                android.util.Log.e("SshKeyManager", "Key not found in KeyStore")
                 null
             }
         } catch (e: Exception) {
@@ -370,8 +406,9 @@ class SshKeyManager @Inject constructor(
         // 导入私钥: 从 meta 文件恢复公钥
         val safeName = fullAlias.replace("/", "_")
         val metaFile = File(importedKeysDir, "$safeName.meta")
-        if (metaFile.exists()) {
-            val lines = metaFile.readText(StandardCharsets.UTF_8).lineSequence().toList()
+        val metaContent = readEncryptedMetaFile(metaFile)
+        if (metaContent != null) {
+            val lines = metaContent.lineSequence().toList()
             if (lines.size >= 2) {
                 val str = lines[1]
                 publicKeyCache[fullAlias] = str
@@ -404,7 +441,7 @@ class SshKeyManager @Inject constructor(
         val metaFile = File(importedKeysDir, "$safeName.meta")
         val pubMetaFile = File(importedKeysDir, "$safeName.pub.meta")
         val firstLine = when {
-            metaFile.exists() -> metaFile.readText(StandardCharsets.UTF_8).lineSequence().firstOrNull()
+            metaFile.exists() -> readEncryptedMetaFile(metaFile)?.lineSequence()?.firstOrNull()
             pubMetaFile.exists() -> pubMetaFile.readText(StandardCharsets.UTF_8).lineSequence().firstOrNull()
             else -> null
         }
@@ -600,7 +637,7 @@ class SshKeyManager @Inject constructor(
                     null,
                     imported.passphrase
                 )
-                android.util.Log.d("SshKeyManager", "Added imported identity: $fullAlias")
+                android.util.Log.d("SshKeyManager", "Added imported identity")
                 true
             } catch (e: Exception) {
                 android.util.Log.e("SshKeyManager", "Failed to add imported identity: ${e.message}", e)
@@ -610,20 +647,16 @@ class SshKeyManager @Inject constructor(
 
         val privateKey = getPrivateKeyForAuth(alias)
         if (privateKey == null) {
-            android.util.Log.e("SshKeyManager", "Private key is null for alias: $alias")
+            android.util.Log.e("SshKeyManager", "Private key is null")
             return false
         }
 
         try {
-            android.util.Log.d("SshKeyManager", "Private key algorithm: ${privateKey.algorithm}")
-            android.util.Log.d("SshKeyManager", "Private key format: ${privateKey.format}")
-
             logKeyAuthInfo(fullAlias, privateKey)
 
             // 尝试获取私钥编码
             val keyBytes = privateKey.encoded
             if (keyBytes != null) {
-                android.util.Log.d("SshKeyManager", "Private key encoded length: ${keyBytes.size}")
                 val pemPrivateKey = convertToPem("PRIVATE KEY", keyBytes)
                 jsch.addIdentity(fullAlias, pemPrivateKey.toByteArray(), null, null)
                 android.util.Log.d("SshKeyManager", "Added identity using PEM format")
@@ -633,8 +666,8 @@ class SshKeyManager @Inject constructor(
             // Hardware-backed key: .encoded is null, use AndroidKeyStoreIdentity
             android.util.Log.d("SshKeyManager", "Private key.encoded is null, using AndroidKeyStoreIdentity")
             val entry = keyStore.getEntry(fullAlias, null) as? KeyStore.PrivateKeyEntry
-                ?: throw IllegalStateException("KeyStore entry not found: $fullAlias")
-            val cert = entry.certificate ?: throw IllegalStateException("Certificate not found: $fullAlias")
+                ?: throw IllegalStateException("KeyStore entry not found")
+            val cert = entry.certificate ?: throw IllegalStateException("Certificate not found")
             val pubKey = cert.publicKey
 
             val publicKeyBytes = when (pubKey) {
@@ -645,7 +678,7 @@ class SshKeyManager @Inject constructor(
                     // 尝试通过算法名判断
                     when (pubKey.algorithm) {
                         "Ed25519" -> AndroidKeyStoreIdentity.buildEd25519PublicKeyBlob(pubKey)
-                        else -> throw IllegalStateException("Unsupported key type: ${pubKey.algorithm}")
+                        else -> throw IllegalStateException("Unsupported key type")
                     }
                 }
             }
@@ -667,7 +700,7 @@ class SshKeyManager @Inject constructor(
             if (keyInfo != null) {
                 android.util.Log.d(
                     "SshKeyManager",
-                    "KeyInfo[$fullAlias]: authRequired=${keyInfo.isUserAuthenticationRequired}, " +
+                    "KeyInfo: authRequired=${keyInfo.isUserAuthenticationRequired}, " +
                         "authType=0x${keyInfo.userAuthenticationType.toString(16)}, " +
                         "authValidityForEncryption=${keyInfo.userAuthenticationValidityDurationSeconds}"
                 )

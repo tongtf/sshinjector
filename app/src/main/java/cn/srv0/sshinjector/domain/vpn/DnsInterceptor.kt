@@ -340,7 +340,7 @@ class DnsInterceptor @Inject constructor() {
                     val packet = java.net.DatagramPacket(queryData, queryData.size, dstAddr, 53)
                     socket.send(packet)
 
-                    val responseBuf = ByteArray(512)
+                    val responseBuf = ByteArray(4096)
                     val responsePacket = java.net.DatagramPacket(responseBuf, responseBuf.size)
                     socket.receive(responsePacket)
                     val responseData = responseBuf.copyOfRange(0, responsePacket.length)
