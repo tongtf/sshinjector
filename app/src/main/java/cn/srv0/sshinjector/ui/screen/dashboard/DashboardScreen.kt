@@ -139,7 +139,7 @@ fun DashboardScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("网络信息", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        Text("状态信息", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                         IconButton(onClick = { viewModel.refreshNetworkInfo() }, modifier = Modifier.size(32.dp)) {
                             Icon(
                                 imageVector = Icons.Default.Refresh,
@@ -184,34 +184,70 @@ fun DashboardScreen(
                         }
                     }
                     Spacer(modifier = Modifier.height(8.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("代理", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(state.proxyAddress, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("网络", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    // 网络 + 状态合并一行
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("网络", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = state.networkDetail,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                         Text(
-                            text = state.networkDetail,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
+                            text = state.connectionStatus,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(start = 8.dp),
-                            textAlign = TextAlign.End
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                     Spacer(modifier = Modifier.height(8.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("连接", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        val connectText = if (state.isConnected) "${state.currentServerUser}@${state.currentServerHost}" else "-"
-                        Text(connectText, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("时长", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        val durationText = if (state.isConnected && state.connectionDuration != "00:00:00") state.connectionDuration else "-"
-                        Text(durationText, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    // CPU + Heap + Native 合并一行
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("CPU", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = state.cpuUsage,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MainViewModel.colorForRatio(
+                                    if (state.cpuUsage != "-") {
+                                        state.cpuUsage.replace("%", "").toFloatOrNull()?.div(10f) ?: 0f
+                                    } else 0f
+                                ),
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                modifier = Modifier.width(48.dp)
+                            )
+                        }
+                        Text(
+                            text = if (state.javaHeapUsage != "-" && state.nativeHeapUsage != "-")
+                                "Heap:${state.javaHeapUsage} Native:${state.nativeHeapUsage}" else "-",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MainViewModel.colorForRatio(
+                                if (state.javaHeapUsage != "-" && state.javaHeapUsage.contains(" MB")) {
+                                    val num = state.javaHeapUsage.replace(" MB", "").replace(" GB", "").toFloatOrNull() ?: 0f
+                                    val inMb = if (state.javaHeapUsage.contains(" GB")) num * 1024f else num
+                                    inMb / 50f
+                                } else 0f
+                            ),
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }
