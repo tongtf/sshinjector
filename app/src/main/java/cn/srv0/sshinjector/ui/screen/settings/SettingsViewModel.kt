@@ -31,6 +31,8 @@ class SettingsViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
     val dnsMode: StateFlow<Int> = settingsDataStore.dnsMode
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+    val language: StateFlow<String> = settingsDataStore.language
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "system")
 
     fun setAutoConnect(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setAutoConnect(enabled) }
     fun setBiometricUnlock(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setBiometricUnlock(enabled) }
@@ -46,4 +48,5 @@ class SettingsViewModel @Inject constructor(
             context.startService(intent)
         } catch (_: Exception) {}
     }
+    fun setLanguage(code: String) = viewModelScope.launch { settingsDataStore.setLanguage(code) }
 }

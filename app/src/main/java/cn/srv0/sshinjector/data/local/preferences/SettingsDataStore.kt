@@ -35,6 +35,7 @@ class SettingsDataStore @Inject constructor(
         private val KEY_ROUTE_CONFIG = stringPreferencesKey("route_config")
         private val KEY_DOMAIN_LIST_URL = stringPreferencesKey("domain_list_url")
         private val KEY_DOMAIN_LIST_LAST_UPDATE = longPreferencesKey("domain_list_last_update")
+        private val KEY_LANGUAGE = stringPreferencesKey("language")
         private const val KEY_KEYSTORE_ALIAS_PREFIX = "keystore_alias_"
 
         const val DEFAULT_DOMAIN_LIST_URL = "https://gitlab.com/gfwlist/gfwlist/raw/master/gfwlist.txt"
@@ -129,6 +130,15 @@ class SettingsDataStore @Inject constructor(
 
     suspend fun getDomainListLastUpdate(): Long? {
         return context.dataStore.data.map { it[KEY_DOMAIN_LIST_LAST_UPDATE] }.first()
+    }
+
+    val language: Flow<String> = context.dataStore.data
+        .map { it[KEY_LANGUAGE] ?: "system" }
+
+suspend fun setLanguage(code: String) {
+        context.dataStore.edit { it[KEY_LANGUAGE] = code }
+        context.getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE)
+            .edit().putString("language", code).apply()
     }
 
     suspend fun setLogLevel(level: Int) {

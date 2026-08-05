@@ -66,6 +66,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -118,7 +119,8 @@ fun DashboardScreen(
     var showServerMenu by remember { mutableStateOf<Long?>(null) }
 
     val serverConnectionStatus = state.serverConnectionStatus
-    val servers by viewModel.allServers.collectAsState(initial = emptyList<cn.srv0.sshinjector.domain.model.ServerConfig>())
+    val servers by viewModel.allServers.collectAsState(
+        initial = emptyList<cn.srv0.sshinjector.domain.model.ServerConfig>())
 
     Box(modifier = modifier.fillMaxSize()) {
         Column(
@@ -126,7 +128,6 @@ fun DashboardScreen(
                 .fillMaxSize()
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
-            // 网络信息
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
@@ -139,36 +140,45 @@ fun DashboardScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("状态信息", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                        IconButton(onClick = { viewModel.refreshNetworkInfo() }, modifier = Modifier.size(32.dp)) {
+                        Text(stringResource(cn.srv0.sshinjector.R.string.dashboard_status_info),
+                            fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        IconButton(onClick = { viewModel.refreshNetworkInfo() },
+                            modifier = Modifier.size(32.dp)) {
                             Icon(
                                 imageVector = Icons.Default.Refresh,
-                                contentDescription = "刷新网络信息",
+                                contentDescription = stringResource(
+                                    cn.srv0.sshinjector.R.string.dashboard_refresh_info),
                                 modifier = Modifier.size(18.dp),
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         }
                     }
                     Spacer(modifier = Modifier.height(12.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("IPv4", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(state.deviceIpv4, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    Row(modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(stringResource(cn.srv0.sshinjector.R.string.dashboard_ipv4),
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(state.deviceIpv4, fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium)
                     }
                     Spacer(modifier = Modifier.height(8.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("IPv6", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(state.deviceIpv6, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    Row(modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(stringResource(cn.srv0.sshinjector.R.string.dashboard_ipv6),
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(state.deviceIpv6, fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium)
                     }
                     Spacer(modifier = Modifier.height(8.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text("模式", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        val (dnsBg, dnsFg) = when (state.dnsMode) {
-                            "远程代理" -> Color(0xFF7C4DFF) to Color.White
-                            "本地直连" -> Color(0xFF9E9E9E) to Color.White
-                            "白名单模式" -> Color(0xFF00BCD4) to Color.White
-                            "域名分流" -> Color(0xFFFF9800) to Color.White
-                            else -> MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurface
-                        }
+                    Row(modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Text(stringResource(cn.srv0.sshinjector.R.string.dashboard_mode),
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        val (dnsBg, dnsFg) = dnsModeColors(state.dnsMode)
                         Surface(
                             shape = RoundedCornerShape(4.dp),
                             color = dnsBg,
@@ -184,14 +194,15 @@ fun DashboardScreen(
                         }
                     }
                     Spacer(modifier = Modifier.height(8.dp))
-                    // 网络 + 状态合并一行
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("网络", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(stringResource(cn.srv0.sshinjector.R.string.dashboard_network),
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = state.networkDetail,
@@ -210,14 +221,15 @@ fun DashboardScreen(
                         )
                     }
                     Spacer(modifier = Modifier.height(8.dp))
-                    // CPU + Heap + Native 合并一行
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("CPU", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(stringResource(cn.srv0.sshinjector.R.string.dashboard_cpu),
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = state.cpuUsage,
@@ -225,7 +237,8 @@ fun DashboardScreen(
                                 fontWeight = FontWeight.Medium,
                                 color = MainViewModel.colorForRatio(
                                     if (state.cpuUsage != "-") {
-                                        state.cpuUsage.replace("%", "").toFloatOrNull()?.div(10f) ?: 0f
+                                        state.cpuUsage.replace("%", "").toFloatOrNull()
+                                            ?.div(10f) ?: 0f
                                     } else 0f
                                 ),
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
@@ -233,14 +246,19 @@ fun DashboardScreen(
                             )
                         }
                         Text(
-                            text = if (state.javaHeapUsage != "-" && state.nativeHeapUsage != "-")
-                                "Heap:${state.javaHeapUsage} Native:${state.nativeHeapUsage}" else "-",
+                            text = if (state.javaHeapUsage != "-" &&
+                                state.nativeHeapUsage != "-")
+                                "Heap:${state.javaHeapUsage} Native:${state.nativeHeapUsage}"
+                            else "-",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
                             color = MainViewModel.colorForRatio(
-                                if (state.javaHeapUsage != "-" && state.javaHeapUsage.contains(" MB")) {
-                                    val num = state.javaHeapUsage.replace(" MB", "").replace(" GB", "").toFloatOrNull() ?: 0f
-                                    val inMb = if (state.javaHeapUsage.contains(" GB")) num * 1024f else num
+                                if (state.javaHeapUsage != "-" &&
+                                    state.javaHeapUsage.contains(" MB")) {
+                                    val num = state.javaHeapUsage.replace(" MB", "")
+                                        .replace(" GB", "").toFloatOrNull() ?: 0f
+                                    val inMb = if (state.javaHeapUsage.contains(" GB")) num * 1024f
+                                    else num
                                     inMb / 50f
                                 } else 0f
                             ),
@@ -254,7 +272,6 @@ fun DashboardScreen(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // 服务器 / 密钥 双列卡片
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -271,18 +288,21 @@ fun DashboardScreen(
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "服务器",
+                                text = stringResource(
+                                    cn.srv0.sshinjector.R.string.dashboard_servers),
                                 fontSize = 16.sp,
-                                fontWeight = if (!columnMode) FontWeight.Bold else FontWeight.Normal,
+                                fontWeight = if (!columnMode) FontWeight.Bold
+                                    else FontWeight.Normal,
                                 color = if (!columnMode) MaterialTheme.colorScheme.primary
                                     else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.clickable { columnMode = false }
                             )
                             Spacer(modifier = Modifier.width(12.dp))
                             Text(
-                                text = "密钥",
+                                text = stringResource(cn.srv0.sshinjector.R.string.dashboard_keys),
                                 fontSize = 16.sp,
-                                fontWeight = if (columnMode) FontWeight.Bold else FontWeight.Normal,
+                                fontWeight = if (columnMode) FontWeight.Bold
+                                    else FontWeight.Normal,
                                 color = if (columnMode) MaterialTheme.colorScheme.primary
                                     else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.clickable { columnMode = true }
@@ -293,19 +313,23 @@ fun DashboardScreen(
                                 if (columnMode) onNavigateToKeyAdd() else onNavigateToServerAdd()
                             }
                         ) {
-                            Icon(Icons.Default.Add, contentDescription = "添加")
+                            Icon(Icons.Default.Add,
+                                contentDescription = stringResource(
+                                    cn.srv0.sshinjector.R.string.dashboard_add))
                         }
                     }
                     Spacer(modifier = Modifier.height(8.dp))
 
                     if (!columnMode) {
                         if (servers.isEmpty()) {
-                            // 空状态设计
                             EmptyState(
                                 icon = Icons.Default.FavoriteBorder,
-                                title = "暂无服务器",
-                                subtitle = "添加服务器以开始使用 VPN 代理",
-                                actionText = "添加服务器",
+                                title = stringResource(
+                                    cn.srv0.sshinjector.R.string.dashboard_no_servers),
+                                subtitle = stringResource(
+                                    cn.srv0.sshinjector.R.string.dashboard_no_servers_hint),
+                                actionText = stringResource(
+                                    cn.srv0.sshinjector.R.string.dashboard_add_server),
                                 onAction = onNavigateToServerAdd
                             )
                         } else {
@@ -324,15 +348,20 @@ fun DashboardScreen(
                                         isDefault = server.isActive,
                                         isConnected = isConnectedToThis,
                                         connectionStatus = serverStatus,
-                                        onToggleDefault = { viewModel.toggleDefaultServer(server.id) },
+                                        onToggleDefault = {
+                                            viewModel.toggleDefaultServer(server.id) },
                                         onClickEdit = { onNavigateToServerEdit(server.id) },
                                         onClickConnect = {
                                             if (isConnectedToThis) {
                                                 viewModel.disconnect()
                                             } else {
-                                                val onGranted = { viewModel.connect(server.id) }
-                                                if (fragmentActivity != null && biometricAuth != null) {
-                                                    biometricAuth.connectIfAllowed(fragmentActivity, server.keyAlias, onGranted)
+                                                val onGranted = {
+                                                    viewModel.connect(server.id) }
+                                                if (fragmentActivity != null &&
+                                                    biometricAuth != null) {
+                                                    biometricAuth.connectIfAllowed(
+                                                        fragmentActivity, server.keyAlias,
+                                                        onGranted)
                                                 } else {
                                                     onGranted()
                                                 }
@@ -348,9 +377,12 @@ fun DashboardScreen(
                         if (keysList.isEmpty()) {
                             EmptyState(
                                 icon = Icons.Default.DateRange,
-                                title = "暂无密钥",
-                                subtitle = "生成或导入 SSH 密钥以进行身份验证",
-                                actionText = "添加密钥",
+                                title = stringResource(
+                                    cn.srv0.sshinjector.R.string.dashboard_no_keys),
+                                subtitle = stringResource(
+                                    cn.srv0.sshinjector.R.string.dashboard_no_keys_hint),
+                                actionText = stringResource(
+                                    cn.srv0.sshinjector.R.string.dashboard_add_key),
                                 onAction = onNavigateToKeyAdd
                             )
                         } else {
@@ -384,12 +416,13 @@ fun DashboardScreen(
                                                     fontSize = 14.sp,
                                                     fontWeight = FontWeight.Medium,
                                                     maxLines = 1,
-                                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                                    overflow = TextOverflow.Ellipsis
                                                 )
                                                 Text(
                                                     text = key.algorithm,
                                                     fontSize = 11.sp,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    color = MaterialTheme
+                                                        .colorScheme.onSurfaceVariant
                                                 )
                                             }
                                         }
@@ -398,11 +431,15 @@ fun DashboardScreen(
                                                 .size(32.dp)
                                                 .clip(RoundedCornerShape(16.dp))
                                                 .clickable {
-                                                    val success = keyViewModel.copyPublicKey(key.publicKey)
+                                                    val success =
+                                                        keyViewModel.copyPublicKey(
+                                                            key.publicKey)
                                                     if (success) {
+                                                        val label =
+                                                            context.resources.getString(
+                                                            cn.srv0.sshinjector.R.string.dashboard_key_copied)
                                                         android.widget.Toast.makeText(
-                                                            context,
-                                                            "公钥已复制",
+                                                            context, label,
                                                             android.widget.Toast.LENGTH_SHORT
                                                         ).show()
                                                     }
@@ -411,7 +448,8 @@ fun DashboardScreen(
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.Send,
-                                                contentDescription = "复制",
+                                                contentDescription = stringResource(
+                                                    cn.srv0.sshinjector.R.string.copy),
                                                 modifier = Modifier.size(18.dp),
                                                 tint = MaterialTheme.colorScheme.primary
                                             )
@@ -426,7 +464,6 @@ fun DashboardScreen(
         }
     }
 
-    // 服务器长按菜单
     showServerMenu?.let { serverId ->
         val server = servers.find { it.id == serverId }
         if (server != null) {
@@ -518,9 +555,8 @@ fun ServerListItem(
     onClickConnect: () -> Unit,
     onLongClick: () -> Unit = {}
 ) {
-    val isTransitioning = connectionStatus in listOf("Connecting", "Authenticating", "EstablishingTunnel", "Disconnecting")
-
-    // 脉冲动画
+    val isTransitioning = connectionStatus in listOf(
+        "Connecting", "Authenticating", "EstablishingTunnel", "Disconnecting")
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseScale by infiniteTransition.animateFloat(
         initialValue = 1f,
@@ -531,7 +567,6 @@ fun ServerListItem(
         ),
         label = "pulseScale"
     )
-
     val containerColor by animateColorAsState(
         targetValue = when {
             isConnected -> MaterialTheme.colorScheme.primaryContainer
@@ -540,7 +575,6 @@ fun ServerListItem(
         },
         label = "containerColor"
     )
-
     Surface(
         shape = RoundedCornerShape(8.dp),
         color = containerColor,
@@ -555,14 +589,14 @@ fun ServerListItem(
                 .height(56.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 左侧：默认星标
             IconButton(
                 onClick = onToggleDefault,
                 modifier = Modifier.size(40.dp)
             ) {
                 Icon(
                     Icons.Default.Star,
-                    contentDescription = "默认",
+                    contentDescription = stringResource(
+                        cn.srv0.sshinjector.R.string.dashboard_default),
                     modifier = Modifier.size(18.dp),
                     tint = if (isDefault)
                         MaterialTheme.colorScheme.primary
@@ -570,8 +604,6 @@ fun ServerListItem(
                         MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                 )
             }
-
-            // 中间：服务器信息 (占 2/3)
             Row(
                 modifier = Modifier
                     .weight(2f)
@@ -585,19 +617,17 @@ fun ServerListItem(
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = serverInfo,
                         fontSize = 11.sp,
                         maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        overflow = TextOverflow.Ellipsis,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
-
-            // 右侧：连接按钮 (占 1/3)
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -616,13 +646,15 @@ fun ServerListItem(
                     )
                     isConnected -> Icon(
                         imageVector = Icons.Default.Close,
-                        contentDescription = "断开连接",
+                        contentDescription = stringResource(
+                            cn.srv0.sshinjector.R.string.dashboard_disconnect),
                         modifier = Modifier.size(24.dp),
                         tint = MaterialTheme.colorScheme.error
                     )
                     else -> Icon(
                         imageVector = Icons.Default.PlayArrow,
-                        contentDescription = "连接",
+                        contentDescription = stringResource(
+                            cn.srv0.sshinjector.R.string.dashboard_connect),
                         modifier = Modifier.size(24.dp),
                         tint = MaterialTheme.colorScheme.primary
                     )
@@ -648,17 +680,24 @@ fun ServerContextMenu(
             Column {
                 ContextMenuItem(
                     icon = Icons.Default.Create,
-                    text = "编辑服务器",
+                    text = stringResource(
+                        cn.srv0.sshinjector.R.string.dashboard_edit_server),
                     onClick = onEdit
                 )
                 ContextMenuItem(
                     icon = Icons.Default.Star,
-                    text = if (isDefault) "取消默认" else "设为默认",
+                    text = if (isDefault)
+                        stringResource(
+                            cn.srv0.sshinjector.R.string.dashboard_unset_default)
+                    else
+                        stringResource(
+                            cn.srv0.sshinjector.R.string.dashboard_set_default),
                     onClick = onToggleDefault
                 )
                 ContextMenuItem(
                     icon = Icons.Default.Close,
-                    text = "删除服务器",
+                    text = stringResource(
+                        cn.srv0.sshinjector.R.string.dashboard_delete_server),
                     onClick = onDelete,
                     tint = MaterialTheme.colorScheme.error
                 )
@@ -666,7 +705,7 @@ fun ServerContextMenu(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("取消")
+                Text(stringResource(cn.srv0.sshinjector.R.string.cancel))
             }
         }
     )
@@ -698,5 +737,17 @@ fun ContextMenuItem(
             fontSize = 16.sp,
             color = tint
         )
+    }
+}
+
+@Composable
+private fun dnsModeColors(dnsMode: String): Pair<Color, Color> {
+    return when (dnsMode) {
+        "远程代理" -> Color(0xFF7C4DFF) to Color.White
+        "本地直连" -> Color(0xFF9E9E9E) to Color.White
+        "白名单模式" -> Color(0xFF00BCD4) to Color.White
+        "域名分流" -> Color(0xFFFF9800) to Color.White
+        else -> MaterialTheme.colorScheme.surfaceVariant to
+            MaterialTheme.colorScheme.onSurface
     }
 }

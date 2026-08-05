@@ -28,8 +28,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.compose.currentBackStackEntryAsState
+import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.ui.component.FloatingNavIcon
 import cn.srv0.sshinjector.ui.component.rememberClickGuard
 import cn.srv0.sshinjector.ui.navigation.AppNavGraph
@@ -54,7 +56,7 @@ fun MainScreen() {
     val currentRoute = backStackEntry?.destination?.route
 
     val navIcon: ImageVector = if (currentRoute == "settings") Icons.Filled.Home else Icons.Filled.Settings
-    val navDesc: String = if (currentRoute == "settings") "主界面" else "设置"
+    val navDesc: String = if (currentRoute == "settings") stringResource(R.string.nav_main) else stringResource(R.string.nav_settings)
     val guard = rememberClickGuard()
 
     var iconOffset by remember { mutableStateOf(Offset(0f, 0f)) }

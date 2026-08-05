@@ -34,10 +34,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.data.local.DomainListSource
 import cn.srv0.sshinjector.data.local.DomainListState
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
@@ -60,10 +62,11 @@ fun DomainListSettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("域名列表") },
+                title = { Text(stringResource(R.string.domain_list_title)) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.back))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -82,11 +85,11 @@ fun DomainListSettingsScreen(
         ) {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("列表来源 URL", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text(stringResource(R.string.domain_list_url_label),
+                        fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "支持 gfwlist(base64) 或纯文本格式，每行一条规则。" +
-                            "仅在「域名分流」连接模式下生效。",
+                        stringResource(R.string.domain_list_url_desc),
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -96,7 +99,8 @@ fun DomainListSettingsScreen(
                         onValueChange = { urlInput = it },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
-                        label = { Text("URL") }
+                        label = { Text(stringResource(
+                            R.string.domain_list_url_hint)) }
                     )
                     Spacer(Modifier.height(12.dp))
                     Row(
@@ -104,37 +108,67 @@ fun DomainListSettingsScreen(
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Button(
-                            onClick = { guard { viewModel.setDomainListUrl(urlInput.trim()) } },
+                            onClick = { guard {
+                                viewModel.setDomainListUrl(
+                                    urlInput.trim()) } },
                             modifier = Modifier.weight(1f)
-                        ) { Text("保存 URL") }
+                        ) { Text(stringResource(
+                            R.string.domain_list_save_url)) }
                         TextButton(onClick = {
                             urlInput = SettingsDataStore.DEFAULT_DOMAIN_LIST_URL
                             viewModel.resetToDefault()
-                        }) { Text("恢复默认") }
+                        }) { Text(stringResource(
+                            R.string.domain_list_reset_default)) }
                     }
                 }
             }
 
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("列表状态", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text(stringResource(R.string.domain_list_status),
+                        fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(8.dp))
                     when (val s = state) {
-                        is DomainListState.Idle -> StatusRow("状态", "未加载")
-                        is DomainListState.Loading -> StatusRow("状态", "更新中...")
+                        is DomainListState.Idle -> StatusRow(
+                            stringResource(R.string.domain_list_status),
+                            stringResource(R.string.domain_list_status_unloaded))
+                        is DomainListState.Loading -> StatusRow(
+                            stringResource(R.string.domain_list_status),
+                            stringResource(R.string.domain_list_status_loading))
                         is DomainListState.Ready -> {
-                            StatusRow("状态", "已加载")
-                            StatusRow("规则数量", s.matcher.ruleCount.toString())
-                            StatusRow("来源", when (s.source) {
-                                DomainListSource.BUILTIN -> "内置默认"
-                                DomainListSource.DISK -> "本地缓存"
-                                DomainListSource.URL -> "远程下载"
-                            })
-                            StatusRow("更新时间", s.updatedAt?.let(::formatTime) ?: "未知")
+                            StatusRow(
+                                stringResource(R.string.domain_list_status),
+                                stringResource(
+                                    R.string.domain_list_status_loaded))
+                            StatusRow(
+                                stringResource(R.string.domain_list_rule_count),
+                                s.matcher.ruleCount.toString())
+                            StatusRow(
+                                stringResource(R.string.domain_list_source),
+                                when (s.source) {
+                                    DomainListSource.BUILTIN ->
+                                        stringResource(
+                                            R.string.domain_list_source_builtin)
+                                    DomainListSource.DISK ->
+                                        stringResource(
+                                            R.string.domain_list_source_disk)
+                                    DomainListSource.URL ->
+                                        stringResource(
+                                            R.string.domain_list_source_url)
+                                })
+                            StatusRow(
+                                stringResource(
+                                    R.string.domain_list_update_time),
+                                s.updatedAt?.let(::formatTime) ?: "?")
                         }
                         is DomainListState.Error -> {
-                            StatusRow("状态", "更新失败")
-                            StatusRow("错误", s.message)
+                            StatusRow(
+                                stringResource(R.string.domain_list_status),
+                                stringResource(
+                                    R.string.domain_list_status_failed))
+                            StatusRow(
+                                stringResource(R.string.domain_list_status),
+                                s.message)
                         }
                     }
                     Spacer(Modifier.height(16.dp))
@@ -142,7 +176,11 @@ fun DomainListSettingsScreen(
                         onClick = { guard { viewModel.updateList() } },
                         enabled = state !is DomainListState.Loading,
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text(if (state is DomainListState.Loading) "更新中..." else "立即更新") }
+                    ) { Text(
+                        if (state is DomainListState.Loading)
+                            stringResource(R.string.domain_list_updating)
+                        else
+                            stringResource(R.string.domain_list_update_now)) }
                 }
             }
         }
@@ -158,12 +196,14 @@ private fun StatusRow(label: String, value: String) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(label, fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.width(12.dp))
         Text(value, fontSize = 14.sp, fontWeight = FontWeight.Medium)
     }
 }
 
 private fun formatTime(timestamp: Long): String {
-    return SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(timestamp))
+    return SimpleDateFormat("yyyy-MM-dd HH:mm",
+        Locale.getDefault()).format(Date(timestamp))
 }

@@ -51,11 +51,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.data.local.entity.ServerEntity
 import cn.srv0.sshinjector.ui.component.rememberClickGuard
 
@@ -70,7 +72,6 @@ fun ServerEditScreen(
 ) {
     val isNew = serverId == -1L
     val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
 
     var name by remember { mutableStateOf("") }
     var host by remember { mutableStateOf("") }
@@ -112,10 +113,13 @@ fun ServerEditScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text(if (isNew) "添加服务器" else "编辑服务器") },
+                title = { Text(if (isNew)
+                    stringResource(R.string.server_add)
+                else stringResource(R.string.server_edit)) },
                 navigationIcon = {
                     IconButton(onClick = onCancel) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.back))
                     }
                 },
                 actions = {
@@ -139,9 +143,13 @@ fun ServerEditScreen(
                             }
                         }
                     ) {
-                        Icon(imageVector = Icons.Default.Check, contentDescription = "保存", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                        Icon(imageVector = Icons.Default.Check,
+                            contentDescription = stringResource(R.string.save),
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.primary)
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("保存", color = MaterialTheme.colorScheme.primary)
+                        Text(stringResource(R.string.server_save),
+                            color = MaterialTheme.colorScheme.primary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -161,55 +169,85 @@ fun ServerEditScreen(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface),
                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("基础配置", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text(stringResource(R.string.server_field_basic),
+                        fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextFieldRow("名称", "我的 VPS", name, { name = it })
-                    OutlinedTextFieldRow("主机", "example.com", host, { host = it }, singleLine = true)
-                    OutlinedTextFieldRow("端口", "22", port, { port = it }, singleLine = true, numeric = true)
-                    OutlinedTextFieldRow("用户名", "root", username, { username = it }, singleLine = true)
-                    KeyAliasSelector(keyAlias, availableKeys, showKeyDropdown, onSelect = { keyAlias = it; showKeyDropdown = false }, onToggleDropdown = { showKeyDropdown = !showKeyDropdown }, onGenerate = { viewModel.generateAndAssociate { newAlias -> keyAlias = newAlias } })
+                    OutlinedTextFieldRow(stringResource(R.string.server_name),
+                        stringResource(R.string.server_placeholder_name),
+                        name, { name = it })
+                    OutlinedTextFieldRow(stringResource(R.string.server_host),
+                        stringResource(R.string.server_placeholder_host),
+                        host, { host = it }, singleLine = true)
+                    OutlinedTextFieldRow(stringResource(R.string.server_port),
+                        stringResource(R.string.server_placeholder_port),
+                        port, { port = it }, singleLine = true, numeric = true)
+                    OutlinedTextFieldRow(stringResource(R.string.server_username),
+                        stringResource(R.string.server_placeholder_username),
+                        username, { username = it }, singleLine = true)
+                    KeyAliasSelector(keyAlias, availableKeys, showKeyDropdown,
+                        onSelect = { keyAlias = it; showKeyDropdown = false },
+                        onToggleDropdown = { showKeyDropdown = !showKeyDropdown },
+                        onGenerate = {
+                            viewModel.generateAndAssociate {
+                                newAlias -> keyAlias = newAlias } })
                 }
             }
 
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface),
                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("隧道配置", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text(stringResource(R.string.server_field_tunnel),
+                        fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextFieldRow("本地 SOCKS 端口", "1080", socksPort, { socksPort = it }, singleLine = true, numeric = true)
+                    OutlinedTextFieldRow(
+                        stringResource(R.string.server_socks_port),
+                        stringResource(R.string.server_placeholder_socks),
+                        socksPort, { socksPort = it },
+                        singleLine = true, numeric = true)
                 }
             }
 
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface),
                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("网络配置", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text(stringResource(R.string.server_field_network),
+                        fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
-                    SwitchRow("设置为默认服务器", setAsDefault, { setAsDefault = it })
-                    SwitchRow("启用 IPv6", enableIPv6, { enableIPv6 = it })
-                    OutlinedTextFieldRow("MTU", "1500", mtu, { mtu = it }, singleLine = true, numeric = true)
-                    OutlinedTextFieldRow("保活间隔 (秒)", "30", keepAlive, { keepAlive = it }, singleLine = true, numeric = true)
+                    SwitchRow(stringResource(R.string.server_set_default),
+                        setAsDefault, { setAsDefault = it })
+                    SwitchRow(stringResource(R.string.server_enable_ipv6),
+                        enableIPv6, { enableIPv6 = it })
+                    OutlinedTextFieldRow(
+                        stringResource(R.string.server_mtu), "1500",
+                        mtu, { mtu = it }, singleLine = true, numeric = true)
+                    OutlinedTextFieldRow(
+                        stringResource(R.string.server_keepalive), "30",
+                        keepAlive, { keepAlive = it },
+                        singleLine = true, numeric = true)
                 }
             }
 
@@ -228,7 +266,8 @@ fun ServerEditScreen(
                     ) {
                         Button(
                             modifier = Modifier.fillMaxWidth(),
-                            onClick = { guard { viewModel.delete(serverId, onSave) } },
+                            onClick = { guard {
+                                viewModel.delete(serverId, onSave) } },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.error,
                                 contentColor = MaterialTheme.colorScheme.onError
@@ -239,9 +278,11 @@ fun ServerEditScreen(
                                 horizontalArrangement = Arrangement.Center,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(20.dp))
+                                Icon(Icons.Default.Delete,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("删除服务器")
+                                Text(stringResource(R.string.server_delete))
                             }
                         }
                     }
@@ -274,7 +315,8 @@ fun OutlinedTextFieldRow(
 }
 
 @Composable
-fun SwitchRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+fun SwitchRow(label: String, checked: Boolean,
+              onCheckedChange: (Boolean) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -308,9 +350,11 @@ fun KeyAliasSelector(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.Center
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Icon(Icons.Default.Add, contentDescription = null,
+                        modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("生成新密钥并关联", fontSize = 14.sp)
+                    Text(stringResource(R.string.server_generate_and_assoc),
+                        fontSize = 14.sp)
                 }
             }
         } else {
@@ -319,10 +363,13 @@ fun KeyAliasSelector(
                     value = selectedAlias,
                     onValueChange = {},
                     readOnly = true,
-                    label = { Text("密钥") },
-                    placeholder = { Text("点击选择密钥...") },
+                    label = { Text(stringResource(R.string.server_key)) },
+                    placeholder = { Text(
+                        stringResource(R.string.server_key_placeholder)) },
                     trailingIcon = {
-                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(24.dp))
+                        Icon(Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            modifier = Modifier.size(24.dp))
                     },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -342,15 +389,20 @@ fun KeyAliasSelector(
                             text = { Text(key) },
                             onClick = { onSelect(key) },
                             trailingIcon = if (key == selectedAlias) {
-                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                                { Icon(Icons.Default.Check,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)) }
                             } else null
                         )
                     }
                     HorizontalDivider()
                     DropdownMenuItem(
-                        text = { Text("生成新密钥", color = MaterialTheme.colorScheme.primary) },
+                        text = { Text(stringResource(R.string.server_generate_key),
+                            color = MaterialTheme.colorScheme.primary) },
                         onClick = onGenerate,
-                        leadingIcon = { Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                        leadingIcon = { Icon(Icons.Default.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)) }
                     )
                 }
             }

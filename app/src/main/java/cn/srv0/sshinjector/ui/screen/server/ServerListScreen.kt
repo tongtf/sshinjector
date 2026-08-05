@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -22,7 +21,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -43,13 +41,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
+import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.data.local.entity.ServerEntity
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -66,7 +65,8 @@ fun ServerListScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     val fragmentActivity = context as? androidx.fragment.app.FragmentActivity
-    val biometricAuth = fragmentActivity?.let { cn.srv0.sshinjector.ui.biometric.BiometricAuth.from(it) }
+    val biometricAuth = fragmentActivity?.let {
+        cn.srv0.sshinjector.ui.biometric.BiometricAuth.from(it) }
 
     LaunchedEffect(servers, connectingServerId) {
         if (connectingServerId != null) {
@@ -87,15 +87,17 @@ fun ServerListScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text("服务器管理") },
+                title = { Text(stringResource(R.string.server_title)) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.back))
                     }
                 },
                 actions = {
                     IconButton(onClick = onAddServer) {
-                        Icon(imageVector = Icons.Default.Add, contentDescription = "添加服务器")
+                        Icon(imageVector = Icons.Default.Add,
+                            contentDescription = stringResource(R.string.server_add))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -112,9 +114,11 @@ fun ServerListScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("暂无服务器", fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.server_no_servers), fontSize = 18.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("点击右上角 + 添加", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
+                    Text(stringResource(R.string.server_add_hint), fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
                 }
             }
         } else {
@@ -130,17 +134,24 @@ fun ServerListScreen(
                         server = server,
                         isConnecting = connectingServerId == server.id,
                         onEdit = { onEditServer(server.id) },
-                        onConnect = { 
+                        onConnect = {
                             if (server.isActive || connectingServerId == server.id) {
                                 viewModel.disconnect()
-                                android.widget.Toast.makeText(context, "正在断开连接", android.widget.Toast.LENGTH_SHORT).show()
+                                android.widget.Toast.makeText(context,
+                                    context.getString(R.string.dashboard_disconnecting),
+                                    android.widget.Toast.LENGTH_SHORT).show()
                             } else {
                                 val onGranted = {
                                     viewModel.connect(server.id)
-                                    android.widget.Toast.makeText(context, "正在连接 ${server.name}", android.widget.Toast.LENGTH_SHORT).show()
+                                    android.widget.Toast.makeText(context,
+                                        context.getString(
+                                            R.string.dashboard_connecting_to).format(
+                                            server.name),
+                                        android.widget.Toast.LENGTH_SHORT).show()
                                 }
                                 if (fragmentActivity != null && biometricAuth != null) {
-                                    biometricAuth.connectIfAllowed(fragmentActivity, server.keyAlias, onGranted)
+                                    biometricAuth.connectIfAllowed(
+                                        fragmentActivity, server.keyAlias, onGranted)
                                 } else {
                                     onGranted()
                                 }
@@ -150,7 +161,9 @@ fun ServerListScreen(
                             viewModel.toggleDefault(server.id)
                             android.widget.Toast.makeText(
                                 context,
-                                if (server.isActive) "已取消默认" else "已设为默认",
+                                if (server.isActive)
+                                    context.getString(R.string.server_default_unset)
+                                else context.getString(R.string.server_default_set),
                                 android.widget.Toast.LENGTH_SHORT
                             ).show()
                         }
@@ -171,7 +184,8 @@ fun ServerCard(
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (server.isActive || isConnecting) 4.dp else 1.dp),
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = if (server.isActive || isConnecting) 4.dp else 1.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (server.isActive)
                 MaterialTheme.colorScheme.primaryContainer
@@ -193,7 +207,9 @@ fun ServerCard(
                     IconButton(onClick = onToggleDefault) {
                         Icon(
                             imageVector = Icons.Default.Star,
-                            contentDescription = if (server.isActive) "取消默认" else "设为默认",
+                            contentDescription = if (server.isActive)
+                                stringResource(R.string.dashboard_unset_default)
+                            else stringResource(R.string.dashboard_set_default),
                             modifier = Modifier.size(24.dp),
                             tint = if (server.isActive)
                                 MaterialTheme.colorScheme.primary
@@ -209,7 +225,9 @@ fun ServerCard(
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            color = if (server.isActive) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                            color = if (server.isActive)
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            else MaterialTheme.colorScheme.onSurface
                         )
                         Text(
                             text = "${server.username}@${server.host}:${server.port}",
@@ -226,12 +244,13 @@ fun ServerCard(
                 if (server.isActive) {
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "当前",
+                        text = stringResource(R.string.server_current),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier
-                            .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(4.dp))
+                            .background(MaterialTheme.colorScheme.primaryContainer,
+                                RoundedCornerShape(4.dp))
                             .padding(horizontal = 8.dp, vertical = 2.dp)
                     )
                 }
@@ -244,9 +263,13 @@ fun ServerCard(
                         )
                     } else {
                         Icon(
-                            if (server.isActive) Icons.Default.Close else Icons.Default.PlayArrow,
-                            contentDescription = if (server.isActive) "断开" else "连接",
-                            tint = if (server.isActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                            if (server.isActive) Icons.Default.Close
+                            else Icons.Default.PlayArrow,
+                            contentDescription = if (server.isActive)
+                                stringResource(R.string.server_disconnect)
+                            else stringResource(R.string.server_connect),
+                            tint = if (server.isActive) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.primary
                         )
                     }
                 }
@@ -254,9 +277,15 @@ fun ServerCard(
 
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = "MTU: ${server.mtu} | KeepAlive: ${server.keepAliveInterval}s | IPv6: ${if (server.enableIPv6) "开" else "关"}",
+                text = stringResource(R.string.server_mtu_info,
+                    server.mtu, server.keepAliveInterval,
+                    if (server.enableIPv6)
+                        stringResource(R.string.server_ipv6_on)
+                    else
+                        stringResource(R.string.server_ipv6_off)),
                 fontSize = 12.sp,
-                color = if (server.isActive) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f)
+                color = if (server.isActive)
+                    MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f)
                 else MaterialTheme.colorScheme.onSurfaceVariant
             )
         }

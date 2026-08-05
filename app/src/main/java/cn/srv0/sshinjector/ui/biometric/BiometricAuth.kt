@@ -1,10 +1,12 @@
 package cn.srv0.sshinjector.ui.biometric
 
+import android.content.Context
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.biometric.BiometricPrompt.PromptInfo
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.data.remote.ssh.SshKeyManager
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
@@ -48,8 +50,8 @@ class BiometricAuth @Inject constructor(
         })
         val promptInfo = PromptInfo.Builder()
             .setTitle(title)
-            .setSubtitle("验证身份以解锁 SSH 密钥")
-            .setNegativeButtonText("取消")
+            .setSubtitle(activity.getString(R.string.settings_verify_identity_sub))
+            .setNegativeButtonText(activity.getString(R.string.cancel))
             .setAllowedAuthenticators(
                 androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
             )

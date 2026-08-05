@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -34,11 +35,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import cn.srv0.sshinjector.R
+import cn.srv0.sshinjector.ui.locale.LocaleManager
 import cn.srv0.sshinjector.ui.viewmodel.dnsModeLabel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -56,8 +61,10 @@ fun SettingsScreen(
     val keepAlive by viewModel.keepAlive.collectAsState()
     val enableIPv6 by viewModel.enableIPv6.collectAsState()
     val dnsMode by viewModel.dnsMode.collectAsState()
+    val language by viewModel.language.collectAsState()
     var showDnsDialog by remember { mutableStateOf(false) }
     var showBiometricDialog by remember { mutableStateOf(false) }
+    var showLangDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val fragmentActivity = context as? androidx.fragment.app.FragmentActivity
     val biometricAuth = fragmentActivity?.let { cn.srv0.sshinjector.ui.biometric.BiometricAuth.from(it) }
@@ -65,7 +72,7 @@ fun SettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("设置") },
+                title = { Text(stringResource(R.string.settings_title)) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surfaceContainer
                 )
@@ -78,29 +85,33 @@ fun SettingsScreen(
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
         ) {
-            SettingsSection("管理") {
+            SettingsSection(stringResource(R.string.settings_management)) {
                 SettingsRow(
-                    title = "服务器管理",
-                    subtitle = "添加、编辑或连接服务器",
-                    trailing = { Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                    title = stringResource(R.string.settings_server_management),
+                    subtitle = stringResource(R.string.settings_server_management_desc),
+                    trailing = { Icon(Icons.Default.Settings, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary) },
                     onClick = onNavigateToServerManagement
                 )
                 SettingsRow(
-                    title = "密钥管理",
-                    subtitle = "查看、生成、导入或复制密钥",
-                    trailing = { Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                    title = stringResource(R.string.settings_key_management),
+                    subtitle = stringResource(R.string.settings_key_management_desc),
+                    trailing = { Icon(Icons.Default.Settings, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary) },
                     onClick = onNavigateToKeyManagement
                 )
                 SettingsRow(
-                    title = "应用白名单",
-                    subtitle = "选择进入 VPN 隧道的应用",
-                    trailing = { Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                    title = stringResource(R.string.settings_whitelist),
+                    subtitle = stringResource(R.string.settings_whitelist_desc),
+                    trailing = { Icon(Icons.Default.Settings, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary) },
                     onClick = onNavigateToWhitelist
                 )
             }
 
-            SettingsSection("网络") {
-                Text("MTU: $mtu", fontSize = 14.sp, modifier = Modifier.padding(start = 16.dp, top = 8.dp))
+            SettingsSection(stringResource(R.string.settings_network)) {
+                Text(stringResource(R.string.settings_mtu, mtu), fontSize = 14.sp,
+                    modifier = Modifier.padding(start = 16.dp, top = 8.dp))
                 Slider(
                     value = mtu.toFloat(),
                     onValueChange = { viewModel.setMtu(it.toInt()) },
@@ -111,7 +122,8 @@ fun SettingsScreen(
                         .padding(horizontal = 16.dp)
                 )
 
-                Text("保活间隔: ${keepAlive}s", fontSize = 14.sp, modifier = Modifier.padding(start = 16.dp, top = 8.dp))
+                Text(stringResource(R.string.settings_keepalive, keepAlive), fontSize = 14.sp,
+                    modifier = Modifier.padding(start = 16.dp, top = 8.dp))
                 Slider(
                     value = keepAlive.toFloat(),
                     onValueChange = { viewModel.setKeepAlive(it.toInt()) },
@@ -123,13 +135,14 @@ fun SettingsScreen(
                 )
 
                 SettingsRow(
-                    title = "IPv6 支持",
-                    subtitle = "启用 IPv6 双栈",
-                    trailing = { Switch(checked = enableIPv6, onCheckedChange = { viewModel.setEnableIPv6(it) }) }
+                    title = stringResource(R.string.settings_ipv6),
+                    subtitle = stringResource(R.string.settings_ipv6_desc),
+                    trailing = { Switch(checked = enableIPv6,
+                        onCheckedChange = { viewModel.setEnableIPv6(it) }) }
                 )
 
                 SettingsRow(
-                    title = "连接模式",
+                    title = stringResource(R.string.settings_connection_mode),
                     subtitle = dnsModeLabel(dnsMode),
                     trailing = {
                         Text(
@@ -142,23 +155,36 @@ fun SettingsScreen(
                 )
 
                 SettingsRow(
-                    title = "域名列表",
-                    subtitle = "配置域名分流列表 (仅域名分流模式生效)",
-                    trailing = { Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                    title = stringResource(R.string.settings_domain_list),
+                    subtitle = stringResource(R.string.settings_domain_list_desc),
+                    trailing = { Icon(Icons.Default.Settings, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary) },
                     onClick = onNavigateToDomainListSettings
+                )
+
+                SettingsRow(
+                    title = stringResource(R.string.settings_language),
+                    subtitle = LocaleManager.getDisplayLabel(language, context),
+                    trailing = {
+                        Text(
+                            text = LocaleManager.getDisplayLabel(language, context),
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    },
+                    onClick = { showLangDialog = true }
                 )
             }
 
-            SettingsSection("安全") {
+            SettingsSection(stringResource(R.string.settings_security)) {
                 SettingsRow(
-                    title = "生物识别解锁",
-                    subtitle = "使用指纹/面部识别保护密钥",
+                    title = stringResource(R.string.settings_biometric_unlock),
+                    subtitle = stringResource(R.string.settings_biometric_unlock_desc),
                     trailing = {
                         Switch(
                             checked = biometricUnlock,
                             onCheckedChange = { enabled ->
                                 if (!enabled && biometricUnlock) {
-                                    // 关闭时需要验证
                                     showBiometricDialog = true
                                 } else {
                                     viewModel.setBiometricUnlock(enabled)
@@ -169,29 +195,76 @@ fun SettingsScreen(
                 )
             }
 
-            SettingsSection("关于") {
-                SettingsRow("版本", "1.0.0", trailing = {})
-                SettingsRow("开源协议", "MIT License", trailing = {})
+            SettingsSection(stringResource(R.string.settings_about)) {
+                SettingsRow(stringResource(R.string.settings_version), "1.0.2", trailing = {})
+                SettingsRow(stringResource(R.string.settings_license), "MIT License", trailing = {})
                 SettingsRow(
-                    title = "GitHub",
-                    subtitle = "查看源代码",
-                    trailing = { Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+                    title = stringResource(R.string.settings_github),
+                    subtitle = stringResource(R.string.settings_github_desc),
+                    trailing = { Icon(Icons.Default.Info, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary) }
                 )
             }
         }
     }
 
+    if (showLangDialog) {
+        val langOptions = listOf(
+            LocaleManager.LANGUAGE_SYSTEM,
+            LocaleManager.LANGUAGE_CHINESE,
+            LocaleManager.LANGUAGE_ENGLISH
+        )
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showLangDialog = false },
+            title = { Text(stringResource(R.string.language_dialog_title)) },
+            text = {
+                Column {
+                    langOptions.forEach { code ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { viewModel.setLanguage(code); showLangDialog = false }
+                                .padding(vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(LocaleManager.getDisplayLabel(code, context), fontSize = 16.sp)
+                            if (language == code) {
+                                Icon(Icons.Default.Settings, contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        stringResource(R.string.language_after_change),
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = { TextButton(onClick = { showLangDialog = false }) {
+                Text(stringResource(R.string.cancel)) }
+            }
+        )
+    }
+
+
     if (showDnsDialog) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { showDnsDialog = false },
-            title = { Text("连接模式") },
+            title = { Text(stringResource(R.string.settings_connection_mode_title)) },
             text = {
                 Column {
                     listOf(
-                        0 to "远程代理" to "全部流量走 VPN 隧道 (SOCKS5)",
-                        1 to "本地直连" to "全部流量走物理网卡，不经过 VPN",
-                        2 to "白名单模式" to "白名单应用走 VPN，其余走物理网卡",
-                        3 to "域名分流" to "命中域名列表走隧道，其余域名直连"
+                        0 to stringResource(R.string.dashboard_dns_remote) to
+                            stringResource(R.string.dns_remote_desc),
+                        1 to stringResource(R.string.dashboard_dns_direct) to
+                            stringResource(R.string.dns_direct_desc),
+                        2 to stringResource(R.string.dashboard_dns_whitelist) to
+                            stringResource(R.string.dns_whitelist_desc),
+                        3 to stringResource(R.string.dashboard_dns_domain) to
+                            stringResource(R.string.dns_domain_desc)
                     ).forEach { (item, desc) ->
                         val (value, label) = item
                         Row(
@@ -208,21 +281,24 @@ fun SettingsScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             if (dnsMode == value) {
-                                Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Icon(Icons.Default.Settings, contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary)
                             }
                         }
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { showDnsDialog = false }) { Text("取消") } }
+            confirmButton = { TextButton(onClick = { showDnsDialog = false }) {
+                Text(stringResource(R.string.cancel)) }
+            }
         )
     }
 
     if (showBiometricDialog) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { showBiometricDialog = false },
-            title = { Text("关闭生物识别解锁") },
-            text = { Text("关闭后将不再使用指纹/面部识别保护密钥，请验证身份以确认。") },
+            title = { Text(stringResource(R.string.settings_biometric_disable_title)) },
+            text = { Text(stringResource(R.string.settings_biometric_disable_msg)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -231,16 +307,18 @@ fun SettingsScreen(
                         if (activity != null && biometricAuth != null) {
                             biometricAuth.authenticate(
                                 activity = activity,
-                                title = "验证身份",
+                                title = context.getString(R.string.settings_verify_identity),
                                 onSuccess = { viewModel.setBiometricUnlock(false) },
                                 onCancelled = {}
                             )
                         }
                     }
-                ) { Text("验证并关闭") }
+                ) { Text(stringResource(R.string.settings_biometric_verify)) }
             },
             dismissButton = {
-                TextButton(onClick = { showBiometricDialog = false }) { Text("取消") }
+                TextButton(onClick = { showBiometricDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
             }
         )
     }
@@ -293,7 +371,8 @@ fun SettingsRow(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(text = title, fontSize = 16.sp)
-            Text(text = subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(text = subtitle, fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Spacer(Modifier.width(12.dp))
         trailing()

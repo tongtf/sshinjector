@@ -53,12 +53,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.data.remote.ssh.KeyKind
 import cn.srv0.sshinjector.ui.component.rememberClickGuard
 import kotlinx.coroutines.launch
@@ -72,6 +75,7 @@ fun KeyManagerScreen(
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val keys by viewModel.keys.collectAsState()
     val activeKey by viewModel.activeKey.collectAsState()
 
@@ -94,15 +98,17 @@ fun KeyManagerScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("密钥管理") },
+                title = { Text(stringResource(R.string.key_title)) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.back))
                     }
                 },
                 actions = {
                     IconButton(onClick = { showGenerateDialog = true }) {
-                        Icon(Icons.Default.Add, contentDescription = "生成密钥")
+                        Icon(Icons.Default.Add,
+                            contentDescription = stringResource(R.string.key_generate))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -120,7 +126,6 @@ fun KeyManagerScreen(
                 .padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // 当前密钥
             if (activeKey != null) {
                 val key = activeKey!!
                 Card(
@@ -139,7 +144,7 @@ fun KeyManagerScreen(
                         ) {
                             Column {
                                 Text(
-                                    "当前密钥",
+                                    stringResource(R.string.key_current),
                                     fontSize = 12.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -161,7 +166,7 @@ fun KeyManagerScreen(
                         Spacer(modifier = Modifier.height(20.dp))
 
                         Text(
-                            "公钥",
+                            stringResource(R.string.key_public),
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -169,7 +174,8 @@ fun KeyManagerScreen(
                         Surface(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(
+                                alpha = 0.3f)
                         ) {
                             Row(
                                 modifier = Modifier
@@ -186,18 +192,26 @@ fun KeyManagerScreen(
                                     modifier = Modifier.weight(1f)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Button(
+Button(
                                     onClick = {
-                                        val success = viewModel.copyPublicKey(key.publicKey)
+                                        val success =
+                                            viewModel.copyPublicKey(
+                                                key.publicKey)
+                                        val ok = context.resources.getString(
+                                            R.string.dashboard_copy_success)
+                                        val ko = context.resources.getString(
+                                            R.string.dashboard_copy_failed)
                                         scope.launch {
                                             snackbarHostState.showSnackbar(
-                                                if (success) "已复制" else "失败"
+                                                if (success) ok else ko
                                             )
                                         }
                                     },
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                                    contentPadding = PaddingValues(
+                                        horizontal = 12.dp, vertical = 8.dp)
                                 ) {
-                                    Text("复制", fontSize = 12.sp)
+                                    Text(stringResource(R.string.copy),
+                                        fontSize = 12.sp)
                                 }
                             }
                         }
@@ -205,7 +219,6 @@ fun KeyManagerScreen(
                 }
             }
 
-            // 操作按钮
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -214,7 +227,8 @@ fun KeyManagerScreen(
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(12.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            .copy(alpha = 0.5f)
                     ),
                     onClick = { showGenerateDialog = true }
                 ) {
@@ -231,7 +245,8 @@ fun KeyManagerScreen(
                             modifier = Modifier.size(24.dp)
                         )
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text("生成密钥", fontSize = 14.sp)
+                        Text(stringResource(R.string.key_generate),
+                            fontSize = 14.sp)
                     }
                 }
 
@@ -239,7 +254,8 @@ fun KeyManagerScreen(
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(12.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            .copy(alpha = 0.5f)
                     ),
                     onClick = { showImportDialog = true }
                 ) {
@@ -256,12 +272,12 @@ fun KeyManagerScreen(
                             modifier = Modifier.size(24.dp)
                         )
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text("导入密钥", fontSize = 14.sp)
+                        Text(stringResource(R.string.key_import),
+                            fontSize = 14.sp)
                     }
                 }
             }
 
-            // 密钥列表
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -277,13 +293,15 @@ fun KeyManagerScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            "已保存密钥",
+                            stringResource(R.string.key_saved),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold
                         )
                         if (keys.isNotEmpty()) {
                             TextButton(onClick = { showDeleteAllDialog = true }) {
-                                Text("清除全部", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                                Text(stringResource(R.string.key_clear_all),
+                                    color = MaterialTheme.colorScheme.error,
+                                    fontSize = 12.sp)
                             }
                         }
                     }
@@ -291,7 +309,7 @@ fun KeyManagerScreen(
 
                     if (keys.isEmpty()) {
                         Text(
-                            "暂无密钥",
+                            stringResource(R.string.key_no_keys),
                             fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -302,12 +320,18 @@ fun KeyManagerScreen(
                                 algorithm = key.algorithm,
                                 createdAt = key.createdAt,
                                 kind = key.kind,
-                                isBiometricProtected = key.isBiometricProtected,
+                                 isBiometricProtected = key.isBiometricProtected,
                                 onCopy = {
-                                    val success = viewModel.copyPublicKey(key.publicKey)
+                                    val success =
+                                        viewModel.copyPublicKey(
+                                            key.publicKey)
+                                    val ok = context.resources.getString(
+                                        R.string.dashboard_copy_success)
+                                     val ko = context.resources.getString(
+                                        R.string.dashboard_copy_failed)
                                     scope.launch {
                                         snackbarHostState.showSnackbar(
-                                            if (success) "已复制" else "失败"
+                                            if (success) ok else ko
                                         )
                                     }
                                 },
@@ -322,18 +346,17 @@ fun KeyManagerScreen(
                         }
                     }
                 }
-            }
 
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
 
-    // 对话框
     if (showGenerateDialog) {
         GenerateKeyDialog(
             onConfirm = { algo ->
                 showGenerateDialog = false
-                viewModel.generateKeyPair("key_${System.currentTimeMillis()}", algo, false)
+                viewModel.generateKeyPair(
+                    "key_${System.currentTimeMillis()}", algo, false)
             },
             onDismiss = { showGenerateDialog = false },
             selectedAlgorithm = generateAlgorithm,
@@ -363,8 +386,9 @@ fun KeyManagerScreen(
     if (showDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
-            title = { Text("删除密钥") },
-            text = { Text("确定要删除 \"$keyToDelete\" 吗？") },
+            title = { Text(stringResource(R.string.key_delete_title)) },
+            text = { Text(stringResource(R.string.key_delete_msg,
+                keyToDelete)) },
             confirmButton = {
                 val guard = rememberClickGuard()
                 Button(
@@ -372,19 +396,23 @@ fun KeyManagerScreen(
                         guard {
                             viewModel.deleteKey(keyToDelete)
                             showDeleteDialog = false
-                            scope.launch { snackbarHostState.showSnackbar("已删除") }
+                            val msg = context.resources.getString(
+                                R.string.key_deleted)
+                            scope.launch {
+                                snackbarHostState.showSnackbar(msg)
+                            }
                         }
                     },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error
                     )
                 ) {
-                    Text("删除")
+                    Text(stringResource(R.string.delete))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteDialog = false }) {
-                    Text("取消")
+                    Text(stringResource(R.string.cancel))
                 }
             }
         )
@@ -393,8 +421,8 @@ fun KeyManagerScreen(
     if (showDeleteAllDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteAllDialog = false },
-            title = { Text("清除所有密钥") },
-            text = { Text("确定要删除所有密钥吗？如果密钥需要生物识别认证无法访问，删除后可重新生成。") },
+            title = { Text(stringResource(R.string.key_clear_all_title)) },
+            text = { Text(stringResource(R.string.key_clear_all_msg)) },
             confirmButton = {
                 val guard = rememberClickGuard()
                 Button(
@@ -402,24 +430,262 @@ fun KeyManagerScreen(
                         guard {
                             viewModel.deleteAllKeys()
                             showDeleteAllDialog = false
-                            scope.launch { snackbarHostState.showSnackbar("已清除所有密钥") }
+                            val msg = context.resources.getString(
+                                R.string.key_cleared_all)
+                            scope.launch {
+                                snackbarHostState.showSnackbar(msg)
+                            }
                         }
                     },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error
                     )
                 ) {
-                    Text("清除")
+                    Text(stringResource(R.string.clear))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteAllDialog = false }) {
-                    Text("取消")
+                    Text(stringResource(R.string.cancel))
                 }
             }
         )
     }
 }
+
+@Composable
+fun KeyListItem(
+    alias: String,
+    algorithm: String,
+    createdAt: String,
+    kind: KeyKind,
+    isBiometricProtected: Boolean,
+    onCopy: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically) {
+                KeyKindIcon(
+                    kind = kind,
+                    isBiometricProtected = isBiometricProtected,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(alias, fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "$algorithm • $createdAt",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = onCopy,
+                    contentPadding = PaddingValues(
+                        horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(stringResource(R.string.copy), fontSize = 12.sp)
+                }
+                OutlinedButton(
+                    onClick = onDelete,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    ),
+                    contentPadding = PaddingValues(
+                        horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(stringResource(R.string.delete), fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun KeyKindIcon(
+    kind: KeyKind,
+    isBiometricProtected: Boolean,
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant
+) {
+    val imageVector: androidx.compose.ui.graphics.vector.ImageVector
+    val color: Color
+    when {
+        kind == KeyKind.GENERATED && isBiometricProtected -> {
+            imageVector = Icons.Default.Lock
+            color = MaterialTheme.colorScheme.primary
+        }
+        kind == KeyKind.GENERATED -> {
+            imageVector = Icons.Default.Lock
+            color = tint
+        }
+        kind == KeyKind.IMPORTED_PRIVATE -> {
+            imageVector = Icons.Default.Edit
+            color = MaterialTheme.colorScheme.tertiary
+        }
+        else -> {
+            imageVector = Icons.Default.Send
+            color = tint
+        }
+    }
+    Icon(imageVector = imageVector, contentDescription = null,
+        modifier = modifier, tint = color)
+}
+
+@Composable
+fun GenerateKeyDialog(
+    onConfirm: (Int) -> Unit,
+    onDismiss: () -> Unit,
+    selectedAlgorithm: Int,
+    onAlgorithmChange: (Int) -> Unit
+) {
+    val algorithms = listOf("ECDSA P-256", "RSA 2048", "ECDSA P-384",
+        "Ed25519")
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.key_generate)) },
+        text = {
+            Column {
+                algorithms.forEachIndexed { index, name ->
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (selectedAlgorithm == index)
+                            MaterialTheme.colorScheme.primaryContainer
+                        else
+                            MaterialTheme.colorScheme.surfaceVariant.copy(
+                                alpha = 0.3f),
+                        onClick = { onAlgorithmChange(index) }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(name, fontSize = 14.sp)
+                            if (selectedAlgorithm == index) {
+                                Text("✓",
+                                    color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            val guard = rememberClickGuard()
+            Button(onClick = {
+                guard { onConfirm(selectedAlgorithm) } }) {
+                Text(stringResource(R.string.generate))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        }
+    )
+}
+
+@Composable
+fun ImportKeyDialog(
+    onConfirm: (isPublic: Boolean, keyContent: String) -> Unit,
+    onDismiss: () -> Unit,
+    isPublic: Boolean,
+    onIsPublicChange: (Boolean) -> Unit,
+    keyContent: String,
+    onKeyContentChange: (String) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.key_import)) },
+        text = {
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    listOf(false to stringResource(R.string.key_private),
+                        true to stringResource(R.string.key_public))
+                        .forEach { (value, label) ->
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { onIsPublicChange(value) },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isPublic == value)
+                                MaterialTheme.colorScheme.primaryContainer
+                            else
+                                MaterialTheme.colorScheme.surfaceVariant.copy(
+                                    alpha = 0.3f)
+                        ) {
+                            Text(
+                                text = label,
+                                fontSize = 14.sp,
+                                fontWeight = if (isPublic == value)
+                                    FontWeight.Bold else FontWeight.Normal,
+                                color = if (isPublic == value)
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                else
+                                    MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(
+                                    horizontal = 16.dp, vertical = 10.dp)
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                TextField(
+                    value = keyContent,
+                    onValueChange = onKeyContentChange,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(150.dp),
+                    placeholder = {
+                        Text(
+                            if (isPublic) "ssh-rsa AAA..." else "..."
+                        )
+                    }
+                )
+            }
+        },
+        confirmButton = {
+            val guard = rememberClickGuard()
+            Button(
+                onClick = { guard { onConfirm(isPublic, keyContent) } },
+                enabled = keyContent.isNotBlank()
+            ) {
+                Text(stringResource(R.string.import_))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        }
+    )
+}}
 
 @Composable
 fun KeyListItem(
@@ -465,7 +731,7 @@ fun KeyListItem(
                     onClick = onCopy,
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                 ) {
-                    Text("复制", fontSize = 12.sp)
+                    Text(stringResource(R.string.copy), fontSize = 12.sp)
                 }
                 OutlinedButton(
                     onClick = onDelete,
@@ -474,7 +740,7 @@ fun KeyListItem(
                     ),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                 ) {
-                    Text("删除", fontSize = 12.sp)
+                    Text(stringResource(R.string.delete), fontSize = 12.sp)
                 }
             }
         }
@@ -529,7 +795,7 @@ fun GenerateKeyDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("生成密钥") },
+        title = { Text(stringResource(R.string.key_generate)) },
         text = {
             Column {
                 algorithms.forEachIndexed { index, name ->
@@ -563,12 +829,12 @@ fun GenerateKeyDialog(
         confirmButton = {
             val guard = rememberClickGuard()
             Button(onClick = { guard { onConfirm(selectedAlgorithm) } }) {
-                Text("生成")
+                Text(stringResource(R.string.generate))
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("取消")
+                Text(stringResource(R.string.cancel))
             }
         }
     )
@@ -585,14 +851,14 @@ fun ImportKeyDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("导入密钥") },
+        title = { Text(stringResource(R.string.key_import)) },
         text = {
             Column {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    listOf(false to "私钥", true to "公钥").forEach { (value, label) ->
+                    listOf(false to stringResource(R.string.key_private), true to stringResource(R.string.key_public)).forEach { (value, label) ->
                         Surface(
                             modifier = Modifier
                                 .weight(1f)
@@ -625,7 +891,7 @@ fun ImportKeyDialog(
                         .height(150.dp),
                     placeholder = {
                         Text(
-                            if (isPublic) "粘贴公钥内容 (ssh-rsa AAA...)" else "粘贴私钥内容..."
+                            if (isPublic) "ssh-rsa AAA..." else "..."
                         )
                     }
                 )
@@ -637,12 +903,12 @@ fun ImportKeyDialog(
                 onClick = { guard { onConfirm(isPublic, keyContent) } },
                 enabled = keyContent.isNotBlank()
             ) {
-                Text("导入")
+                Text(stringResource(R.string.import_))
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("取消")
+                Text(stringResource(R.string.cancel))
             }
         }
     )

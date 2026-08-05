@@ -37,6 +37,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.compose.ui.res.stringResource
+import cn.srv0.sshinjector.R
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -54,10 +56,11 @@ fun KeyAddScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("添加密钥") },
+                title = { Text(stringResource(R.string.key_add_title)) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.back))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -78,7 +81,8 @@ fun KeyAddScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        .copy(alpha = 0.5f)
                 ),
                 onClick = { showGenerateDialog = true }
             ) {
@@ -95,10 +99,10 @@ fun KeyAddScreen(
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("生成密钥", fontSize = 16.sp)
+                    Text(stringResource(R.string.key_generate), fontSize = 16.sp)
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        "本地生成密钥对，存入系统密钥库",
+                        stringResource(R.string.key_generate_desc),
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -109,7 +113,8 @@ fun KeyAddScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        .copy(alpha = 0.5f)
                 ),
                 onClick = { showImportDialog = true }
             ) {
@@ -126,10 +131,10 @@ fun KeyAddScreen(
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("导入密钥", fontSize = 16.sp)
+                    Text(stringResource(R.string.key_import), fontSize = 16.sp)
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        "导入已有的私钥内容",
+                        stringResource(R.string.key_import_desc),
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -142,7 +147,8 @@ fun KeyAddScreen(
         GenerateKeyDialog(
             onConfirm = { algo ->
                 showGenerateDialog = false
-                viewModel.generateKeyPair("key_${System.currentTimeMillis()}", algo, false)
+                viewModel.generateKeyPair(
+                    "key_${System.currentTimeMillis()}", algo, false)
                 onNavigateBack()
             },
             onDismiss = { showGenerateDialog = false },

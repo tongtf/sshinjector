@@ -61,14 +61,17 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.ui.component.rememberClickGuard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
 data class InstalledApp(
     val packageName: String,
     val name: String,
@@ -89,36 +92,31 @@ fun WhitelistScreen(
     var hideSystemApps by remember { mutableStateOf(true) }
     var hasPermission by remember { mutableStateOf(false) }
     var showPermissionDialog by remember { mutableStateOf(false) }
-    var filterMode by remember { mutableIntStateOf(0) } // 0=全部 1=已选 2=系统应用
+    var filterMode by remember { mutableIntStateOf(0) }
 
     val enabledPackages by viewModel.enabledPackages.collectAsState()
     val allApps by viewModel.cachedApps.collectAsState()
     val loaded by viewModel.appsLoaded.collectAsState()
 
-    // 检查是否能查询已安装应用列表 (QUERY_ALL_PACKAGES 已在 manifest 声明)
     fun checkPermission(): Boolean {
         return try {
-            // 实际验证查询能力: 尝试获取应用列表 (仅验证非空/无异常)
             val apps = context.packageManager.getInstalledApplications(
                 PackageManager.ApplicationInfoFlags.of(0)
             )
             apps.isNotEmpty() || true
-        } catch (e: SecurityException) {
+        } catch (_: SecurityException) {
             false
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             true
         }
     }
 
-    // 跳转到应用详情设置
     fun openAppSettings() {
         try {
-            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                data = Uri.parse("package:${context.packageName}")
-            }
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .apply { data = Uri.parse("package:${context.packageName}") }
             context.startActivity(intent)
-        } catch (e: Exception) {
-            // 兜底: 打开系统设置
+        } catch (_: Exception) {
             context.startActivity(Intent(Settings.ACTION_SETTINGS))
         }
     }
@@ -131,18 +129,19 @@ fun WhitelistScreen(
         viewModel.loadApps(forceRefresh)
     }
 
-    // 初始化时检查权限并加载应用（使用缓存）
     LaunchedEffect(Unit) {
         hasPermission = checkPermission()
         if (hasPermission) {
-            loadApps() // 使用缓存，不强制刷新
+            loadApps()
         }
     }
 
-    val filteredApps by remember(allApps, searchQuery, hideSystemApps, filterMode, enabledPackages) {
+    val filteredApps by remember(
+        allApps, searchQuery, hideSystemApps, filterMode, enabledPackages) {
         derivedStateOf {
             var list = if (searchQuery.isBlank()) allApps
-            else allApps.filter { it.name.contains(searchQuery, ignoreCase = true) }
+            else allApps.filter {
+                it.name.contains(searchQuery, ignoreCase = true) }
             if (hideSystemApps) list = list.filter { !it.isSystem }
             when (filterMode) {
                 1 -> list = list.filter { it.packageName in enabledPackages }
@@ -157,18 +156,26 @@ fun WhitelistScreen(
             TopAppBar(
                 title = {
                     if (!isSearchActive) {
-                        Text("应用白名单")
+                        Text(stringResource(R.string.whitelist_title))
                     } else {
                         TextField(
                             value = searchQuery,
                             onValueChange = { searchQuery = it },
                             modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text("搜索应用...") },
+                            placeholder = { Text(stringResource(
+                                R.string.whitelist_search_hint)) },
                             singleLine = true,
-                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "搜索") },
+                            leadingIcon = { Icon(Icons.Default.Search,
+                                contentDescription = stringResource(
+                                    R.string.search)) },
                             trailingIcon = {
-                                IconButton(onClick = { searchQuery = ""; isSearchActive = false }) {
-                                    Icon(Icons.Default.Close, contentDescription = "关闭搜索")
+                                IconButton(onClick = {
+                                    searchQuery = ""
+                                    isSearchActive = false
+                                }) {
+                                    Icon(Icons.Default.Close,
+                                        contentDescription = stringResource(
+                                            R.string.close))
                                 }
                             }
                         )
@@ -176,7 +183,8 @@ fun WhitelistScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.back))
                     }
                 },
                 actions = {
@@ -184,7 +192,8 @@ fun WhitelistScreen(
                         IconButton(onClick = { isSearchActive = true }) {
                             Icon(
                                 imageVector = Icons.Default.Search,
-                                contentDescription = "搜索应用"
+                                contentDescription = stringResource(
+                                    R.string.whitelist_search)
                             )
                         }
                     }
@@ -193,21 +202,31 @@ fun WhitelistScreen(
                     }) {
                         Icon(
                             imageVector = Icons.Default.Refresh,
-                            contentDescription = "刷新应用列表"
+                            contentDescription = stringResource(
+                                R.string.whitelist_refresh)
                         )
                     }
-                    IconButton(onClick = { hideSystemApps = !hideSystemApps }) {
+                    IconButton(onClick = {
+                        hideSystemApps = !hideSystemApps }) {
                         Text(
-                            text = if (hideSystemApps) "含系统" else "隐藏系统",
+                            text = if (hideSystemApps)
+                                stringResource(R.string.whitelist_show_system)
+                            else
+                                stringResource(R.string.whitelist_hide_system),
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
                     if (!searchQuery.isBlank()) {
-                        IconButton(onClick = { selectAll = !selectAll }) {
+                        IconButton(onClick = {
+                            selectAll = !selectAll }) {
                             Icon(
-                                imageVector = if (selectAll) Icons.Default.Check else Icons.Default.Done,
-                                contentDescription = if (selectAll) "全选" else "反选"
+                                imageVector = if (selectAll) Icons.Default.Check
+                                    else Icons.Default.Done,
+                                contentDescription = if (selectAll)
+                                    stringResource(R.string.whitelist_select_all)
+                                else
+                                    stringResource(R.string.whitelist_deselect_all)
                             )
                         }
                     }
@@ -224,7 +243,6 @@ fun WhitelistScreen(
                 .padding(innerPadding)
         ) {
             if (!hasPermission) {
-                // 权限未授予时显示引导界面
                 PermissionRequestScreen(
                     onOpenSettings = { openAppSettings() },
                     onRefresh = {
@@ -237,14 +255,17 @@ fun WhitelistScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp)
-                        .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer,
+                            RoundedCornerShape(8.dp))
                         .padding(12.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+                        Icon(Icons.Default.Lock, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp))
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
-                            text = "仅勾选的应用通过 SSH 代理访问网络，其他应用直连",
+                            text = stringResource(R.string.whitelist_banner),
                             fontSize = 15.sp,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
@@ -263,27 +284,36 @@ fun WhitelistScreen(
                         FilterChip(
                             selected = filterMode == 0,
                             onClick = { filterMode = 0 },
-                            label = { Text("全部 ${filteredApps.size}") },
+                            label = { Text(stringResource(
+                                R.string.whitelist_filter_all,
+                                filteredApps.size)) },
                             modifier = Modifier.weight(1f)
                         )
                         FilterChip(
                             selected = filterMode == 1,
                             onClick = { filterMode = 1 },
-                            label = { Text("已选 ${enabledPackages.size}") },
+                            label = { Text(stringResource(
+                                R.string.whitelist_filter_selected,
+                                enabledPackages.size)) },
                             modifier = Modifier.weight(1f)
                         )
                         FilterChip(
                             selected = filterMode == 2,
                             onClick = { filterMode = 2 },
-                            label = { Text("系统 ${filteredApps.count { it.isSystem }}") },
+                            label = { Text(stringResource(
+                                R.string.whitelist_filter_system,
+                                filteredApps.count { it.isSystem })) },
                             modifier = Modifier.weight(1f)
                         )
                     }
                 }
 
                 if (!loaded) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("正在加载应用列表...", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Box(modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center) {
+                        Text(stringResource(R.string.whitelist_loading),
+                            fontSize = 16.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 } else {
                     LazyColumn(
@@ -292,28 +322,31 @@ fun WhitelistScreen(
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                            items(filteredApps, key = { it.packageName }) { app ->
-                                AppListItem(
-                                    app = app,
-                                    isEnabled = app.packageName in enabledPackages,
-                                    onToggle = { pkg, enabled ->
-                                        viewModel.togglePackage(pkg, app.name, enabled)
-                                    }
-                                )
-                            }
+                        items(filteredApps, key = { it.packageName }) { app ->
+                            AppListItem(
+                                app = app,
+                                isEnabled = app.packageName in enabledPackages,
+                                onToggle = { pkg, enabled ->
+                                    viewModel.togglePackage(
+                                        pkg, app.name, enabled)
+                                }
+                            )
+                        }
                     }
                 }
             }
         }
     }
 
-    // 权限请求对话框
     if (showPermissionDialog) {
         AlertDialog(
             onDismissRequest = { showPermissionDialog = false },
-            icon = { Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
-            title = { Text("需要权限") },
-            text = { Text("白名单功能需要「所有文件访问」权限才能获取已安装应用列表。请在系统设置中为本应用开启此权限。") },
+            icon = { Icon(Icons.Default.Warning, contentDescription = null,
+                tint = MaterialTheme.colorScheme.error) },
+            title = { Text(stringResource(
+                R.string.whitelist_permission_title)) },
+            text = { Text(stringResource(
+                R.string.whitelist_permission_msg)) },
             confirmButton = {
                 val guard = rememberClickGuard()
                 Button(onClick = {
@@ -322,12 +355,12 @@ fun WhitelistScreen(
                         openAppSettings()
                     }
                 }) {
-                    Text("去设置")
+                    Text(stringResource(R.string.whitelist_permission_btn))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showPermissionDialog = false }) {
-                    Text("取消")
+                    Text(stringResource(R.string.cancel))
                 }
             }
         )
@@ -354,21 +387,21 @@ fun PermissionRequestScreen(
         )
         Spacer(modifier = Modifier.height(24.dp))
         Text(
-            text = "需要权限",
+            text = stringResource(R.string.whitelist_need_permission),
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface
         )
         Spacer(modifier = Modifier.height(16.dp))
         Text(
-            text = "白名单功能需要「所有文件访问」权限才能获取已安装应用列表",
+            text = stringResource(R.string.whitelist_need_permission_desc),
             fontSize = 16.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "请在系统设置中为本应用开启此权限后返回",
+            text = stringResource(R.string.whitelist_need_permission_hint),
             fontSize = 14.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
@@ -379,13 +412,15 @@ fun PermissionRequestScreen(
             onClick = { guard { onOpenSettings() } },
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("前往设置", fontSize = 16.sp)
+            Text(stringResource(R.string.whitelist_goto_settings),
+                fontSize = 16.sp)
         }
         Spacer(modifier = Modifier.height(16.dp))
         TextButton(
             onClick = onRefresh
         ) {
-            Text("已开启权限，刷新", fontSize = 14.sp)
+            Text(stringResource(R.string.whitelist_have_permission_refresh),
+                fontSize = 14.sp)
         }
     }
 }
@@ -396,14 +431,17 @@ fun AppListItem(
     isEnabled: Boolean,
     onToggle: (String, Boolean) -> Unit
 ) {
-    val context = LocalContext.current
-    val iconBitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, app.packageName) {
+    val context2 = LocalContext.current
+    val iconBitmap by produceState<
+        androidx.compose.ui.graphics.ImageBitmap?>(null, app.packageName) {
         value = withContext(Dispatchers.IO) {
             runCatching {
-                val d = context.packageManager.getApplicationIcon(app.packageName)
+                val d = context2.packageManager.getApplicationIcon(
+                    app.packageName)
                 val w = d.intrinsicWidth.coerceAtLeast(1)
                 val h = d.intrinsicHeight.coerceAtLeast(1)
-                val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+                val bmp = android.graphics.Bitmap.createBitmap(
+                    w, h, android.graphics.Bitmap.Config.ARGB_8888)
                 val canvas = android.graphics.Canvas(bmp)
                 d.setBounds(0, 0, w, h)
                 d.draw(canvas)
@@ -418,7 +456,8 @@ fun AppListItem(
             .padding(horizontal = 0.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isEnabled) MaterialTheme.colorScheme.primaryContainer
+            containerColor = if (isEnabled)
+                MaterialTheme.colorScheme.primaryContainer
             else MaterialTheme.colorScheme.surface
         )
     ) {
@@ -431,7 +470,8 @@ fun AppListItem(
         ) {
             Box(
                 modifier = Modifier.size(48.dp)
-                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant,
+                        RoundedCornerShape(12.dp))
                     .clip(RoundedCornerShape(12.dp)),
                 contentAlignment = Alignment.Center
             ) {
@@ -461,13 +501,15 @@ fun AppListItem(
                         text = app.name,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Medium,
-                        color = if (isEnabled) MaterialTheme.colorScheme.onPrimaryContainer
+                        color = if (isEnabled)
+                            MaterialTheme.colorScheme.onPrimaryContainer
                         else MaterialTheme.colorScheme.onSurface
                     )
                     if (app.isSystem) {
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "系统",
+                            text = stringResource(
+                                R.string.whitelist_system_tag),
                             fontSize = 10.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall
@@ -477,30 +519,23 @@ fun AppListItem(
                 Text(
                     text = app.packageName,
                     fontSize = 12.sp,
-                    color = if (isEnabled) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    color = if (isEnabled)
+                        MaterialTheme.colorScheme.onPrimaryContainer.copy(
+                            alpha = 0.7f)
                     else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
             Switch(
                 checked = isEnabled,
-                onCheckedChange = { enabled -> onToggle(app.packageName, enabled) },
+                onCheckedChange = {
+                    enabled -> onToggle(app.packageName, enabled) },
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = MaterialTheme.colorScheme.primary,
-                    checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
+                    checkedTrackColor = MaterialTheme
+                        .colorScheme.primaryContainer
                 )
             )
         }
-    }
-}
-
-@Composable
-fun StatItem(label: String, value: String, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(text = value, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        Text(text = label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
