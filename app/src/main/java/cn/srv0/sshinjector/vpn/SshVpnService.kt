@@ -130,7 +130,7 @@ class SshVpnService : VpnService() {
                 whitelistDao.getEnabledPackageNames()
             } else emptyList()
 
-            val dnsModeText = cn.srv0.sshinjector.ui.viewmodel.dnsModeLabel(dnsMode)
+            val dnsModeText = cn.srv0.sshinjector.ui.viewmodel.dnsModeLabel(dnsMode, this)
 
             // 记录连接配置日志
 

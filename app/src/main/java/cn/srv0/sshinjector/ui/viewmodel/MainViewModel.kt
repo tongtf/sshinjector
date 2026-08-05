@@ -1,6 +1,7 @@
 package cn.srv0.sshinjector.ui.viewmodel
 
 import android.content.Context
+import cn.srv0.sshinjector.R
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
@@ -141,7 +142,7 @@ class MainViewModel @Inject constructor(
     private fun observeDnsModeChanges() {
         viewModelScope.launch {
             settingsDataStore.dnsMode.collect { dnsModeValue ->
-                _uiState.update { it.copy(dnsMode = dnsModeLabel(dnsModeValue)) }
+                _uiState.update { it.copy(dnsMode = dnsModeLabel(dnsModeValue, context)) }
             }
         }
     }
@@ -165,7 +166,7 @@ class MainViewModel @Inject constructor(
             val ipv4 = getDeviceIpv4()
             val ipv6 = getDeviceIpv6()
             val dnsModeValue = settingsDataStore.dnsMode.first()
-            val dnsModeText = dnsModeLabel(dnsModeValue)
+            val dnsModeText = dnsModeLabel(dnsModeValue, context)
             val networkDisplay = getNetworkDisplay()
 
             _uiState.update {
@@ -611,7 +612,7 @@ class MainViewModel @Inject constructor(
             val ipv4 = getDeviceIpv4()
             val ipv6 = getDeviceIpv6()
             val dnsModeValue = settingsDataStore.dnsMode.first()
-            val dnsModeText = dnsModeLabel(dnsModeValue)
+            val dnsModeText = dnsModeLabel(dnsModeValue, context)
 
             _uiState.update {
                 it.copy(
@@ -671,10 +672,22 @@ enum class LogLevel {
 
 internal fun nextDnsMode(current: Int): Int = (current + 1) % 4
 
-internal fun dnsModeLabel(mode: Int): String = when (mode) {
-    0 -> "远程代理"
-    1 -> "本地直连"
-    2 -> "白名单模式"
-    3 -> "域名分流"
-    else -> "远程代理"
+internal fun dnsModeLabel(mode: Int, context: Context? = null): String {
+    if (context != null) {
+        val resId = when (mode) {
+            0 -> R.string.dashboard_dns_remote
+            1 -> R.string.dashboard_dns_direct
+            2 -> R.string.dashboard_dns_whitelist
+            3 -> R.string.dashboard_dns_domain
+            else -> R.string.dashboard_dns_remote
+        }
+        return context.getString(resId)
+    }
+    return when (mode) {
+        0 -> "远程代理"
+        1 -> "本地直连"
+        2 -> "白名单模式"
+        3 -> "域名分流"
+        else -> "远程代理"
+    }
 }

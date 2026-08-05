@@ -143,10 +143,10 @@ fun SettingsScreen(
 
                 SettingsRow(
                     title = stringResource(R.string.settings_connection_mode),
-                    subtitle = dnsModeLabel(dnsMode),
+                    subtitle = dnsModeLabel(dnsMode, context),
                     trailing = {
                         Text(
-                            text = dnsModeLabel(dnsMode),
+                            text = dnsModeLabel(dnsMode, context),
                             fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.primary
                         )
