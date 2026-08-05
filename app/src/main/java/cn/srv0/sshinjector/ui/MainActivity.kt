@@ -1,9 +1,15 @@
 package cn.srv0.sshinjector.ui
 
 import android.os.Bundle
+import android.os.LocaleList
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import android.content.Context
+import android.content.res.Configuration
+import android.os.Build
 import androidx.fragment.app.FragmentActivity
+import cn.srv0.sshinjector.ui.locale.LocaleManager
+import java.util.Locale
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
@@ -41,7 +47,28 @@ import kotlin.math.roundToInt
 
 @AndroidEntryPoint
 class MainActivity : FragmentActivity() {
+    private fun applySavedLanguage() {
+        val prefs = getSharedPreferences("app_prefs", MODE_PRIVATE)
+        val lang = prefs.getString("language", LocaleManager.LANGUAGE_SYSTEM) ?: LocaleManager.LANGUAGE_SYSTEM
+        val locale = when (lang) {
+            LocaleManager.LANGUAGE_CHINESE -> Locale.SIMPLIFIED_CHINESE
+            LocaleManager.LANGUAGE_ENGLISH -> Locale.ENGLISH
+            LocaleManager.LANGUAGE_RUSSIAN -> Locale("ru")
+            else -> return
+        }
+        val config = resources.configuration
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            config.setLocales(LocaleList(locale))
+        } else {
+            @Suppress("DEPRECATION")
+            config.locale = locale
+        }
+        @Suppress("DEPRECATION")
+        resources.updateConfiguration(config, resources.displayMetrics)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        applySavedLanguage()
         super.onCreate(savedInstanceState)
         setContent {
             SSHInjectorTheme { MainScreen() }

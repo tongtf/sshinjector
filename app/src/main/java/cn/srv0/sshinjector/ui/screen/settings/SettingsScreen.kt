@@ -212,7 +212,8 @@ fun SettingsScreen(
         val langOptions = listOf(
             LocaleManager.LANGUAGE_SYSTEM,
             LocaleManager.LANGUAGE_CHINESE,
-            LocaleManager.LANGUAGE_ENGLISH
+            LocaleManager.LANGUAGE_ENGLISH,
+            LocaleManager.LANGUAGE_RUSSIAN
         )
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { showLangDialog = false },

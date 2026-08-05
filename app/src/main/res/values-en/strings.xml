@@ -201,6 +201,7 @@
     <string name="language_system">Follow System</string>
     <string name="language_chinese">中文</string>
     <string name="language_english">English</string>
+    <string name="language_russian">Русский</string>
     <string name="language_after_change">Restart the app after switching language</string>
 
     <string name="dns_remote_desc">All traffic through VPN tunnel (SOCKS5)</string>

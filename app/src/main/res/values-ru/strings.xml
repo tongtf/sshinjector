@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SSHInjector</string>
+
+    <!-- Общие -->
+    <string name="cancel">Отмена</string>
+    <string name="confirm">OK</string>
+    <string name="save">Сохранить</string>
+    <string name="delete">Удалить</string>
+    <string name="copy">Копировать</string>
+    <string name="back">Назад</string>
+    <string name="refresh">Обновить</string>
+    <string name="close">Закрыть</string>
+    <string name="search">Поиск</string>
+    <string name="clear">Очистить</string>
+    <string name="import_">Импорт</string>
+    <string name="generate">Создать</string>
+    <string name="connecting">Подключение…</string>
+
+    <!-- Навигация -->
+    <string name="nav_main">Главная</string>
+    <string name="nav_settings">Настройки</string>
+
+    <!-- Панель -->
+    <string name="dashboard_status_info">Статус</string>
+    <string name="dashboard_refresh_info">Обновить</string>
+    <string name="dashboard_ipv4">IPv4</string>
+    <string name="dashboard_ipv6">IPv6</string>
+    <string name="dashboard_mode">Режим</string>
+    <string name="dashboard_network">Сеть</string>
+    <string name="dashboard_cpu">CPU</string>
+    <string name="dashboard_dns_remote">Удалённый прокси</string>
+    <string name="dashboard_dns_direct">Прямой</string>
+    <string name="dashboard_dns_whitelist">Белый список</string>
+    <string name="dashboard_dns_domain">Разделение доменов</string>
+    <string name="dashboard_servers">Серверы</string>
+    <string name="dashboard_keys">Ключи</string>
+    <string name="dashboard_edit_server">Ред. сервер</string>
+    <string name="dashboard_set_default">По умолчанию</string>
+    <string name="dashboard_unset_default">Убрать по умолч.</string>
+    <string name="dashboard_delete_server">Удалить сервер</string>
+    <string name="dashboard_default">По умолчанию</string>
+    <string name="dashboard_disconnect">Отключить</string>
+    <string name="dashboard_connect">Подключить</string>
+    <string name="dashboard_add">Добавить</string>
+    <string name="dashboard_add_server">Добавить сервер</string>
+    <string name="dashboard_no_servers">Нет серверов</string>
+    <string name="dashboard_no_servers_hint">Добавьте сервер для VPN-прокси</string>
+    <string name="dashboard_add_key">Добавить ключ</string>
+    <string name="dashboard_no_keys">Нет ключей</string>
+    <string name="dashboard_no_keys_hint">Создайте или импортируйте SSH-ключ</string>
+    <string name="dashboard_edit">Ред.</string>
+    <string name="dashboard_pair_key">Создать и привязать ключ</string>
+    <string name="dashboard_key_copied">Открытый ключ скопирован</string>
+    <string name="dashboard_copy_success">Скопировано</string>
+    <string name="dashboard_copy_failed">Ошибка</string>
+    <string name="dashboard_disconnecting">Отключение</string>
+    <string name="dashboard_connecting_to">Подключение к %s</string>
+
+    <!-- Настройки -->
+    <string name="settings_title">Настройки</string>
+    <string name="settings_management">Управление</string>
+    <string name="settings_server_management">Управление серверами</string>
+    <string name="settings_server_management_desc">Добавить, изменить или подключиться</string>
+    <string name="settings_key_management">Управление ключами</string>
+    <string name="settings_key_management_desc">Просмотр, создание, импорт, копирование</string>
+    <string name="settings_whitelist">Белый список приложений</string>
+    <string name="settings_whitelist_desc">Выбор приложений для VPN-туннеля</string>
+    <string name="settings_network">Сеть</string>
+    <string name="settings_mtu">MTU: %d</string>
+    <string name="settings_keepalive">Keepalive: %d с</string>
+    <string name="settings_ipv6">Поддержка IPv6</string>
+    <string name="settings_ipv6_desc">Включить двойной стек IPv6</string>
+    <string name="settings_connection_mode">Режим подключения</string>
+    <string name="settings_connection_mode_title">Режим подключения</string>
+    <string name="settings_domain_list">Список доменов</string>
+    <string name="settings_domain_list_desc">Настройка разделения доменов (только в режиме разделения)</string>
+    <string name="settings_language">Язык</string>
+    <string name="settings_language_desc">Сменить язык интерфейса</string>
+    <string name="settings_security">Безопасность</string>
+    <string name="settings_biometric_unlock">Биометрическая разблокировка</string>
+    <string name="settings_biometric_unlock_desc">Защита ключей отпечатком/лицом</string>
+    <string name="settings_about">О приложении</string>
+    <string name="settings_version">1.0.2</string>
+    <string name="settings_license">MIT License</string>
+    <string name="settings_github">GitHub</string>
+    <string name="settings_github_desc">Исходный код</string>
+    <string name="settings_biometric_disable_title">Отключить биометрию</string>
+    <string name="settings_biometric_disable_msg">Биометрическая защита ключей будет отключена. Подтвердите личность.</string>
+    <string name="settings_biometric_verify">Подтвердить и отключить</string>
+    <string name="settings_verify_identity">Подтверждение личности</string>
+    <string name="settings_verify_identity_sub">Подтвердите для доступа к SSH-ключам</string>
+
+    <!-- Список доменов -->
+    <string name="domain_list_title">Список доменов</string>
+    <string name="domain_list_url_label">URL источника списка</string>
+    <string name="domain_list_url_desc">Поддерживает gfwlist (base64) или текст, одно правило на строку. Действует только в режиме разделения доменов.</string>
+    <string name="domain_list_url_hint">URL</string>
+    <string name="domain_list_save_url">Сохранить URL</string>
+    <string name="domain_list_reset_default">Сбросить</string>
+    <string name="domain_list_status">Состояние списка</string>
+    <string name="domain_list_status_unloaded">Не загружен</string>
+    <string name="domain_list_status_loading">Обновление…</string>
+    <string name="domain_list_status_loaded">Загружен</string>
+    <string name="domain_list_status_failed">Ошибка обновления</string>
+    <string name="domain_list_rule_count">Правил</string>
+    <string name="domain_list_source">Источник</string>
+    <string name="domain_list_source_builtin">Встроенный</string>
+    <string name="domain_list_source_disk">Локальный кэш</string>
+    <string name="domain_list_source_url">Удалённая загрузка</string>
+    <string name="domain_list_update_time">Обновлено</string>
+    <string name="domain_list_update_now">Обновить сейчас</string>
+    <string name="domain_list_updating">Обновление…</string>
+
+    <!-- Управление серверами -->
+    <string name="server_title">Управление серверами</string>
+    <string name="server_add">Добавить сервер</string>
+    <string name="server_edit">Изменить сервер</string>
+    <string name="server_no_servers">Нет серверов</string>
+    <string name="server_add_hint">Нажмите + для добавления</string>
+    <string name="server_current">Активен</string>
+    <string name="server_disconnect">Отключить</string>
+    <string name="server_connect">Подключить</string>
+    <string name="server_default_set">Назначен по умолчанию</string>
+    <string name="server_default_unset">Снят по умолчанию</string>
+    <string name="server_mtu_info" formatted="false">MTU: %d | KeepAlive: %dс | IPv6: %s</string>
+    <string name="server_ipv6_on">Вкл</string>
+    <string name="server_ipv6_off">Выкл</string>
+
+    <!-- Редактирование сервера -->
+    <string name="server_save">Сохранить</string>
+    <string name="server_field_basic">Основное</string>
+    <string name="server_field_tunnel">Туннель</string>
+    <string name="server_field_network">Сеть</string>
+    <string name="server_name">Имя</string>
+    <string name="server_host">Хост</string>
+    <string name="server_port">Порт</string>
+    <string name="server_username">Пользователь</string>
+    <string name="server_key">Ключ</string>
+    <string name="server_key_placeholder">Выберите ключ…</string>
+    <string name="server_socks_port">Локальный порт SOCKS</string>
+    <string name="server_set_default">Назначить сервером по умолчанию</string>
+    <string name="server_enable_ipv6">Включить IPv6</string>
+    <string name="server_mtu">MTU</string>
+    <string name="server_keepalive">Keepalive (секунды)</string>
+    <string name="server_delete">Удалить сервер</string>
+    <string name="server_generate_and_assoc">Создать и привязать ключ</string>
+    <string name="server_generate_key">Создать новый ключ</string>
+    <string name="server_placeholder_name">Мой VPS</string>
+    <string name="server_placeholder_host">example.com</string>
+    <string name="server_placeholder_port">22</string>
+    <string name="server_placeholder_username">root</string>
+    <string name="server_placeholder_socks">1080</string>
+
+    <!-- Управление ключами -->
+    <string name="key_title">Управление ключами</string>
+    <string name="key_current">Активный ключ</string>
+    <string name="key_public">Открытый ключ</string>
+    <string name="key_private">Закрытый ключ</string>
+    <string name="key_generate">Создать ключ</string>
+    <string name="key_import">Импорт ключа</string>
+    <string name="key_saved">Сохранённые ключи</string>
+    <string name="key_clear_all">Очистить всё</string>
+    <string name="key_no_keys">Нет ключей</string>
+    <string name="key_delete_title">Удалить ключ</string>
+    <string name="key_delete_msg">Удалить \"%s\"?</string>
+    <string name="key_deleted">Удалён</string>
+    <string name="key_clear_all_title">Очистить все ключи</string>
+    <string name="key_clear_all_msg">Удалить все ключи? Если ключи требуют биометрической аутентификации, после удаления их можно создать заново.</string>
+    <string name="key_cleared_all">Все ключи очищены</string>
+    <string name="key_add_title">Добавить ключ</string>
+    <string name="key_generate_desc">Создать пару ключей локально и сохранить в системном хранилище</string>
+    <string name="key_import_desc">Импортировать существующий закрытый ключ</string>
+
+    <!-- Белый список -->
+    <string name="whitelist_title">Белый список приложений</string>
+    <string name="whitelist_search_hint">Поиск приложений…</string>
+    <string name="whitelist_search">Поиск приложений</string>
+    <string name="whitelist_refresh">Обновить список</string>
+    <string name="whitelist_show_system">Показать системные</string>
+    <string name="whitelist_hide_system">Скрыть системные</string>
+    <string name="whitelist_select_all">Выбрать все</string>
+    <string name="whitelist_deselect_all">Снять выбор</string>
+    <string name="whitelist_filter_all">Все %d</string>
+    <string name="whitelist_filter_selected">Выбрано %d</string>
+    <string name="whitelist_filter_system">Системные %d</string>
+    <string name="whitelist_loading">Загрузка приложений…</string>
+    <string name="whitelist_banner">Только выбранные приложения идут через SSH-прокси; остальные — напрямую</string>
+    <string name="whitelist_system_tag">Системное</string>
+    <string name="whitelist_permission_title">Требуется разрешение</string>
+    <string name="whitelist_permission_msg">Для белого списка нужно разрешение «Доступ ко всем файлам». Включите его в настройках системы.</string>
+    <string name="whitelist_permission_btn">В настройки</string>
+    <string name="whitelist_need_permission">Требуется разрешение</string>
+    <string name="whitelist_need_permission_desc">Для белого списка нужно разрешение «Доступ ко всем файлам»</string>
+    <string name="whitelist_need_permission_hint">Включите разрешение в настройках системы и вернитесь</string>
+    <string name="whitelist_goto_settings">В настройки</string>
+    <string name="whitelist_have_permission_refresh">Разрешение получено, обновить</string>
+
+    <!-- Выбор языка -->
+    <string name="language_dialog_title">Выбор языка</string>
+    <string name="language_system">Как в системе</string>
+    <string name="language_chinese">中文</string>
+    <string name="language_english">English</string>
+    <string name="language_russian">Русский</string>
+    <string name="language_after_change">Перезапустите приложение после смены языка</string>
+
+    <string name="dns_remote_desc">Весь трафик через VPN-туннель (SOCKS5)</string>
+    <string name="dns_direct_desc">Весь трафик через физический интерфейс, минуя VPN</string>
+    <string name="dns_whitelist_desc">Выбранные приложения через VPN, остальные напрямую</string>
+    <string name="dns_domain_desc">Трафик по доменам через туннель, остальной напрямую</string>
+</resources>
