@@ -49,6 +49,7 @@ class DnsInterceptor @Inject constructor() {
         // 映射表大小限制，防止长时间运行 OOM
         private const val MAX_IP_DOMAIN_MAP_SIZE = 4096
         private const val MAX_DOMAIN_IP_MAP_SIZE = 4096
+        private const val MAX_DNS_CACHE_SIZE = 512
     }
 
     enum class DnsTransport {
@@ -68,6 +69,23 @@ class DnsInterceptor @Inject constructor() {
     private val executor = Executors.newFixedThreadPool(2)
     private val pendingQueries = ConcurrentHashMap<Int, DnsPendingQuery>()
     private val dnsCache = ConcurrentHashMap<String, CacheEntry>()
+
+    private fun cacheDns(key: String, entry: CacheEntry) {
+        dnsCache[key] = entry
+        if (dnsCache.size > MAX_DNS_CACHE_SIZE) {
+            dnsCache.entries.removeIf { it.value.expireAt < System.currentTimeMillis() }
+            if (dnsCache.size > MAX_DNS_CACHE_SIZE) {
+                val iter = dnsCache.entries.iterator()
+                var removed = 0
+                val toRemove = dnsCache.size - MAX_DNS_CACHE_SIZE
+                while (iter.hasNext() && removed < toRemove) {
+                    iter.next()
+                    iter.remove()
+                    removed++
+                }
+            }
+        }
+    }
     private val pendingResponses = ConcurrentLinkedQueue<DnsResponse>()
     private val queryIdCounter = AtomicInteger(0)
 
@@ -372,10 +390,10 @@ class DnsInterceptor @Inject constructor() {
             // 缓存结果
             val cacheKey = "${pending.question.name}.${pending.question.type}"
             val minTtl = records.map { it.ttl }.minOrNull() ?: 300
-            dnsCache[cacheKey] = CacheEntry(
+            cacheDns(cacheKey, CacheEntry(
                 records = records.toList(),
                 expireAt = System.currentTimeMillis() + minTtl.toLong() * 1000
-            )
+            ))
 
             // 建立 IP → 域名映射 (A/AAAA 记录)
             val qname = pending.question.name.toString(true)
@@ -457,7 +475,7 @@ class DnsInterceptor @Inject constructor() {
                 Log.e(TAG, "REMOTE 假IP: IPv6 池已耗尽")
                 return false
             }
-            fakeIp = "fd00::${counter}"
+            fakeIp = String.format("fd00::%04x", counter)
             fakeInetAddress = InetAddress.getByName(fakeIp)
             domainToIp[cacheKey] = fakeIp
         }
@@ -483,10 +501,10 @@ class DnsInterceptor @Inject constructor() {
         response.addRecord(answer, Section.ANSWER)
 
         // 缓存
-        dnsCache[cacheKey] = CacheEntry(
+        cacheDns(cacheKey, CacheEntry(
             records = listOf(answer),
             expireAt = System.currentTimeMillis() + 300_000L
-        )
+        ))
 
         // 发送响应 (DNS 服务器 IP 用假 IP 作为 srcIp, 不影响)
         pendingResponses.add(DnsResponse(

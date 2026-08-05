@@ -11,9 +11,24 @@ import java.nio.ByteOrder
 import java.nio.channels.DatagramChannel
 import java.nio.channels.SocketChannel
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicLong
 
 private val IS_DEBUG = android.util.Log.isLoggable("PacketProcessor", android.util.Log.DEBUG)
+
+private const val BUFFER_SIZE = 65536
+private val BUFFER_POOL = ConcurrentLinkedQueue<ByteBuffer>()
+
+fun acquireBuffer(): ByteBuffer {
+    return BUFFER_POOL.poll() ?: ByteBuffer.allocateDirect(BUFFER_SIZE)
+}
+
+fun releaseBuffer(buffer: ByteBuffer) {
+    if (buffer.capacity() == BUFFER_SIZE && buffer.isDirect) {
+        buffer.clear()
+        BUFFER_POOL.offer(buffer)
+    }
+}
 
 /**
  * UDP 关联管理与 SOCKS5 UDP ASSOCIATE 转发。
@@ -236,7 +251,7 @@ class UdpRelay(
         }
 
         Thread({
-            val receiveBuffer = ByteBuffer.allocateDirect(65535)
+            val receiveBuffer = acquireBuffer()
             try {
                 while (assoc.datagramChannel.isOpen) {
                     receiveBuffer.clear()
@@ -285,6 +300,8 @@ class UdpRelay(
                 }
             } catch (e: IOException) {
                 Log.w(TAG, "UDP relay receive ended: ${e.message}")
+            } finally {
+                releaseBuffer(receiveBuffer)
             }
         }, "UDP-Relay-Receive-${assoc.id}").start()
     }

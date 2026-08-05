@@ -9,7 +9,9 @@ import android.net.NetworkRequest
 import android.net.VpnService
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Debug
 import android.telephony.TelephonyManager
+import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
@@ -19,6 +21,7 @@ import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import cn.srv0.sshinjector.vpn.SshVpnService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
@@ -27,6 +30,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+import java.io.RandomAccessFile
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.NetworkInterface
@@ -104,8 +109,6 @@ class MainViewModel @Inject constructor(
         val currentServerUser: String = "",
         val connectionStatus: String = "断开",
         val errorMessage: String? = null,
-        val startTime: Date? = null,
-        val connectionDuration: String = "00:00:00",
         // 网络信息
         val deviceIpv4: String = "-",
         val deviceIpv6: String = "-",
@@ -119,7 +122,11 @@ class MainViewModel @Inject constructor(
         // 诊断信息
         val diagnostics: DnsDiagnostics = DnsDiagnostics(),
         // 服务器连接状态: serverId -> status
-        val serverConnectionStatus: Map<Long, String?> = emptyMap()
+        val serverConnectionStatus: Map<Long, String?> = emptyMap(),
+        // 资源监控
+        val cpuUsage: String = "-",
+        val javaHeapUsage: String = "-",
+        val nativeHeapUsage: String = "-"
     )
 
     init {
@@ -128,6 +135,7 @@ class MainViewModel @Inject constructor(
         loadNetworkInfo()
         observeDnsModeChanges()
         registerNetworkCallback()
+        startResourceMonitoring()
     }
 
     private fun observeDnsModeChanges() {
@@ -286,31 +294,19 @@ class MainViewModel @Inject constructor(
 
     private fun observeVpnState() {
         viewModelScope.launch {
-            // 观察 VPN 控制器状态
             launch {
                 vpnController.vpnState.collect { state ->
                     val isConnected = state.status == cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Connected
                     val serverId = state.server?.id ?: 0
                     val status = state.status.name
 
-                    // 更新当前连接的服务器状态
                     val newServerStatus = if (serverId > 0) {
                         _uiState.value.serverConnectionStatus.toMutableMap().apply {
-                            // 清除其他服务器的状态
                             keys.filter { it != serverId }.forEach { remove(it) }
-                            // 设置当前服务器状态
                             put(serverId, if (isConnected) "Connected" else status)
                         }
                     } else {
                         emptyMap()
-                    }
-
-                    // 计算连接时长
-                    val duration = if (state.stats.startTime != null) {
-                        val elapsed = (java.util.Date().time - state.stats.startTime.time) / 1000
-                        String.format(java.util.Locale.ROOT, "%02d:%02d:%02d", elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60)
-                    } else {
-                        "00:00:00"
                     }
 
                     _uiState.update {
@@ -321,31 +317,93 @@ class MainViewModel @Inject constructor(
                             currentServerHost = state.server?.host ?: "",
                             currentServerUser = state.server?.username ?: "",
                             connectionStatus = status,
-                            startTime = state.stats.startTime,
-                            connectionDuration = duration,
                             proxyAddress = if (isConnected) "127.0.0.1:1080" else "-",
                             serverConnectionStatus = newServerStatus
                         )
                     }
 
-                    // VPN 状态变化时刷新网络信息 (重连后 IP 可能变化)
                     if (isConnected) {
                         loadNetworkInfo()
                     }
                 }
             }
+        }
+    }
 
-            // 定时更新连接时长
-            launch {
-                while (true) {
-                    kotlinx.coroutines.delay(1000)
-                    val startTime = _uiState.value.startTime
-                    if (startTime != null && _uiState.value.isConnected) {
-                        val elapsed = (java.util.Date().time - startTime.time) / 1000
-                        val duration = String.format(java.util.Locale.ROOT, "%02d:%02d:%02d", elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60)
-                        _uiState.update { it.copy(connectionDuration = duration) }
-                    }
+    private fun startResourceMonitoring() {
+        viewModelScope.launch {
+            android.util.Log.d("MainViewModel", "startResourceMonitoring started")
+            while (true) {
+                kotlinx.coroutines.delay(1000)
+                withContext(Dispatchers.IO) {
+                    val cpu = readProcessCpuUsage()
+                    val mem = readProcessMemory()
+                    android.util.Log.d("MainViewModel", "Resource monitoring: cpu=$cpu javaHeap=${_uiState.value.javaHeapUsage} nativeHeap=${_uiState.value.nativeHeapUsage}")
+                    _uiState.update { it.copy(cpuUsage = cpu) }
                 }
+            }
+        }
+    }
+
+    private var lastCpuTime = 0L
+    private var lastCpuTimeRead = 0L
+    private val cpuCoreCount = Runtime.getRuntime().availableProcessors()
+
+    private fun readProcessCpuUsage(): String {
+        try {
+            val cpuTime = android.os.Process.getElapsedCpuTime()
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (lastCpuTimeRead > 0) {
+                val processDeltaMs = cpuTime - lastCpuTime
+                val wallDeltaMs = now - lastCpuTimeRead
+                var percent = (processDeltaMs.toFloat() / wallDeltaMs.toFloat()) * 100f / cpuCoreCount
+                if (percent > 99.9f) percent = 99.9f
+                lastCpuTime = cpuTime
+                lastCpuTimeRead = now
+                return String.format(java.util.Locale.ROOT, "%4.1f%%", percent)
+            }
+            lastCpuTime = cpuTime
+            lastCpuTimeRead = now
+        } catch (e: Exception) {
+            android.util.Log.w("MainViewModel", "CPU read failed: ${e.message}")
+        }
+        return "-"
+    }
+
+    private fun readProcessMemory() {
+        try {
+            val rt = Runtime.getRuntime()
+            val javaHeap = rt.totalMemory() - rt.freeMemory()
+            val nativeHeap = Debug.getNativeHeapAllocatedSize()
+            val javaHeapFormatted = formatMemorySize(javaHeap)
+            val nativeHeapFormatted = formatMemorySize(nativeHeap)
+            _uiState.update {
+                it.copy(javaHeapUsage = javaHeapFormatted, nativeHeapUsage = nativeHeapFormatted)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("MainViewModel", "Memory read failed: ${e.message}")
+            _uiState.update {
+                it.copy(javaHeapUsage = "-", nativeHeapUsage = "-")
+            }
+        }
+    }
+
+    companion object {
+        @JvmStatic
+        fun formatMemorySize(bytes: Long): String {
+            return when {
+                bytes < 0 -> "-"
+                bytes < 1024L * 1024 * 1024 -> String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024))
+                else -> String.format(java.util.Locale.ROOT, "%.1f GB", bytes / (1024.0 * 1024 * 1024))
+            }
+        }
+
+        @JvmStatic
+        fun colorForRatio(ratio: Float): Color {
+            return when {
+                ratio < 0.5f -> Color(0xFF4CAF50)
+                ratio < 1.0f -> Color(0xFFFF9800)
+                else -> Color(0xFFF44336)
             }
         }
     }
@@ -560,6 +618,33 @@ class MainViewModel @Inject constructor(
                     deviceIpv4 = ipv4,
                     deviceIpv6 = ipv6,
                     dnsMode = dnsModeText
+                )
+            }
+            // 同时触发资源监控和 VPN 状态刷新
+            readProcessCpuUsage()
+            readProcessMemory()
+            val state = vpnController.vpnState.first()
+            val isConnected = state.status == cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Connected
+            val serverId = state.server?.id ?: 0
+            val status = state.status.name
+            val newServerStatus = if (serverId > 0) {
+                _uiState.value.serverConnectionStatus.toMutableMap().apply {
+                    keys.filter { it != serverId }.forEach { remove(it) }
+                    put(serverId, if (isConnected) "Connected" else status)
+                }
+            } else {
+                emptyMap()
+            }
+            _uiState.update {
+                it.copy(
+                    isConnected = isConnected,
+                    currentServer = state.server?.name ?: "未连接",
+                    currentServerId = serverId,
+                    currentServerHost = state.server?.host ?: "",
+                    currentServerUser = state.server?.username ?: "",
+                    connectionStatus = status,
+                    proxyAddress = if (isConnected) "127.0.0.1:1080" else "-",
+                    serverConnectionStatus = newServerStatus
                 )
             }
         }
