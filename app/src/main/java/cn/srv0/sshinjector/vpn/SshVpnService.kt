@@ -53,6 +53,7 @@ class SshVpnService : VpnService() {
     private var reconnectJob: Job? = null
     private var isReconnecting = false
     private var lastNetworkId: Long = -1
+    private var lastEventWasLost = false
 
     val serviceVpnState = MutableStateFlow<DomainVpnState>(DomainVpnState())
     val serviceConnectionStats = MutableStateFlow<ConnectionStats>(ConnectionStats())
@@ -424,19 +425,25 @@ class SshVpnService : VpnService() {
     }
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) = handleNetworkEvent(network)
-        override fun onLost(network: Network) = handleNetworkEvent(network)
+        override fun onAvailable(network: Network) = handleNetworkEvent(network, isLost = false)
+        override fun onLost(network: Network) = handleNetworkEvent(network, isLost = true)
     }
 
-    private fun handleNetworkEvent(network: Network?) {
+    /**
+     * 处理网络事件。去重以 (网络id, 事件类型) 为键:
+     * 同一网络的 onAvailable/onLost 是不同事件, 必须都放行;
+     * 仅对同一网络的相同类型重复事件去重 (如注册时对已存在网络的 onAvailable)。
+     */
+    private fun handleNetworkEvent(network: Network?, isLost: Boolean) {
         val id = try { network?.networkHandle ?: -1L } catch (_: Exception) { -1L }
         // 跳过 VPN 自身的 TUN 网络
         val caps = try { connectivityManager?.getNetworkCapabilities(network) } catch (_: Exception) { null }
         if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
-        android.util.Log.d("SshVpnService", "Network event: id=$id, last=$lastNetworkId, running=${vpnController.isVpnRunning()}, reconnecting=$isReconnecting")
-        // 同一网络的重复事件不触发 (去抖已覆盖时序)
-        if (id == lastNetworkId) return
+        android.util.Log.d("SshVpnService", "Network event: id=$id lost=$isLost last=$lastNetworkId lastLost=$lastEventWasLost running=${vpnController.isVpnRunning()}, reconnecting=$isReconnecting")
+        // 同一网络 + 同一事件类型的重复事件不触发 (去抖已覆盖时序)
+        if (id == lastNetworkId && isLost == lastEventWasLost) return
         lastNetworkId = id
+        lastEventWasLost = isLost
         // 仅在 VPN 运行且未在重连时, 网络切换触发去抖重连
         if (!vpnController.isVpnRunning() || isReconnecting) return
         reconnectJob?.cancel()
