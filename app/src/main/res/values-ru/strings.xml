@@ -139,6 +139,8 @@
     <string name="server_key">Ключ</string>
     <string name="server_key_placeholder">Выберите ключ…</string>
     <string name="server_socks_port">Локальный порт SOCKS</string>
+    <string name="server_reset_fingerprint">Сбросить отпечаток сервера</string>
+    <string name="server_reset_fingerprint_desc">Используйте при ошибке «ключ хоста изменился» после переустановки сервера</string>
     <string name="server_set_default">Назначить сервером по умолчанию</string>
     <string name="server_enable_ipv6">Включить IPv6</string>
     <string name="server_mtu">MTU</string>

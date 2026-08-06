@@ -139,6 +139,8 @@
     <string name="server_key">Key</string>
     <string name="server_key_placeholder">Tap to select key…</string>
     <string name="server_socks_port">Local SOCKS Port</string>
+    <string name="server_reset_fingerprint">Reset server fingerprint</string>
+    <string name="server_reset_fingerprint_desc">Use if connection fails with "host key changed" after reinstalling the server</string>
     <string name="server_set_default">Set as default server</string>
     <string name="server_enable_ipv6">Enable IPv6</string>
     <string name="server_mtu">MTU</string>

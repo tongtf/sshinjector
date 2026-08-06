@@ -109,6 +109,27 @@ class KnownHostsManager
         }
 
         /**
+         * 删除指定主机的已存记录（服务器重装导致 key 变更时调用）
+         * @return true 如果确实存在并删除了记录
+         */
+        fun removeHostKey(
+            host: String,
+            port: Int,
+        ): Boolean {
+            val prefix = "$host,$port "
+            synchronized(lock) {
+                val lines = knownHostsFile.readText().lines()
+                val kept = lines.filter { !it.startsWith(prefix) }
+                if (kept.size == lines.size) return false
+                FileWriter(knownHostsFile).use { writer ->
+                    kept.forEach { writer.write("$it\n") }
+                }
+            }
+            Log.d("KnownHosts", "Removed host key for $host:$port")
+            return true
+        }
+
+        /**
          * 获取存储的主机指纹
          */
         fun getStoredFingerprint(

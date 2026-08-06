@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import cn.srv0.sshinjector.data.local.dao.ServerDao
 import cn.srv0.sshinjector.data.local.entity.ServerEntity
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
+import cn.srv0.sshinjector.data.remote.ssh.KnownHostsManager
 import cn.srv0.sshinjector.data.remote.ssh.SshKeyManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -21,6 +22,7 @@ class ServerEditViewModel
     constructor(
         private val serverDao: ServerDao,
         private val keyManager: SshKeyManager,
+        private val knownHostsManager: KnownHostsManager,
         private val settingsDataStore: SettingsDataStore,
     ) : ViewModel() {
         private val _saved = MutableStateFlow(false)
@@ -32,12 +34,31 @@ class ServerEditViewModel
         private val _error = MutableSharedFlow<String>(extraBufferCapacity = 1)
         val error = _error.asSharedFlow()
 
+        private val _message = MutableSharedFlow<String>(extraBufferCapacity = 1)
+        val message = _message.asSharedFlow()
+
         init {
             refreshKeys()
         }
 
         fun refreshKeys() {
             _keyAliases.value = keyManager.listKeyAliases()
+        }
+
+        fun resetHostKey(
+            host: String,
+            port: Int,
+        ) {
+            viewModelScope.launch {
+                val removed = knownHostsManager.removeHostKey(host.trim(), port)
+                _message.tryEmit(
+                    if (removed) {
+                        "已重置服务器指纹，下次连接将重新信任该服务器"
+                    } else {
+                        "未找到已保存的服务器指纹"
+                    },
+                )
+            }
         }
 
         fun generateAndAssociate(onGenerated: (String) -> Unit) {

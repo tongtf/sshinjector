@@ -139,6 +139,8 @@
     <string name="server_key">密钥</string>
     <string name="server_key_placeholder">点击选择密钥...</string>
     <string name="server_socks_port">本地 SOCKS 端口</string>
+    <string name="server_reset_fingerprint">重置服务器指纹</string>
+    <string name="server_reset_fingerprint_desc">服务器重装后若提示「主机密钥已变更」，点击重置信任记录</string>
     <string name="server_set_default">设置为默认服务器</string>
     <string name="server_enable_ipv6">启用 IPv6</string>
     <string name="server_mtu">MTU</string>
