@@ -15,6 +15,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.channels.SocketChannel
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 private val IS_DEBUG = android.util.Log.isLoggable("PacketProcessor", android.util.Log.DEBUG)
@@ -33,6 +34,7 @@ class TcpStateMachine(
         private const val MAX_TCP_SEGMENT = 1460
         private const val UINT32_MASK = 0xFFFFFFFFL
         private const val TUN_CONNECT_TIMEOUT_MS = 5000
+        private const val OUTGOING_SOCKS_QUEUE_CAPACITY = 32
     }
 
     @Volatile private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -64,6 +66,12 @@ class TcpStateMachine(
         var pendingConnect: Boolean = false,
         var socksLocalPort: Int = 0,
     ) {
+        // 出向(浏览器→本地 SOCKS)有界队列: packetLoop 只入队不阻塞,
+        // 独立写协程消费; 队列满且挂起槽也满时拒绝并暂停 ACK(背压)
+        val outgoingSocks = java.util.concurrent.ArrayBlockingQueue<ByteArray>(OUTGOING_SOCKS_QUEUE_CAPACITY)
+        val outgoingLock = Any()
+        val suspendedOutgoing = java.util.ArrayDeque<ByteArray>()
+
         enum class TcpState {
             SynSent,
             SynReceived,
@@ -157,19 +165,25 @@ class TcpStateMachine(
                     val expectedBrowserSeq = (conn.browserSeq + 1 + conn.forwardedBytes) and UINT32_MASK
                     val receivedSeq = seqNum.toLong() and UINT32_MASK
                     if (receivedSeq == expectedBrowserSeq) {
-                        conn.forwardedBytes += payloadLen.toLong()
                         if (conn.pendingConnect) {
                             // 延迟 CONNECT: 从首个数据包提取域名，完成 CONNECT，再转发数据
+                            conn.forwardedBytes += payloadLen.toLong()
                             val firstData = ByteArray(payloadLen)
                             buffer.position(payloadStart + dataOffset)
                             buffer.get(firstData)
                             completeDeferredConnect(conn, firstData, connKey)
+                            // 立即回纯 ACK，避免浏览器因等待确认而超时重传
+                            sendAckToBrowser(conn, connKey)
                         } else {
                             buffer.position(payloadStart + dataOffset)
-                            forwardToSocks(conn, buffer, payloadStart + dataOffset, payloadLen)
+                            val accepted = forwardToSocks(conn, buffer, payloadStart + dataOffset, payloadLen)
+                            // ACK 门控: 仅当数据进入出向管线才推进窗口并回 ACK。
+                            // 队列满被拒时推进 ACK → 对端 TCP 窗口收缩 → 浏览器停发, 天然背压。
+                            if (accepted) {
+                                conn.forwardedBytes += payloadLen.toLong()
+                                sendAckToBrowser(conn, connKey)
+                            }
                         }
-                        // 立即回纯 ACK，避免浏览器因等待确认而超时重传
-                        sendAckToBrowser(conn, connKey)
                     } else if (receivedSeq < expectedBrowserSeq) {
                         // 重传段 (seq < expected): 数据已转发过, 丢弃重复, 回 ACK 推进浏览器窗口
                         if (IS_DEBUG) {
@@ -337,6 +351,7 @@ class TcpStateMachine(
         if (!directRelay) {
             startRelayFromSocks(conn, connKey)
         }
+        startOutgoingWriteLoop(conn, connKey)
         if (IS_DEBUG) Log.d(TAG, "TCP established via SOCKS5 to ${conn.dstIp}:${conn.dstPort}")
     }
 
@@ -953,19 +968,19 @@ class TcpStateMachine(
         buffer: ByteBuffer,
         payloadStart: Int,
         payloadLength: Int,
-    ) {
+    ): Boolean {
         if (conn.state != TcpConnection.TcpState.Established) {
             Log.w(
                 TAG,
                 "forwardToSocks: conn ${conn.id} not established (state=${conn.state}), dropping ${payloadLength}B",
             )
-            return
+            return false
         }
 
         // Try tunnel channel first, then SOCKS5 channel
         val tunnelChannel = conn.tunnelChannel
         if (tunnelChannel != null) {
-            try {
+            return try {
                 buffer.position(payloadStart)
                 buffer.limit(payloadStart + payloadLength)
                 val output = tunnelChannel.outputStream
@@ -982,6 +997,7 @@ class TcpStateMachine(
                         )
                     }
                 }
+                true
             } catch (e: IOException) {
                 Log.e(TAG, "forwardToTunnel failed", e)
                 stats.errors.value++
@@ -989,39 +1005,101 @@ class TcpStateMachine(
                     IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort),
                     conn,
                 )
+                false
             }
-            return
         }
 
         val socksChannel = conn.socksChannel
         if (socksChannel == null) {
             Log.w(TAG, "forwardToSocks: both tunnelChannel and socksChannel are null for conn ${conn.id}")
-            return
+            return false
         }
 
-        try {
-            buffer.position(payloadStart)
-            buffer.limit(payloadStart + payloadLength)
-            while (buffer.hasRemaining()) {
-                socksChannel.write(buffer)
+        // 出向: 只拷贝入有界队列, packetLoop 不阻塞; 独立写协程消费并写本地 SOCKS channel
+        val payload = ByteArray(payloadLength)
+        buffer.position(payloadStart)
+        buffer.get(payload)
+        if (IS_DEBUG) {
+            val hexPayload = payload.joinToString("") { "%02x".format(it) }.take(40)
+            Log.d(
+                TAG,
+                "forwardToSocks: queued ${payloadLength}B for conn ${conn.id} → " +
+                    "${conn.dstIp}:${conn.dstPort} hex=$hexPayload",
+            )
+        }
+        return offerOutgoing(conn, payload)
+    }
+
+    /**
+     * 出向数据入有界队列。队列满且挂起槽也满时拒绝(返回 false), 由调用方暂停 ACK 背压。
+     * @return true 表示数据已进入出向管线(队列或挂起槽), 可回 ACK
+     */
+    private fun offerOutgoing(
+        conn: TcpConnection,
+        payload: ByteArray,
+    ): Boolean {
+        synchronized(conn.outgoingLock) {
+            while (conn.suspendedOutgoing.isNotEmpty()) {
+                val suspended = conn.suspendedOutgoing.removeFirst()
+                if (!conn.outgoingSocks.offer(suspended)) {
+                    conn.suspendedOutgoing.addFirst(suspended)
+                    return false
+                }
             }
-            if (IS_DEBUG) {
-                val hexPayload =
-                    ByteArray(payloadLength).also {
-                        val dup = buffer.duplicate()
-                        dup.position(payloadStart)
-                        dup.get(it)
-                    }.joinToString("") { "%02x".format(it) }.take(40)
-                Log.d(
-                    TAG,
-                    "forwardToSocks: wrote ${payloadLength}B for conn ${conn.id} → " +
-                        "${conn.dstIp}:${conn.dstPort} hex=$hexPayload",
-                )
+            if (conn.outgoingSocks.offer(payload)) {
+                return true
             }
-        } catch (e: IOException) {
-            Log.e(TAG, "forwardToSocks failed", e)
-            stats.errors.value++
-            closeTcpConnection(IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort), conn)
+            conn.suspendedOutgoing.addLast(payload)
+            return true
+        }
+    }
+
+    /**
+     * 出向写协程消费队列并写本地 SOCKS channel。
+     * 本地 loopback 写偶发阻塞(上游背压时), 不占 packetLoop 与 SSH 受限池。
+     */
+    private fun startOutgoingWriteLoop(
+        conn: TcpConnection,
+        connKey: Long,
+    ) {
+        val sock = conn.socksChannel ?: return
+        scope.launch(Dispatchers.IO) {
+            while (conn.state == TcpConnection.TcpState.Established && sock.isOpen) {
+                val data =
+                    try {
+                        conn.outgoingSocks.poll(1, TimeUnit.SECONDS)
+                    } catch (e: InterruptedException) {
+                        null
+                    }
+                if (data != null) {
+                    try {
+                        val writeBuf = ByteBuffer.wrap(data)
+                        while (writeBuf.hasRemaining()) {
+                            sock.write(writeBuf)
+                        }
+                        drainSuspendedOutgoing(conn)
+                        conn.lastActivity = System.currentTimeMillis()
+                    } catch (e: IOException) {
+                        closeTcpConnection(connKey, conn)
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 队列腾出空间后把挂起块重新入队, 保证有序不丢。
+     */
+    private fun drainSuspendedOutgoing(conn: TcpConnection) {
+        synchronized(conn.outgoingLock) {
+            while (conn.suspendedOutgoing.isNotEmpty()) {
+                val suspended = conn.suspendedOutgoing.removeFirst()
+                if (!conn.outgoingSocks.offer(suspended)) {
+                    conn.suspendedOutgoing.addFirst(suspended)
+                    break
+                }
+            }
         }
     }
 
