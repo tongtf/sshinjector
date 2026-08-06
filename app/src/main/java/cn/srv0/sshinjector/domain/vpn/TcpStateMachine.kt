@@ -37,6 +37,9 @@ class TcpStateMachine(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val tcpConnections = ConcurrentHashMap<Long, TcpConnection>()
     private val connectionIdCounter = AtomicLong(0)
+
+    // 回向直通回调注册目标 (socks5 插件), 连接关闭时用于移除回调
+    @Volatile private var tunCallbackPlugin: TunnelPlugin? = null
     private val nextTcpSeq = ConcurrentHashMap<Long, Long>()
     private val nextTcpAck = ConcurrentHashMap<Long, Long>()
 
@@ -239,7 +242,7 @@ class TcpStateMachine(
      */
     private suspend fun forwardThroughLocalSocks(
         conn: TcpConnection,
-        ignoredPlugin: TunnelPlugin,
+        plugin: TunnelPlugin,
         socksPort: Int,
     ) {
         val sock = SocketChannel.open()
@@ -247,6 +250,24 @@ class TcpStateMachine(
         sock.connect(InetSocketAddress("127.0.0.1", socksPort))
 
         val connKey = IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort)
+
+        // 回向直通: 远端数据经插件回调直接写 TUN, 跳过本地 SOCKS socket 往返。
+        // 注册必须在 CONNECT 请求前完成——Socks5ProxyServer 收到 CONNECT 后才启动
+        // relay 协程, 因此此时注册可保证协程查询 callback 时必然命中。
+        val localPort = (sock.socket().localSocketAddress as? InetSocketAddress)?.port ?: 0
+        conn.socksLocalPort = localPort
+        var directRelay = false
+        if (localPort > 0) {
+            try {
+                plugin.registerTunCallback(localPort) { data ->
+                    writeTcpPayloadToTun(conn, data, connKey)
+                }
+                tunCallbackPlugin = plugin
+                directRelay = true
+            } catch (e: Exception) {
+                Log.w(TAG, "registerTunCallback failed for conn ${conn.id}, falling back to socket relay")
+            }
+        }
 
         // SOCKS5 握手: VER=5, NMETHODS=1, METHOD=0x00(无认证)
         val handshake = byteArrayOf(0x05, 0x01, 0x00)
@@ -313,7 +334,9 @@ class TcpStateMachine(
             tunWriterProvider()?.invoke(synAckPacket)
         }
 
-        startRelayFromSocks(conn, connKey)
+        if (!directRelay) {
+            startRelayFromSocks(conn, connKey)
+        }
         if (IS_DEBUG) Log.d(TAG, "TCP established via SOCKS5 to ${conn.dstIp}:${conn.dstPort}")
     }
 
@@ -1037,6 +1060,10 @@ class TcpStateMachine(
         conn: TcpConnection,
     ) {
         tcpConnections.remove(key)
+        if (conn.socksLocalPort > 0) {
+            tunCallbackPlugin?.removeTunCallback(conn.socksLocalPort)
+            conn.socksLocalPort = 0
+        }
         try {
             conn.socksChannel?.close()
         } catch (_: Exception) {
