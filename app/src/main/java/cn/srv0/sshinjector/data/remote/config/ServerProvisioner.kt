@@ -143,8 +143,10 @@ class ServerProvisioner
                 exec(
                     login,
                     sudoPrefix,
-                    "id ${ServerProvisioning.TUNNEL_ACCOUNT} && grep -c " +
-                        "'Match User ${ServerProvisioning.TUNNEL_ACCOUNT}' /etc/ssh/sshd_config",
+                    "id ${ServerProvisioning.TUNNEL_ACCOUNT} && (" +
+                        "grep -c 'Match User ${ServerProvisioning.TUNNEL_ACCOUNT}' " +
+                        "/etc/ssh/sshd_config || " +
+                        "test -f /etc/dropbear/sshinjector.configured)",
                 )
             if (verify.exitCode != 0) {
                 exec(login, sudoPrefix, "rm -f $scriptPath $pubKeyPath")

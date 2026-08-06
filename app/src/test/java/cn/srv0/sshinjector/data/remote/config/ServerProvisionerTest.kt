@@ -85,6 +85,37 @@ class ServerProvisionerTest {
         }
 
     @Test
+    fun `full success path with dropbear backend verification`() =
+        runBlocking {
+            val executor =
+                mockExecutor { cmd, _ ->
+                    when {
+                        cmd == "id -u" -> ExecResult(0, "0\n", "")
+                        cmd.contains("sha256sum") && cmd.contains("cat > /tmp/sshinjector_setup_") ->
+                            ExecResult(0, "${sha256(scriptContent)}  /tmp/sshinjector_setup_1.sh\n", "")
+                        cmd.startsWith("sh /tmp/sshinjector_setup_") &&
+                            cmd.endsWith(".pub") ->
+                            ExecResult(0, "complete\n", "")
+                        cmd.contains("test -f /etc/dropbear/sshinjector.configured") ->
+                            ExecResult(0, "1\n", "")
+                        cmd.contains("Match User") -> ExecResult(1, "", "no Match block (dropbear)")
+                        cmd.startsWith("rm -f") -> ExecResult(0, "", "")
+                        cmd.startsWith("cat > /tmp/sshinjector_pubkey") -> ExecResult(0, "", "")
+                        else -> ExecResult(0, "", "")
+                    }
+                }
+            provisioner = ServerProvisioner(Mockito.mock(android.content.Context::class.java), executor)
+            provisioner.scriptLoader = { scriptContent }
+
+            val events = provisioner.provision(login, validPubKey).toList()
+            val finished = events.filterIsInstance<ServerProvisioning.ProvisionEvent.Finished>().last()
+            assertTrue(
+                "expected FullSuccess via dropbear marker, got $finished",
+                finished.outcome is ServerProvisioning.Outcome.FullSuccess,
+            )
+        }
+
+    @Test
     fun `tampered script detected remotely`() =
         runBlocking {
             val executor =

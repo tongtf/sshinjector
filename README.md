@@ -101,8 +101,8 @@
 ### 前置要求
 
 - Android 14 (API 34) 或更高
-- 一台运行 **OpenSSH** 的服务器（推荐；一键配置需要 root 或 sudo 权限）
-- sshd 开启 `AllowTcpForwarding yes`（默认开启）
+- 一台服务器：主流 Linux 或 **OpenWrt**，运行 OpenSSH 或 dropbear（一键配置需 root 或 sudo 权限）
+- OpenSSH 需 `AllowTcpForwarding yes`（默认开启；dropbear 默认允许 TCP 转发）
 
 ### 服务端准备
 
@@ -118,6 +118,8 @@
 **方式 B：手动配置**
 
 按 **[docs/server-setup.md](docs/server-setup.md)** 的步骤手动创建 `sshproxy` 账号、chroot 目录与 sshd 加固配置。
+
+> **OpenWrt**：安装 `openssh-server` 获得完整加固（chroot + Match）；默认 dropbear 走基础兼容模式（创建 `sshproxy` 账号 + 仅公钥，无 chroot 隔离），且不修改全局 dropbear 配置。详见 [docs/server-setup.md](docs/server-setup.md)。
 
 ### 编译安装
 
@@ -224,7 +226,6 @@ SSHInjector/
 │   │   └── AndroidManifest.xml
 │   └── build.gradle.kts
 ├── docs/
-│   └── todo-plan.md               # 详细开发计划
 ├── .github/workflows/ci.yml       # CI/CD
 ├── detekt.yml                     # 代码规范
 ├── build.gradle.kts / settings.gradle.kts

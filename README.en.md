@@ -100,8 +100,8 @@
 ### Prerequisites
 
 - Android 14 (API 34) or higher
-- A server running **OpenSSH** (recommended; one-click setup needs root or sudo)
-- sshd with `AllowTcpForwarding yes` (default)
+- A server running mainstream Linux or **OpenWrt**, with OpenSSH or dropbear (one-click setup needs root or sudo)
+- OpenSSH requires `AllowTcpForwarding yes` (default; dropbear allows TCP forwarding by default)
 
 ### Server setup
 
@@ -117,6 +117,8 @@ In the "Add server" wizard, enter an account with **root or sudo** access on you
 **Option B: Manual setup**
 
 Follow **[docs/server-setup.md](docs/server-setup.md)** to create the `sshproxy` account, chroot directory and sshd hardening yourself.
+
+> **OpenWrt**: install `openssh-server` for full hardening (chroot + Match); the default dropbear uses basic compatibility mode (`sshproxy` account + pubkey-only, no chroot isolation) and does not modify the global dropbear config. See [docs/server-setup.md](docs/server-setup.md).
 
 ### Build
 

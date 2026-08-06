@@ -2,6 +2,7 @@ package cn.srv0.sshinjector.data.remote.config
 
 import cn.srv0.sshinjector.domain.model.ServerProvisioning
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -82,6 +83,23 @@ class SetupScriptConsistencyTest {
             "must clean pubkey temp file",
             script.contains("rm -f"),
         )
+    }
+
+    @Test
+    fun `script supports dropbear backend without touching global config`() {
+        val script = readScript()
+        assertTrue("must auto-detect dropbear", script.contains("command -v dropbear"))
+        assertTrue("must write dropbear marker", script.contains("sshinjector.configured"))
+        assertTrue("must install pubkey for dropbear", script.contains("DROPBEAR_AUTHKEYS"))
+        assertFalse("must not modify global dropbear config", script.contains("uci set dropbear"))
+    }
+
+    @Test
+    fun `script keeps full hardening for openssh backend`() {
+        val script = readScript()
+        assertTrue("must keep chroot setup", script.contains("ChrootDirectory /home/sshproxy/chroot"))
+        assertTrue("must keep Match block", script.contains("Match User sshproxy"))
+        assertTrue("must keep immutable lock", script.contains("chattr +i"))
     }
 
     private fun sha256Hex(data: ByteArray): String {

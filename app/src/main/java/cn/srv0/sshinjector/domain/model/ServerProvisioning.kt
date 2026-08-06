@@ -11,7 +11,7 @@ object ServerProvisioning {
      * 与 assets/ssh_setup_script.sh 逐字节一致时由构建期测试保证。
      */
     const val SETUP_SCRIPT_SHA256 =
-        "fb9334a17e6f49c8f7c3665cc3ff90eff36c4f2837fb411e4e54df0515ce00bf"
+        "0cd9fbb7e0c64a83821fdcb0210e5afbd88838f4a1b216b3f024fece0d433126"
 
     /** 服务器端临时脚本文件名（执行后删除） */
     const val REMOTE_SCRIPT_NAME = "ssh_setup_script.sh"

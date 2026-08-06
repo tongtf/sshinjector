@@ -12,6 +12,9 @@ local.properties
 *.keystore
 keystore.properties
 
+# Planning scratch files
+docs/plans/
+
 # IDE
 .idea/
 *.iml

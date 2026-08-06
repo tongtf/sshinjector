@@ -100,8 +100,8 @@
 ### Требования
 
 - Android 14 (API 34) или новее
-- Сервер с **OpenSSH** (рекомендуется; для автоматической настройки нужны root или sudo)
-- sshd с `AllowTcpForwarding yes` (по умолчанию)
+- Сервер: популярный Linux или **OpenWrt**, с OpenSSH или dropbear (для автоматической настройки нужны root или sudo)
+- OpenSSH требует `AllowTcpForwarding yes` (по умолчанию; dropbear разрешает TCP-переадресацию по умолчанию)
 
 ### Настройка сервера
 
@@ -117,6 +117,8 @@
 **Вариант B: ручная настройка**
 
 Следуйте **[docs/server-setup.md](docs/server-setup.md)** для ручного создания аккаунта `sshproxy`, каталога chroot и усиления sshd.
+
+> **OpenWrt**: установите `openssh-server` для полного усиления (chroot + Match); по умолчанию dropbear работает в базовом режиме совместимости (аккаунт `sshproxy` + только ключи, без изоляции chroot), глобальная конфигурация dropbear не изменяется. См. [docs/server-setup.md](docs/server-setup.md).
 
 ### Сборка
 

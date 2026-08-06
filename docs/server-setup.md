@@ -196,7 +196,19 @@ ssh -D 1080 -N sshproxy@<服务器IP> -p 22
 | Ubuntu/Debian | `lib/x86_64-linux-gnu` 路径；`sshd` 在 `/usr/sbin`；重载用 `systemctl reload ssh` |
 | CentOS/RHEL | `lib64/` 路径；重载用 `systemctl reload sshd` |
 | Alpine (musl) | `ldd` 行为不同，需额外 `ldd /sbin/sshd` 并复制 `/lib/ld-musl-*.so.1` |
-| OpenWrt | dropbear，不支持 Match/ChrootDirectory，不适用本配置 |
+| OpenWrt（默认 dropbear） | 基础兼容模式：账号 + 锁密码 + 公钥，无 chroot/Match 隔离；不修改全局 dropbear 配置 |
+| OpenWrt（openssh-server） | BusyBox 用户态：脚本自动用 `adduser` 建号、`/etc/init.d/sshd restart` 重载，完整加固可用 |
+
+> **OpenWrt 说明**：
+> - 默认 SSH 服务端是 **dropbear**：不支持 `ChrootDirectory` / `Match` 块 / `sshd -t`，因此走
+>   **基础兼容模式** —— 创建 `sshproxy` 账号（`nologin` + 密码锁定）、安装公钥
+>   （`/etc/dropbear/authorized_keys` + `~/.ssh/authorized_keys` 双写）、写入标记文件
+>   `/etc/dropbear/sshinjector.configured` 供 APP 验证。**不修改**全局 `/etc/config/dropbear`。
+>   无 chroot 隔离是该模式的安全折衷（仅靠密码锁定保证仅公钥可登录）。
+> - 安装 OpenSSH 后获得完整加固：`opkg install openssh-server`，脚本自动检测到 `sshd` 即走完整模式。
+> - BusyBox 差异：无 `useradd`（脚本回退到 `adduser`）、无 `systemctl`/`service`
+>   （脚本回退到 `/etc/init.d/sshd restart`）、`chattr` 在 overlayfs 上不生效（脚本已容错，公钥仍以 600 权限保护）。
+> - dropbear 无需重启即生效：`authorized_keys` 每次连接动态读取。
 
 ## 9. 回滚 / 卸载
 
@@ -205,8 +217,8 @@ ssh -D 1080 -N sshproxy@<服务器IP> -p 22
 cp -a /etc/ssh/sshd_config.sshinjector.bak /etc/ssh/sshd_config
 sshd -t && systemctl reload sshd
 
-# 2. 删除账号（连带家目录）
-userdel -r sshproxy
+# 2. 删除账号（连带家目录；OpenWrt/BusyBox 用 deluser）
+userdel -r sshproxy 2>/dev/null || deluser sshproxy
 
 # 3. 清理备份
 rm -f /etc/ssh/sshd_config.sshinjector.bak
