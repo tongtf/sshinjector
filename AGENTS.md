@@ -33,7 +33,7 @@ Traffic path: VpnService TUN → PacketProcessor → TunnelRouter (per-UID selec
 ## Architecture
 
 - **Single module**: all code in `app/src/main/java/com/sshinjector/`
-- **DI**: Hilt (KSP). Two modules: `di/Modules.kt` (`AppModule`, `@Provides`) and `di/TunnelModule.kt` (abstract `@Binds @IntoMap @StringKey`). ksp args: `hilt.disableAggregatingTask=true`
+- **DI**: Hilt (KSP). Two modules: `di/AppModule.kt` (`AppModule`, `@Provides`) and `di/TunnelModule.kt` (abstract `@Binds @IntoMap @StringKey`). ksp args: `hilt.disableAggregatingTask=true`
 - **Tunnel plugin** (`domain/vpn/tunnel/` + `data/remote/tunnel/`): only `socks5` (SSH-D). To add a tunnel: implement `TunnelPlugin`, bind it in `TunnelModule.kt`, describe fields in `TunnelConfigDescriptor`
 - **Data flow**: `domain/vpn/PacketProcessor` → `TunnelRouter.selectPlugin(uid)` / `TunnelManager` → `TunnelPlugin` (default `socks5` in `TunnelManager`) → `data/remote/ssh/JschSshClient` + `domain/vpn/Socks5ProxyServer` → `domain/vpn/TunnelChannel` (`data/remote/ssh/JschTunnelChannel`)
 - **Database**: Room 2.6.1, schema exports to `app/schemas/` (versions 1-3 via ksp arg `room.schemaLocation`)

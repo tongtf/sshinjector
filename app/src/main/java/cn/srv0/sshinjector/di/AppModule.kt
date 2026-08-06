@@ -10,21 +10,24 @@ import cn.srv0.sshinjector.data.remote.ssh.SshKeyManager
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
 import cn.srv0.sshinjector.domain.vpn.PacketProcessor
+import cn.srv0.sshinjector.domain.vpn.ProcNetUidLookup
+import cn.srv0.sshinjector.domain.vpn.UidLookup
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
-import dagger.hilt.InstallIn
-import dagger.hilt.components.SingletonComponent
 import dagger.Module
 import dagger.Provides
+import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
+import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 
 @Module
 @InstallIn(SingletonComponent::class)
 object AppModule {
-
     @Provides
     @Singleton
-    fun provideAppDatabase(@ApplicationContext context: Context): AppDatabase {
+    fun provideAppDatabase(
+        @ApplicationContext context: Context,
+    ): AppDatabase {
         return AppDatabase.getInstance(context)
     }
 
@@ -42,7 +45,9 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideSettingsDataStore(@ApplicationContext context: Context): SettingsDataStore {
+    fun provideSettingsDataStore(
+        @ApplicationContext context: Context,
+    ): SettingsDataStore {
         return SettingsDataStore(context)
     }
 
@@ -57,26 +62,33 @@ object AppModule {
     fun provideServerRepository(
         serverDao: cn.srv0.sshinjector.data.local.dao.ServerDao,
         whitelistDao: cn.srv0.sshinjector.data.local.dao.WhitelistDao,
-        credentialCrypto: CredentialCrypto
+        credentialCrypto: CredentialCrypto,
     ): ServerRepository {
         return ServerRepository(serverDao, whitelistDao, credentialCrypto)
     }
 
     @Provides
     @Singleton
-    fun provideSshKeyManager(@ApplicationContext context: Context): SshKeyManager {
+    fun provideSshKeyManager(
+        @ApplicationContext context: Context,
+    ): SshKeyManager {
         return SshKeyManager(context)
     }
 
     @Provides
     @Singleton
-    fun provideKnownHostsManager(@ApplicationContext context: Context): KnownHostsManager {
+    fun provideKnownHostsManager(
+        @ApplicationContext context: Context,
+    ): KnownHostsManager {
         return KnownHostsManager(context)
     }
 
     @Provides
     @Singleton
-    fun provideJschSshClient(keyManager: SshKeyManager, knownHostsManager: KnownHostsManager): JschSshClient {
+    fun provideJschSshClient(
+        keyManager: SshKeyManager,
+        knownHostsManager: KnownHostsManager,
+    ): JschSshClient {
         return JschSshClient(keyManager, knownHostsManager)
     }
 
@@ -90,5 +102,11 @@ object AppModule {
     @Singleton
     fun provideDnsInterceptor(): DnsInterceptor {
         return DnsInterceptor()
+    }
+
+    @Provides
+    @Singleton
+    fun provideUidLookup(): UidLookup {
+        return ProcNetUidLookup()
     }
 }

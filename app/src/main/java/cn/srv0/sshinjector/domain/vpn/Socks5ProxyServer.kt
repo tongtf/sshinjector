@@ -1,283 +1,276 @@
 package cn.srv0.sshinjector.domain.vpn
 
-import cn.srv0.sshinjector.domain.vpn.TunnelChannel
-import cn.srv0.sshinjector.domain.vpn.SshChannelFactory
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.io.IOException
 import java.net.InetSocketAddress
-import java.net.ServerSocket
-import java.net.Socket
 import java.nio.ByteBuffer
-import java.nio.channels.ServerSocketChannel
-import java.nio.channels.SocketChannel
 import java.nio.channels.SelectionKey
 import java.nio.channels.Selector
+import java.nio.channels.ServerSocketChannel
+import java.nio.channels.SocketChannel
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
-import android.util.Log
 
 private val IS_DEBUG = android.util.Log.isLoggable("Socks5Proxy", android.util.Log.DEBUG)
+private const val TIMEOUT_CHECK_INTERVAL_MS = 5000L
 
 /**
  * 本地 SOCKS5 代理服务器 (RFC 1928)
- * 
+ *
  * 接受来自 VPNService 的连接，通过 SSH 隧道转发到远程服务器
  * 支持: TCP CONNECT, UDP ASSOCIATE, IPv4/IPv6/域名
  */
 @Singleton
-class Socks5ProxyServer @Inject constructor(
-    private val sshChannelFactory: SshChannelFactory,
-    private val dnsInterceptor: DnsInterceptor
-) {
-    
-    private var serverChannel: ServerSocketChannel? = null
-    private var selector: Selector? = null
-    private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val connections = ConcurrentHashMap<Int, Socks5Connection>()
-    private val connectionIdCounter = AtomicLong(0)
-    
-    val serverState = MutableStateFlow<ServerState>(ServerState(ServerState.Status.Stopped))
-    val boundPort = MutableStateFlow<Int?>(null)
-    val activeConnections = MutableStateFlow(0)
-    val totalBytesUp = MutableStateFlow(0L)
-    val totalBytesDown = MutableStateFlow(0L)
-
-    data class ServerState(
-        val status: Status = Status.Stopped,
-        val port: Int? = null,
-        val error: String? = null
+class Socks5ProxyServer
+    @Inject
+    constructor(
+        private val sshChannelFactory: SshChannelFactory,
+        private val dnsInterceptor: DnsInterceptor,
+        private val uidLookup: UidLookup,
     ) {
-        enum class Status { Stopped, Starting, Running, Stopping, Error }
-    }
+        private var serverChannel: ServerSocketChannel? = null
+        private var selector: Selector? = null
+        private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        private val connections = ConcurrentHashMap<Int, Socks5Connection>()
+        private val connectionIdCounter = AtomicLong(0)
 
-    /**
-     * 启动 SOCKS5 服务器
-     */
-    suspend fun start(port: Int = 1080, bindAddress: String = "127.0.0.1"): Result<Int> {
-        if (serverState.value.status == ServerState.Status.Running) {
-            return Result.success(boundPort.value ?: port)
+        val serverState = MutableStateFlow<ServerState>(ServerState(ServerState.Status.Stopped))
+        val boundPort = MutableStateFlow<Int?>(null)
+        val activeConnections = MutableStateFlow(0)
+        val totalBytesUp = MutableStateFlow(0L)
+        val totalBytesDown = MutableStateFlow(0L)
+
+        data class ServerState(
+            val status: Status = Status.Stopped,
+            val port: Int? = null,
+            val error: String? = null,
+        ) {
+            enum class Status { Stopped, Starting, Running, Stopping, Error }
         }
 
-        serverState.value = ServerState(ServerState.Status.Starting)
-
-        return try {
-            serverChannel = ServerSocketChannel.open().apply {
-                configureBlocking(false)
-                socket().reuseAddress = true
-                bind(InetSocketAddress(bindAddress, port))
+        /**
+         * 启动 SOCKS5 服务器
+         */
+        suspend fun start(
+            port: Int = 1080,
+            bindAddress: String = "127.0.0.1",
+        ): Result<Int> {
+            if (serverState.value.status == ServerState.Status.Running) {
+                return Result.success(boundPort.value ?: port)
             }
-            
-            selector = Selector.open()
-            serverChannel!!.register(selector!!, SelectionKey.OP_ACCEPT)
-            
-            val actualPort = serverChannel!!.socket().localPort
-            boundPort.value = actualPort
-            
-            // 启动事件循环
-            scope.launch { eventLoop() }
-            
-            serverState.value = ServerState(ServerState.Status.Running, actualPort)
-            Result.success(actualPort)
-            
-        } catch (e: IOException) {
-            serverState.value = ServerState(ServerState.Status.Error, error = e.message)
-            stop()
-            Result.failure(e)
-        }
-    }
 
-    /**
-     * 停止服务器
-     */
-    suspend fun stop() {
-        serverState.value = ServerState(ServerState.Status.Stopping)
-        
-        scope.cancel()
-        
-        connections.values.forEach { it.close() }
-        connections.clear()
-        
-        try { selector?.close() } catch (_: Exception) {}
-        try { serverChannel?.close() } catch (_: Exception) {}
-        
-        selector = null
-        serverChannel = null
-        boundPort.value = null
-        activeConnections.value = 0
-        
-        scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-        
-        serverState.value = ServerState(ServerState.Status.Stopped)
-    }
+            serverState.value = ServerState(ServerState.Status.Starting)
 
-    private fun eventLoop() {
-        while (!Thread.interrupted() && selector?.isOpen == true) {
-            try {
-                val ready = selector?.select(1000) ?: break
-                if (ready == 0) continue
-                
-                val selectedKeys = selector?.selectedKeys() ?: continue
-                val keysCopy = selectedKeys.toTypedArray()
-                selectedKeys.clear()
-                
-                for (key in keysCopy) {
-                    if (!key.isValid) continue
-                    
-                    when {
-                        key.isAcceptable -> handleAccept(key)
-                        key.isReadable -> handleRead(key)
-                        key.isWritable -> handleWrite(key)
+            return try {
+                serverChannel =
+                    ServerSocketChannel.open().apply {
+                        configureBlocking(false)
+                        socket().reuseAddress = true
+                        bind(InetSocketAddress(bindAddress, port))
                     }
-                }
+
+                selector = Selector.open()
+                serverChannel!!.register(selector!!, SelectionKey.OP_ACCEPT)
+
+                val actualPort = serverChannel!!.socket().localPort
+                boundPort.value = actualPort
+
+                // 启动事件循环
+                scope.launch { eventLoop() }
+
+                serverState.value = ServerState(ServerState.Status.Running, actualPort)
+                Result.success(actualPort)
             } catch (e: IOException) {
-                if (selector?.isOpen == true) {
-                    android.util.Log.w("Socks5Proxy", "eventLoop IO error", e)
-                } else {
-                    break
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("Socks5Proxy", "eventLoop unexpected error", e)
+                serverState.value = ServerState(ServerState.Status.Error, error = e.message)
+                stop()
+                Result.failure(e)
             }
         }
-    }
 
-    // TUN 写回回调: connectionId → callback(data)
-    private val pendingTunCallbacks = ConcurrentHashMap<Int, (ByteArray) -> Unit>()
+        /**
+         * 停止服务器
+         */
+        suspend fun stop() {
+            serverState.value = ServerState(ServerState.Status.Stopping)
 
-    /**
-     * 注册 TUN 写回回调，由 PacketProcessor.forwardSynToSocks 调用
-     */
-    fun registerTunCallback(connectionId: Int, callback: (ByteArray) -> Unit) {
-        pendingTunCallbacks[connectionId] = callback
-    }
+            scope.cancel()
 
-    fun removeTunCallback(connectionId: Int) {
-        pendingTunCallbacks.remove(connectionId)
-    }
+            connections.values.forEach { it.close() }
+            connections.clear()
 
-    fun getTunCallback(connectionId: Int): ((ByteArray) -> Unit)? {
-        return pendingTunCallbacks.remove(connectionId)
-    }
+            try {
+                selector?.close()
+            } catch (_: Exception) {
+            }
+            try {
+                serverChannel?.close()
+            } catch (_: Exception) {
+            }
 
-    private fun handleAccept(key: SelectionKey) {
-        val serverChannel = key.channel() as ServerSocketChannel
-        val clientChannel = serverChannel.accept() ?: return
+            selector = null
+            serverChannel = null
+            boundPort.value = null
+            activeConnections.value = 0
 
-        // 访问控制：仅接受本应用进程发起的连接（PacketProcessor 的本地 SOCKS5 连接）
-        if (getPeerUid(clientChannel) != android.os.Process.myUid()) {
-            android.util.Log.w("Socks5Proxy", "拒绝来自其他应用的连接")
-            runCatching { clientChannel.close() }
-            return
+            scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+            serverState.value = ServerState(ServerState.Status.Stopped)
         }
 
-        clientChannel.configureBlocking(false)
-        val connectionId = connectionIdCounter.incrementAndGet()
-        
-        val clientPort = clientChannel.socket().remoteSocketAddress?.let {
-            (it as? java.net.InetSocketAddress)?.port
-        } ?: 0
-        
-        val connection = Socks5Connection(
-            id = connectionId,
-            channel = clientChannel,
-            sshChannelFactory = sshChannelFactory,
-            onDataSent = { bytes -> totalBytesUp.value = totalBytesUp.value + bytes },
-            onDataReceived = { bytes -> totalBytesDown.value = totalBytesDown.value + bytes },
-            onClosed = { 
-                connections.remove(connectionId.toInt())
-                removeTunCallback(clientPort)
-                activeConnections.value = connections.size
-            },
-            onDataFromTarget = null,
-            ipToDomainLookup = { dnsInterceptor.ipToDomain[it] }
-        )
-        
-        // 延迟查找回调: relayFromTarget 首次使用前从 pendingTunCallbacks 获取
-        connection.tunCallbackKey = clientPort
-        connection.pendingTunCallbacksRef = pendingTunCallbacks
-        
-        connections[connectionId.toInt()] = connection
-        activeConnections.value = connections.size
-        
-        connection.startTimeoutChecker()
-        
-        val selectionKey = clientChannel.register(selector!!, SelectionKey.OP_READ, connection)
-        connection.selectionKey = selectionKey
-    }
+        private fun eventLoop() {
+            var stopped = false
+            while (!stopped && !Thread.interrupted() && selector?.isOpen == true) {
+                try {
+                    if (selector?.select(1000) != 0) {
+                        val selectedKeys = selector?.selectedKeys() ?: continue
+                        if (selectedKeys.isNotEmpty()) {
+                            val keysCopy = selectedKeys.toTypedArray()
+                            selectedKeys.clear()
 
-    private     fun handleRead(key: SelectionKey) {
-        if (!key.isValid) return
-        val connection = key.attachment() as Socks5Connection?
-        if (connection != null) {
-            connection.handleRead(key)
-        }
-    }
-
-    private fun handleWrite(key: SelectionKey) {
-        if (!key.isValid) return
-        val connection = key.attachment() as Socks5Connection?
-        if (connection != null) {
-            connection.handleWrite(key)
-        }
-    }
-
-    fun getStats(): ProxyStats {
-        return ProxyStats(
-            status = serverState.value.status,
-            port = boundPort.value,
-            activeConnections = activeConnections.value,
-            totalBytesUp = totalBytesUp.value,
-            totalBytesDown = totalBytesDown.value
-        )
-    }
-
-    data class ProxyStats(
-        val status: ServerState.Status,
-        val port: Int?,
-        val activeConnections: Int,
-        val totalBytesUp: Long,
-        val totalBytesDown: Long
-    )
-
-    /**
-     * 通过 /proc/net/tcp 解析连接对端的 UID，用于访问控制。
-     * 仅本应用进程发起的连接（UID = 本应用 UID）才被接受。
-     */
-    private fun getPeerUid(clientChannel: java.nio.channels.SocketChannel): Int {
-        return try {
-            val ourPort = clientChannel.socket().localPort
-            val peerPort = (clientChannel.socket().remoteSocketAddress as java.net.InetSocketAddress).port
-            val hexOurPort = ourPort.toString(16).padStart(4, '0')
-            val hexPeerPort = peerPort.toString(16).padStart(4, '0')
-
-            for (file in listOf("/proc/net/tcp", "/proc/net/tcp6")) {
-                val rows = java.io.File(file).readLines().drop(1)
-                for (row in rows) {
-                    val cols = row.trim().split(Regex("\\s+"))
-                    if (cols.size < 8) continue
-                    // 客户端侧: local=127.0.0.1:peerPort, remote=127.0.0.1:ourPort
-                    val localAddr = cols[1]
-                    val remAddr = cols[2]
-                    if (remAddr.endsWith(":$hexOurPort") && localAddr.endsWith(":$hexPeerPort")) {
-                        return cols[7].toInt()
+                            for (key in keysCopy) {
+                                if (key.isValid) {
+                                    when {
+                                        key.isAcceptable -> handleAccept(key)
+                                        key.isReadable -> handleRead(key)
+                                        key.isWritable -> handleWrite(key)
+                                    }
+                                }
+                            }
+                        }
                     }
+                } catch (e: IOException) {
+                    if (selector?.isOpen == true) {
+                        android.util.Log.w("Socks5Proxy", "eventLoop IO error", e)
+                    } else {
+                        stopped = true
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("Socks5Proxy", "eventLoop unexpected error", e)
                 }
             }
-            -1
-        } catch (_: Exception) {
-            // 解析失败时保守拒绝
-            -1
+        }
+
+        // TUN 写回回调: connectionId → callback(data)
+        private val pendingTunCallbacks = ConcurrentHashMap<Int, (ByteArray) -> Unit>()
+
+        /**
+         * 注册 TUN 写回回调，由 PacketProcessor.forwardSynToSocks 调用
+         */
+        fun registerTunCallback(
+            connectionId: Int,
+            callback: (ByteArray) -> Unit,
+        ) {
+            pendingTunCallbacks[connectionId] = callback
+        }
+
+        fun removeTunCallback(connectionId: Int) {
+            pendingTunCallbacks.remove(connectionId)
+        }
+
+        fun getTunCallback(connectionId: Int): ((ByteArray) -> Unit)? {
+            return pendingTunCallbacks.remove(connectionId)
+        }
+
+        private fun handleAccept(key: SelectionKey) {
+            val serverChannel = key.channel() as ServerSocketChannel
+            val clientChannel = serverChannel.accept() ?: return
+
+            // 访问控制：仅接受本应用进程发起的连接（PacketProcessor 的本地 SOCKS5 连接）
+            if (!isPeerOurProcess(clientChannel)) {
+                android.util.Log.w("Socks5Proxy", "拒绝来自其他应用的连接")
+                runCatching { clientChannel.close() }
+                return
+            }
+
+            clientChannel.configureBlocking(false)
+            val connectionId = connectionIdCounter.incrementAndGet()
+
+            val clientPort =
+                clientChannel.socket().remoteSocketAddress?.let {
+                    (it as? java.net.InetSocketAddress)?.port
+                } ?: 0
+
+            val connection =
+                Socks5Connection(
+                    id = connectionId,
+                    channel = clientChannel,
+                    sshChannelFactory = sshChannelFactory,
+                    onDataSent = { bytes -> totalBytesUp.value = totalBytesUp.value + bytes },
+                    onDataReceived = { bytes -> totalBytesDown.value = totalBytesDown.value + bytes },
+                    onClosed = {
+                        connections.remove(connectionId.toInt())
+                        removeTunCallback(clientPort)
+                        activeConnections.value = connections.size
+                    },
+                    onDataFromTarget = null,
+                    ipToDomainLookup = { dnsInterceptor.ipToDomain[it] },
+                )
+
+            // 延迟查找回调: relayFromTarget 首次使用前从 pendingTunCallbacks 获取
+            connection.tunCallbackKey = clientPort
+            connection.pendingTunCallbacksRef = pendingTunCallbacks
+
+            connections[connectionId.toInt()] = connection
+            activeConnections.value = connections.size
+
+            connection.startTimeoutChecker()
+
+            val selectionKey = clientChannel.register(selector!!, SelectionKey.OP_READ, connection)
+            connection.selectionKey = selectionKey
+        }
+
+        private fun handleRead(key: SelectionKey) {
+            if (!key.isValid) return
+            val connection = key.attachment() as Socks5Connection?
+            if (connection != null) {
+                connection.handleRead(key)
+            }
+        }
+
+        private fun handleWrite(key: SelectionKey) {
+            if (!key.isValid) return
+            val connection = key.attachment() as Socks5Connection?
+            if (connection != null) {
+                connection.handleWrite(key)
+            }
+        }
+
+        fun getStats(): ProxyStats {
+            return ProxyStats(
+                status = serverState.value.status,
+                port = boundPort.value,
+                activeConnections = activeConnections.value,
+                totalBytesUp = totalBytesUp.value,
+                totalBytesDown = totalBytesDown.value,
+            )
+        }
+
+        data class ProxyStats(
+            val status: ServerState.Status,
+            val port: Int?,
+            val activeConnections: Int,
+            val totalBytesUp: Long,
+            val totalBytesDown: Long,
+        )
+
+        /**
+         * 校验发起连接的进程是否为自身 (UID == 本应用 UID)。
+         * 委托 UidLookup 解析, 不关心具体实现 (当前为 /proc/net/tcp)。
+         */
+        private fun isPeerOurProcess(clientChannel: java.nio.channels.SocketChannel): Boolean {
+            val localPort = clientChannel.socket().localPort
+            val peerPort = (clientChannel.socket().remoteSocketAddress as java.net.InetSocketAddress).port
+            return uidLookup.uidFor(localPort, peerPort) == android.os.Process.myUid()
         }
     }
-}
 
 /**
  * 单个 SOCKS5 连接处理 (状态机)
@@ -291,9 +284,10 @@ private class Socks5Connection(
     private val onDataReceived: (Long) -> Unit,
     private val onClosed: () -> Unit,
     var onDataFromTarget: ((ByteArray) -> Unit)? = null,
-    private val ipToDomainLookup: ((String) -> String?)? = null
+    private val ipToDomainLookup: ((String) -> String?)? = null,
 ) {
     private val buffer = ByteBuffer.allocateDirect(32768)
+
     @Volatile private var state = SocksState.Handshake
     private var targetTunnel: TunnelChannel? = null
     private var remoteHost: String? = null
@@ -302,25 +296,28 @@ private class Socks5Connection(
     internal var selectionKey: SelectionKey? = null
     internal var tunCallbackKey: Int = 0
     internal var pendingTunCallbacksRef: java.util.concurrent.ConcurrentHashMap<Int, (ByteArray) -> Unit>? = null
-    
+
     // 超时配置
     private var lastActivity = System.currentTimeMillis()
-    private val connectionTimeoutMs = 10000L  // 连接建立超时 10s
-    private val idleTimeoutMs = 300000L       // 空闲超时 5 分钟
+    private val connectionTimeoutMs = 10000L // 连接建立超时 10s
+    private val idleTimeoutMs = 300000L // 空闲超时 5 分钟
     private var timeoutCheckJob: kotlinx.coroutines.Job? = null
-    
-    private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
+
+    private val scope =
+        kotlinx.coroutines.CoroutineScope(
+            kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob(),
+        )
 
     private enum class SocksState {
-        Handshake,      // 等待客户端握手
-        AuthMethods,    // 认证方法协商
-        Request,        // 等待连接请求
-        Connecting,     // 正在连接目标
-        Relaying,       // 数据中转
-        Closed
+        Handshake, // 等待客户端握手
+        AuthMethods, // 认证方法协商
+        Request, // 等待连接请求
+        Connecting, // 正在连接目标
+        Relaying, // 数据中转
+        Closed,
     }
 
-    fun handleRead(key: SelectionKey) {
+    fun handleRead(ignoredKey: SelectionKey) {
         if (state == SocksState.Closed) return
         try {
             // 检查超时
@@ -344,17 +341,20 @@ private class Socks5Connection(
             onDataReceived(read.toLong())
 
             // 循环处理 buffer 中所有可用数据
-            while (buffer.hasRemaining() && state != SocksState.Closed) {
+            var keepProcessing = true
+            while (keepProcessing && buffer.hasRemaining() && state != SocksState.Closed) {
                 when (state) {
                     SocksState.Handshake -> processHandshake()
                     SocksState.AuthMethods -> processAuthMethods()
                     SocksState.Request -> processRequest()
-                    SocksState.Connecting -> break
-                    SocksState.Relaying -> { relayToTarget(); break }
-                    SocksState.Closed -> break
+                    SocksState.Connecting -> keepProcessing = false
+                    SocksState.Relaying -> {
+                        relayToTarget()
+                        keepProcessing = false
+                    }
+                    SocksState.Closed -> keepProcessing = false
                 }
             }
-
         } catch (e: Exception) {
             android.util.Log.e("Socks5Proxy", "[conn=$id] handleRead exception: ${e.message}", e)
             close()
@@ -362,30 +362,33 @@ private class Socks5Connection(
     }
 
     fun handleWrite(key: SelectionKey) {
-        while (true) {
-            val buf = pendingWrites.peek() ?: break
-            if (!buf.hasRemaining()) {
+        var buf = pendingWrites.peek()
+        while (buf != null) {
+            if (buf.hasRemaining()) {
+                try {
+                    val written = channel.write(buf)
+                    onDataSent(written.toLong())
+                    lastActivity = System.currentTimeMillis()
+                    if (buf.hasRemaining()) {
+                        // Buffer partially written, re-add to front (keeps order)
+                        pendingWrites.poll()
+                        pendingWrites.addFirst(buf)
+                    } else {
+                        pendingWrites.poll()
+                    }
+                    // 写满一个 buffer 后继续尝试下一个, 直到 write 返回 0 或队列空
+                    if (written == 0) {
+                        break
+                    }
+                } catch (e: Exception) {
+                    close()
+                    return
+                }
+            } else {
                 // 丢弃队列里残留的空 buffer, 继续处理下一个
                 pendingWrites.poll()
-                continue
             }
-            try {
-                val written = channel.write(buf)
-                onDataSent(written.toLong())
-                lastActivity = System.currentTimeMillis()
-                if (buf.hasRemaining()) {
-                    // Buffer partially written, re-add to front (keeps order)
-                    pendingWrites.poll()
-                    pendingWrites.addFirst(buf)
-                } else {
-                    pendingWrites.poll()
-                }
-                // 写满一个 buffer 后继续尝试下一个, 直到 write 返回 0 或队列空
-                if (written == 0) break
-            } catch (e: Exception) {
-                close()
-                return
-            }
+            buf = pendingWrites.peek()
         }
         // If queue is empty, remove OP_WRITE
         if (pendingWrites.isEmpty()) {
@@ -403,8 +406,8 @@ private class Socks5Connection(
         // SOCKS5 握手: VER(1) NMETHODS(1) METHODS(*)
         if (buffer.remaining() < 2) return
 
-        val ver = buffer.get() .toInt() and 0xFF
-        val nMethods = buffer.get() .toInt() and 0xFF
+        val ver = buffer.get().toInt() and 0xFF
+        val nMethods = buffer.get().toInt() and 0xFF
 
         if (ver != 0x05) {
             close()
@@ -432,24 +435,25 @@ private class Socks5Connection(
             return
         }
 
-        val ver = buffer.get() .toInt() and 0xFF
-        val cmd = buffer.get() .toInt() and 0xFF
-        val rsv = buffer.get() .toInt() and 0xFF // 必须为 0
-        val atyp = buffer.get() .toInt() and 0xFF
+        val ver = buffer.get().toInt() and 0xFF
+        val cmd = buffer.get().toInt() and 0xFF
+        buffer.get() // RSV，必须为 0
+        val atyp = buffer.get().toInt() and 0xFF
 
         when (cmd) {
             0x01 -> { // CONNECT
                 // 解析目标地址
-                val (host, port) = when (atyp) {
-                    0x01 -> parseIpv4()   // IPv4
-                    0x03 -> parseDomain() // 域名
-                    0x04 -> parseIpv6()   // IPv6
-                    else -> {
-                        sendErrorReply(0x08) // Address type not supported
-                        close()
-                        return
+                val (host, port) =
+                    when (atyp) {
+                        0x01 -> parseIpv4() // IPv4
+                        0x03 -> parseDomain() // 域名
+                        0x04 -> parseIpv6() // IPv6
+                        else -> {
+                            sendErrorReply(0x08) // Address type not supported
+                            close()
+                            return
+                        }
                     }
-                }
 
                 remoteHost = host
                 remotePort = port
@@ -461,16 +465,17 @@ private class Socks5Connection(
             0x03 -> { // UDP ASSOCIATE
                 // UDP ASSOCIATE: 客户端告知 UDP relay 地址
                 // 解析客户端的 UDP 地址 (用于后续 UDP 转发)
-                val (clientHost, clientPort) = when (atyp) {
-                    0x01 -> parseIpv4()
-                    0x03 -> parseDomain()
-                    0x04 -> parseIpv6()
-                    else -> {
-                        // 全零表示客户端尚不知道自己的地址
-                        skipAddressAndPort(atyp)
-                        "0.0.0.0" to 0
+                val (clientHost, clientPort) =
+                    when (atyp) {
+                        0x01 -> parseIpv4()
+                        0x03 -> parseDomain()
+                        0x04 -> parseIpv6()
+                        else -> {
+                            // 全零表示客户端尚不知道自己的地址
+                            skipAddressAndPort(atyp)
+                            "0.0.0.0" to 0
+                        }
                     }
-                }
 
                 // 回复成功，告知 UDP relay 地址
                 sendTunResponse(buildUdpTunResponse(clientHost, clientPort))
@@ -489,13 +494,13 @@ private class Socks5Connection(
             0x01 -> buffer.position(buffer.position() + 4 + 2) // IPv4 + Port
             0x04 -> buffer.position(buffer.position() + 16 + 2) // IPv6 + Port
             0x03 -> {
-                val len = buffer.get() .toInt() and 0xFF
+                val len = buffer.get().toInt() and 0xFF
                 buffer.position(buffer.position() + len + 2) // Domain + Port
             }
         }
     }
 
-        fun sendTunResponse(response: ByteArray) {
+    fun sendTunResponse(response: ByteArray) {
         try {
             if (selectionKey != null && selectionKey!!.isValid) {
                 // 统一使用 pendingWrites 队列
@@ -510,23 +515,29 @@ private class Socks5Connection(
         }
     }
 
-    private fun buildTunResponse(bindHost: String, bindPort: Int): ByteArray {
+    private fun buildTunResponse(
+        ignoredBindHost: String,
+        bindPort: Int,
+    ): ByteArray {
         return ByteArray(10).apply {
-            this[0] = 0x05         // VER: 5
-            this[1] = 0x00         // REP: Success
-            this[2] = 0x00         // RSV: 0
-            this[3] = 0x01         // ATYP: IPv4
+            this[0] = 0x05 // VER: 5
+            this[1] = 0x00 // REP: Success
+            this[2] = 0x00 // RSV: 0
+            this[3] = 0x01 // ATYP: IPv4
             this[4] = 0x00
             this[5] = 0x00
             this[6] = 0x00
-            this[7] = 0x00         // BND.ADDR: 0.0.0.0
+            this[7] = 0x00 // BND.ADDR: 0.0.0.0
             this[8] = (bindPort shr 8).toByte()
-            this[9] = bindPort.toByte()   // BND.PORT: 0
+            this[9] = bindPort.toByte() // BND.PORT: 0
         }
     }
 
-    private fun buildUdpTunResponse(bindHost: String, bindPort: Int): ByteArray {
-        return buildTunResponse(bindHost, bindPort)
+    private fun buildUdpTunResponse(
+        ignoredBindHost: String,
+        bindPort: Int,
+    ): ByteArray {
+        return buildTunResponse(ignoredBindHost, bindPort)
     }
 
     private fun parseIpv4(): Pair<String, Int> {
@@ -544,7 +555,7 @@ private class Socks5Connection(
     }
 
     private fun parseDomain(): Pair<String, Int> {
-        val len = buffer.get() .toInt() and 0xFF
+        val len = buffer.get().toInt() and 0xFF
         val bytes = ByteArray(len)
         buffer.get(bytes)
         val port = readPort()
@@ -552,8 +563,8 @@ private class Socks5Connection(
     }
 
     private fun readPort(): Int {
-        val b1 = buffer.get() .toInt() and 0xFF
-        val b2 = buffer.get() .toInt() and 0xFF
+        val b1 = buffer.get().toInt() and 0xFF
+        val b2 = buffer.get().toInt() and 0xFF
         return (b1 shl 8) or b2
     }
 
@@ -576,13 +587,14 @@ private class Socks5Connection(
         }
 
         // 解析假 IP 为真实域名 (198.18.x.x 或 fd00::/64 范围)
-        val resolvedHost = if (host.startsWith("198.18.")) {
-            ipToDomainLookup?.invoke(host) ?: host
-        } else if (host.startsWith("fd00:")) {
-            ipToDomainLookup?.invoke(host) ?: host
-        } else {
-            host
-        }
+        val resolvedHost =
+            if (host.startsWith("198.18.")) {
+                ipToDomainLookup?.invoke(host) ?: host
+            } else if (host.startsWith("fd00:")) {
+                ipToDomainLookup?.invoke(host) ?: host
+            } else {
+                host
+            }
 
         if (resolvedHost != host && IS_DEBUG) {
             android.util.Log.d("Socks5Proxy", "Resolved fake IP $host to domain $resolvedHost")
@@ -592,7 +604,10 @@ private class Socks5Connection(
             try {
                 val tunnel = factory.createDirectChannel(resolvedHost, port)
                 if (tunnel == null) {
-                    android.util.Log.e("Socks5Proxy", "connectToTarget failed: createDirectChannel returned null for $host:$port")
+                    android.util.Log.e(
+                        "Socks5Proxy",
+                        "connectToTarget failed: createDirectChannel returned null for $host:$port",
+                    )
                     sendErrorReply(0x05)
                     close()
                     return@launch
@@ -600,7 +615,10 @@ private class Socks5Connection(
 
                 val connected = tunnel.connect(5000)
                 if (!connected) {
-                    android.util.Log.e("Socks5Proxy", "connectToTarget failed: tunnel.connect returned false for $host:$port")
+                    android.util.Log.e(
+                        "Socks5Proxy",
+                        "connectToTarget failed: tunnel.connect returned false for $host:$port",
+                    )
                     tunnel.disconnect()
                     sendErrorReply(0x05)
                     close()
@@ -610,7 +628,6 @@ private class Socks5Connection(
                 if (IS_DEBUG) android.util.Log.d("Socks5Proxy", "connectToTarget success: $host:$port")
                 targetTunnel = tunnel
                 onTargetConnected()
-
             } catch (e: Exception) {
                 android.util.Log.e("Socks5Proxy", "connectToTarget exception: $host:$port", e)
                 sendErrorReply(0x05)
@@ -647,13 +664,19 @@ private class Socks5Connection(
         val input = tunnel.inputStream ?: return
 
         scope.launch(Dispatchers.IO) {
-            val readBuffer = ByteBuffer.allocate(65535)  // 增加到 64KB
+            val readBuffer = ByteBuffer.allocate(65535) // 增加到 64KB
             var resolvedCallback = onDataFromTarget
             if (resolvedCallback == null && pendingTunCallbacksRef != null) {
                 resolvedCallback = pendingTunCallbacksRef!![tunCallbackKey]
             }
             val callback = resolvedCallback
-            if (IS_DEBUG) android.util.Log.d("Socks5Proxy", "[conn=$id] relayFromTarget started, callbackKey=$tunCallbackKey callback=${if (callback != null) "set" else "MISSING"}")
+            if (IS_DEBUG) {
+                android.util.Log.d(
+                    "Socks5Proxy",
+                    "[conn=$id] relayFromTarget started, callbackKey=$tunCallbackKey " +
+                        "callback=${if (callback != null) "set" else "MISSING"}",
+                )
+            }
             try {
                 while (tunnel.isConnected && state == SocksState.Relaying) {
                     readBuffer.clear()
@@ -669,7 +692,11 @@ private class Socks5Connection(
                         // 只在必须传给 callback 时拷贝; sendReply 路径可直接用 array + offset/len
                         val data = readBuffer.array().copyOf(read)
                         if (IS_DEBUG) {
-                            android.util.Log.d("Socks5Proxy", "[conn=$id] relayFromTarget: received ${read}B wait=${readWaitMs}ms callback=${callback != null}")
+                            android.util.Log.d(
+                                "Socks5Proxy",
+                                "[conn=$id] relayFromTarget: received ${read}B wait=${readWaitMs}ms " +
+                                    "callback=${callback != null}",
+                            )
                         }
                         callback?.invoke(data)
                         onDataReceived(read.toLong())
@@ -689,18 +716,22 @@ private class Socks5Connection(
     private fun buildSuccessReply(): ByteArray {
         // 简化: 返回 0.0.0.0:0 作为绑定地址
         return byteArrayOf(
-            0x05, 0x00, 0x00, 0x01,  // VER REP RSV ATYP(IPv4)
-            0x00, 0x00, 0x00, 0x00,  // BND.ADDR (0.0.0.0)
-            0x00, 0x00               // BND.PORT (0)
+            // VER REP RSV ATYP(IPv4)
+            0x05, 0x00, 0x00, 0x01,
+            // BND.ADDR (0.0.0.0)
+            0x00, 0x00, 0x00, 0x00,
+            // BND.PORT (0)
+            0x00, 0x00,
         )
     }
 
     private fun sendErrorReply(rep: Int) {
-        val reply = byteArrayOf(
-            0x05, rep.toByte(), 0x00, 0x01,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00
-        )
+        val reply =
+            byteArrayOf(
+                0x05, rep.toByte(), 0x00, 0x01,
+                0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00,
+            )
         sendReply(reply)
     }
 
@@ -713,7 +744,8 @@ private class Socks5Connection(
                 // 唤醒阻塞中的 selector, 避免跨线程 interestOps 修改后写入延迟
                 try {
                     selectionKey!!.selector().wakeup()
-                } catch (_: Exception) {}
+                } catch (_: Exception) {
+                }
             } else {
                 channel.write(ByteBuffer.wrap(reply))
             }
@@ -762,7 +794,7 @@ private class Socks5Connection(
     private fun checkTimeout(): Boolean {
         val now = System.currentTimeMillis()
         val elapsed = now - lastActivity
-        
+
         return when (state) {
             SocksState.Handshake, SocksState.AuthMethods, SocksState.Request, SocksState.Connecting -> {
                 // 连接建立阶段：使用连接超时
@@ -780,16 +812,17 @@ private class Socks5Connection(
      * 启动超时检查定时任务
      */
     fun startTimeoutChecker() {
-        timeoutCheckJob = scope.launch {
-            while (state != SocksState.Closed) {
-                kotlinx.coroutines.delay(5000) // 每 5 秒检查一次
-                if (state != SocksState.Closed && checkTimeout()) {
-                    android.util.Log.w("Socks5Proxy", "Connection ${id} timed out (state=$state)")
-                    close()
-                    break
+        timeoutCheckJob =
+            scope.launch {
+                while (state != SocksState.Closed) {
+                    kotlinx.coroutines.delay(TIMEOUT_CHECK_INTERVAL_MS)
+                    if (state != SocksState.Closed && checkTimeout()) {
+                        android.util.Log.w("Socks5Proxy", "Connection $id timed out (state=$state)")
+                        close()
+                        break
+                    }
                 }
             }
-        }
     }
 
     fun close() {
@@ -800,7 +833,10 @@ private class Socks5Connection(
         timeoutCheckJob = null
         scope.cancel()
 
-        try { channel.close() } catch (_: Exception) {}
+        try {
+            channel.close()
+        } catch (_: Exception) {
+        }
         try {
             val sk = selectionKey
             if (sk != null) {
@@ -810,10 +846,14 @@ private class Socks5Connection(
                 }
                 sk.attach(null)
             }
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
         selectionKey = null
 
-        try { targetTunnel?.disconnect() } catch (_: Exception) {}
+        try {
+            targetTunnel?.disconnect()
+        } catch (_: Exception) {
+        }
         targetTunnel = null
 
         onClosed()
