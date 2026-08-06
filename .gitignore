@@ -30,9 +30,6 @@ Thumbs.db
 */build/reports/
 */build/outputs/
 
-# Gradle wrapper
-gradle/wrapper/gradle-wrapper.jar
-
 # Coverage
 *.ec
 *.exec
