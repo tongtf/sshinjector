@@ -92,13 +92,8 @@ class KnownHostsManager
         ) {
             val fingerprint = computeFingerprint(hostKey)
             val keyType = hostKey.getType()
-            // JSch HostKey.getKey() 可能返回 String 或 ByteArray
-            val keyBytes =
-                when (val kb = hostKey.getKey()) {
-                    is ByteArray -> kb
-                    is String -> kb.toByteArray()
-                    else -> error("Unexpected key type: ${kb::class}")
-                }
+            // JSch HostKey.getKey() 返回 OpenSSH 公钥字符串
+            val keyBytes = hostKey.getKey().toByteArray()
             val keyBlob = Base64.encodeToString(keyBytes, Base64.NO_WRAP)
             val line = "$host,$port $keyType $keyBlob $fingerprint\n"
 
@@ -138,14 +133,8 @@ class KnownHostsManager
 
         private fun computeFingerprint(key: HostKey): String {
             val digest = MessageDigest.getInstance("SHA-256")
-            val keyBytes = key.getKey()
-            // JSch HostKey.getKey() 可能返回 String 或 ByteArray，统一转为 ByteArray
-            val bytes =
-                when (keyBytes) {
-                    is ByteArray -> keyBytes
-                    is String -> keyBytes.toByteArray()
-                    else -> error("Unexpected key type: ${keyBytes::class}")
-                }
+            // JSch HostKey.getKey() 返回 OpenSSH 公钥字符串
+            val bytes = key.getKey().toByteArray()
             digest.update(bytes)
             return "SHA256:" + Base64.encodeToString(digest.digest(), Base64.NO_WRAP)
         }
@@ -545,14 +534,8 @@ class JschSshClient
 
         private fun computeFingerprint(hostKey: HostKey): String {
             val digest = MessageDigest.getInstance("SHA-256")
-            val keyBytes = hostKey.getKey()
-            // JSch HostKey.getKey() 可能返回 String 或 ByteArray，统一转为 ByteArray
-            val bytes =
-                when (keyBytes) {
-                    is ByteArray -> keyBytes
-                    is String -> keyBytes.toByteArray()
-                    else -> error("Unexpected key type: ${keyBytes::class}")
-                }
+            // JSch HostKey.getKey() 返回 OpenSSH 公钥字符串
+            val bytes = hostKey.getKey().toByteArray()
             digest.update(bytes)
             return "SHA256:" + Base64.encodeToString(digest.digest(), Base64.NO_WRAP)
         }

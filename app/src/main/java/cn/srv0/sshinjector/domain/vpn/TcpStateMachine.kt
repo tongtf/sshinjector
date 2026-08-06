@@ -218,7 +218,7 @@ class TcpStateMachine(
                 if (plugin.localSocksPort > 0) {
                     forwardThroughLocalSocks(conn, plugin, plugin.localSocksPort)
                 } else {
-                    val channel = plugin.openTcpChannel(conn.dstIp.hostAddress, conn.dstPort)
+                    val channel = plugin.openTcpChannel(conn.dstIp.hostAddress!!, conn.dstPort)
                     if (channel != null) {
                         forwardThroughDirectChannel(conn, plugin, channel)
                     } else {
@@ -292,7 +292,7 @@ class TcpStateMachine(
         }
 
         // SOCKS5 CONNECT 请求
-        val domain = dnsInterceptor?.ipToDomain?.get(conn.dstIp.hostAddress)
+        val domain = dnsInterceptor?.ipToDomain?.get(conn.dstIp.hostAddress!!)
         val connectReq = buildSocks5ConnectRequest(conn.dstIp, conn.dstPort, domain)
         sock.write(ByteBuffer.wrap(connectReq))
 
@@ -508,12 +508,24 @@ class TcpStateMachine(
         try {
             val domain = extractSniFromTls(firstData) ?: extractHostFromHttp(firstData)
             if (domain != null) {
-                dnsInterceptor?.ipToDomain?.put(conn.dstIp.hostAddress, domain)
-                if (IS_DEBUG) Log.d(TAG, "Extracted domain: $domain for IP ${conn.dstIp.hostAddress} (conn ${conn.id})")
+                dnsInterceptor?.ipToDomain?.put(
+                    conn.dstIp.hostAddress!!,
+                    domain,
+                )
+                if (IS_DEBUG) {
+                    Log.d(
+                        TAG,
+                        "Extracted domain: $domain for IP ${conn.dstIp.hostAddress!!} (conn ${conn.id})",
+                    )
+                }
             }
 
             val plugin = tunnelManager.getActiveOrFallback()
-            val channel = plugin.openTcpChannel(conn.dstIp.hostAddress, conn.dstPort)
+            val channel =
+                plugin.openTcpChannel(
+                    conn.dstIp.hostAddress!!,
+                    conn.dstPort,
+                )
             if (channel != null && channel.connect(TUN_CONNECT_TIMEOUT_MS)) {
                 conn.tunnelChannel = channel
                 conn.pendingConnect = false
