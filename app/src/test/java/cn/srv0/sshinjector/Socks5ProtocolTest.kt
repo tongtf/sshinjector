@@ -1,11 +1,10 @@
 package cn.srv0.sshinjector
 
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.nio.ByteBuffer
 
 class Socks5ProtocolTest {
-
     @Test
     fun `test SOCKS5 handshake`() {
         // SOCKS5 握手: VER=5, NMETHODS=1, METHOD=0x00(无认证)
@@ -36,11 +35,12 @@ class Socks5ProtocolTest {
     @Test
     fun `test SOCKS5 response parsing`() {
         // SOCKS5 成功响应: VER=5, REP=0(Success), RSV=0, ATYP=1(IPv4), BND.ADDR, BND.PORT
-        val response = byteArrayOf(
-            0x05, 0x00, 0x00, 0x01, // VER REP RSV ATYP
-            0x00, 0x00, 0x00, 0x00, // BND.ADDR
-            0x00, 0x00              // BND.PORT
-        )
+        val response =
+            byteArrayOf(
+                0x05, 0x00, 0x00, 0x01, // VER REP RSV ATYP
+                0x00, 0x00, 0x00, 0x00, // BND.ADDR
+                0x00, 0x00, // BND.PORT
+            )
 
         assertEquals(0x05, response[0].toInt() and 0xFF)
         assertEquals(0x00, response[1].toInt() and 0xFF) // Success

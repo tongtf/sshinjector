@@ -1,11 +1,11 @@
 package cn.srv0.sshinjector
 
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Test
 import java.net.InetAddress
 
 class PacketProcessorTest {
-
     @Test
     fun `test connection key generation`() {
         val srcIp = InetAddress.getByName("192.168.1.1")
@@ -28,7 +28,12 @@ class PacketProcessorTest {
         assertNotEquals(key1, key2)
     }
 
-    private fun generateConnectionKey(srcIp: InetAddress, dstIp: InetAddress, srcPort: Int, dstPort: Int): Long {
+    private fun generateConnectionKey(
+        srcIp: InetAddress,
+        dstIp: InetAddress,
+        srcPort: Int,
+        dstPort: Int,
+    ): Long {
         val srcHash = srcIp.hashCode().toLong()
         val dstHash = dstIp.hashCode().toLong()
         return (srcHash shl 32) xor (dstHash shl 16) xor (srcPort.toLong() shl 8) xor dstPort.toLong()

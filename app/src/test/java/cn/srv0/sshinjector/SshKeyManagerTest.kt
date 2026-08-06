@@ -1,10 +1,9 @@
 package cn.srv0.sshinjector
 
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class SshKeyManagerTest {
-
     @Test
     fun `test key alias prefix`() {
         val prefix = "ssh_key_"
@@ -15,11 +14,12 @@ class SshKeyManagerTest {
 
     @Test
     fun `test key algorithm names`() {
-        val algorithms = mapOf(
-            0 to "Ed25519",
-            1 to "RSA 4096",
-            2 to "ECDSA P-256"
-        )
+        val algorithms =
+            mapOf(
+                0 to "Ed25519",
+                1 to "RSA 4096",
+                2 to "ECDSA P-256",
+            )
         assertEquals("Ed25519", algorithms[0])
         assertEquals("RSA 4096", algorithms[1])
         assertEquals("ECDSA P-256", algorithms[2])

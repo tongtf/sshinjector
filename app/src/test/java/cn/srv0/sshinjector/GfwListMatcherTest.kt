@@ -10,8 +10,8 @@ import org.junit.Test
  * gfwlist 解析与匹配逻辑的单元测试
  */
 class GfwListMatcherTest {
-
-    private val sampleList = """
+    private val sampleList =
+        """
         [AutoProxy 0.2.9]
         ! comment line, should be ignored
         |http://example.net/path/to/file
@@ -25,7 +25,7 @@ class GfwListMatcherTest {
         1.2.3.4:8080
         /^https?:\/\/example\.org/
         example.org
-    """.trimIndent()
+        """.trimIndent()
 
     private fun parse(): GfwListMatcher = GfwListMatcher.parse(sampleList)
 

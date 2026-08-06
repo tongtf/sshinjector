@@ -1,10 +1,9 @@
 package cn.srv0.sshinjector
 
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class VpnControllerTest {
-
     @Test
     fun `test connection order`() {
         // 测试连接顺序: SSH connect → port forwarding → SOCKS5 proxy → tunnel → packetLoop
@@ -31,7 +30,7 @@ class VpnControllerTest {
             val bytesSent: Long = 0,
             val bytesReceived: Long = 0,
             val packetsSent: Long = 0,
-            val packetsReceived: Long = 0
+            val packetsReceived: Long = 0,
         )
 
         val stats = ConnectionStats(bytesSent = 1024, bytesReceived = 2048)

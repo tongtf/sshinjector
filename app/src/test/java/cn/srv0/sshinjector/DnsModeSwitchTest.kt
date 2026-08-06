@@ -8,7 +8,6 @@ import org.junit.Test
  * 连接模式切换循环逻辑的单元测试
  */
 class DnsModeSwitchTest {
-
     @Test
     fun `nextDnsMode cycles through all four modes`() {
         assertEquals(1, nextDnsMode(0)) // REMOTE -> SYSTEM

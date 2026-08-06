@@ -1,10 +1,11 @@
 package cn.srv0.sshinjector
 
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DnsInterceptorTest {
-
     @Test
     fun `test DNS cache key generation`() {
         val name = "example.com"
