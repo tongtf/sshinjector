@@ -140,4 +140,15 @@ class Socks5TunnelPlugin
         }
 
         override suspend fun forwardDns(query: ByteArray): ByteArray? = null
+
+        override fun registerTunCallback(
+            clientPort: Int,
+            callback: (ByteArray) -> Unit,
+        ) {
+            socksServer?.registerTunCallback(clientPort, callback)
+        }
+
+        override fun removeTunCallback(clientPort: Int) {
+            socksServer?.removeTunCallback(clientPort)
+        }
     }
