@@ -10,8 +10,6 @@ import cn.srv0.sshinjector.data.remote.ssh.SshKeyManager
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
 import cn.srv0.sshinjector.domain.vpn.PacketProcessor
-import cn.srv0.sshinjector.domain.vpn.ProcNetUidLookup
-import cn.srv0.sshinjector.domain.vpn.UidLookup
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import dagger.Module
 import dagger.Provides
@@ -102,11 +100,5 @@ object AppModule {
     @Singleton
     fun provideDnsInterceptor(): DnsInterceptor {
         return DnsInterceptor()
-    }
-
-    @Provides
-    @Singleton
-    fun provideUidLookup(): UidLookup {
-        return ProcNetUidLookup()
     }
 }

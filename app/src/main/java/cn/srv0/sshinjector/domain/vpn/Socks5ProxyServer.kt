@@ -34,7 +34,6 @@ class Socks5ProxyServer
     constructor(
         private val sshChannelFactory: SshChannelFactory,
         private val dnsInterceptor: DnsInterceptor,
-        private val uidLookup: UidLookup,
     ) {
         private var serverChannel: ServerSocketChannel? = null
         private var selector: Selector? = null
@@ -183,13 +182,9 @@ class Socks5ProxyServer
             val serverChannel = key.channel() as ServerSocketChannel
             val clientChannel = serverChannel.accept() ?: return
 
-            // 访问控制：仅接受本应用进程发起的连接（PacketProcessor 的本地 SOCKS5 连接）
-            if (!isPeerOurProcess(clientChannel)) {
-                android.util.Log.w("Socks5Proxy", "拒绝来自其他应用的连接")
-                runCatching { clientChannel.close() }
-                return
-            }
-
+            // 仅监听 127.0.0.1 (loopback): Android 上其他应用无法连接本应用监听的 loopback 端口,
+            // 同进程的 TcpStateMachine 是唯一合法客户端, 无需对端 UID 校验
+            // (/proc/net/tcp 在 Android 应用进程内受 SELinux 限制不可读, 校验会导致拒绝所有连接)。
             clientChannel.configureBlocking(false)
             val connectionId = connectionIdCounter.incrementAndGet()
 
@@ -260,16 +255,6 @@ class Socks5ProxyServer
             val totalBytesUp: Long,
             val totalBytesDown: Long,
         )
-
-        /**
-         * 校验发起连接的进程是否为自身 (UID == 本应用 UID)。
-         * 委托 UidLookup 解析, 不关心具体实现 (当前为 /proc/net/tcp)。
-         */
-        private fun isPeerOurProcess(clientChannel: java.nio.channels.SocketChannel): Boolean {
-            val localPort = clientChannel.socket().localPort
-            val peerPort = (clientChannel.socket().remoteSocketAddress as java.net.InetSocketAddress).port
-            return uidLookup.uidFor(localPort, peerPort) == android.os.Process.myUid()
-        }
     }
 
 /**

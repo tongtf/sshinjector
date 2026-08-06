@@ -6,7 +6,6 @@ import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
 import cn.srv0.sshinjector.domain.vpn.Socks5ProxyServer
 import cn.srv0.sshinjector.domain.vpn.TunnelChannel
-import cn.srv0.sshinjector.domain.vpn.UidLookup
 import cn.srv0.sshinjector.domain.vpn.tunnel.ConfigField
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelCapability
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelConfig
@@ -26,7 +25,6 @@ class Socks5TunnelPlugin
     constructor(
         private val jschClient: JschSshClient,
         private val dnsInterceptor: DnsInterceptor,
-        private val uidLookup: UidLookup,
     ) : TunnelPlugin {
         override val id = "socks5"
         override val displayName = "SOCKS5 (SSH)"
@@ -95,7 +93,7 @@ class Socks5TunnelPlugin
                 val result = jschClient.connect(sshConfig)
                 if (!result.success) throw Exception(result.error ?: "SSH connection failed")
 
-                val proxy = Socks5ProxyServer(jschClient, dnsInterceptor, uidLookup)
+                val proxy = Socks5ProxyServer(jschClient, dnsInterceptor)
                 val proxyResult = proxy.start(c.socksPort, "127.0.0.1")
                 if (proxyResult.isFailure) throw proxyResult.exceptionOrNull()!!
 
