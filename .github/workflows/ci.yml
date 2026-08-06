@@ -8,7 +8,7 @@ on:
     branches: [main, develop]
 
 env:
-  GRADLE_OPTS: "-Xmx4096m -Dorg.gradle.jvmargs=-Xmx4096m -Dkotlin.compiler.execution.strategy=in-process"
+  GRADLE_OPTS: "-Xmx3072m -Dorg.gradle.jvmargs=-Xmx3072m -Dorg.gradle.workers.max=2 -Dkotlin.compiler.execution.strategy=in-process"
 
 jobs:
   lint-and-test:
@@ -50,8 +50,15 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x ./gradlew
       
-      - name: Run Code Quality Gates
-        run: ./gradlew ktlintCheck detekt lint
+      # 拆分质量任务, 避免 detekt+lint 同跑耗尽 runner 内存
+      - name: Run ktlint
+        run: ./gradlew ktlintCheck
+      
+      - name: Run detekt
+        run: ./gradlew detekt
+      
+      - name: Run Android Lint
+        run: ./gradlew lint
       
       - name: Run Unit Tests
         run: ./gradlew testDebugUnitTest
