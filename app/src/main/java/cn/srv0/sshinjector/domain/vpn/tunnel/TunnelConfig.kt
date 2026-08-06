@@ -1,7 +1,6 @@
 package cn.srv0.sshinjector.domain.vpn.tunnel
 
 sealed class TunnelConfig {
-
     abstract val common: CommonConfig
 
     data class CommonConfig(

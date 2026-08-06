@@ -1,7 +1,7 @@
 package cn.srv0.sshinjector.domain.vpn.tunnel
 
 data class TunnelConfigDescriptor(
-    val fields: List<ConfigField>
+    val fields: List<ConfigField>,
 )
 
 sealed class ConfigField {

@@ -7,14 +7,18 @@ import java.nio.ByteOrder
  * IP/TCP/ICMPv6 校验和计算，纯函数无状态。
  */
 object ChecksumCalculator {
-
-    fun ipChecksum(header: ByteBuffer, headerLen: Int): Short {
+    fun ipChecksum(
+        header: ByteBuffer,
+        headerLen: Int,
+    ): Short {
         val savedPos = header.position()
         header.position(0)
         var sum = 0L
         val end = headerLen - (headerLen and 1)
-        for (i in 0 until end step 2) {
+        var pos = 0
+        while (pos < end) {
             sum += (header.getShort().toInt() and 0xFFFF)
+            pos += 2
         }
         if (headerLen and 1 != 0) {
             header.position(end)
@@ -27,32 +31,39 @@ object ChecksumCalculator {
         return (sum.inv().toShort())
     }
 
-    fun tcpChecksum(srcIp: ByteArray, dstIp: ByteArray, packet: ByteArray, ipOffset: Int, tcpLen: Int): Short {
+    fun tcpChecksum(
+        srcIp: ByteArray,
+        dstIp: ByteArray,
+        packet: ByteArray,
+        ipOffset: Int,
+        tcpLen: Int,
+    ): Short {
         val isIPv6 = srcIp.size == 16
         val paddedLen = tcpLen + (tcpLen and 1)
-        val pseudoHeader = if (isIPv6) {
-            ByteBuffer.allocate(40 + paddedLen).apply {
-                order(ByteOrder.BIG_ENDIAN)
-                put(srcIp)
-                put(dstIp)
-                putInt(tcpLen)
-                put(ByteArray(3))
-                put(6)
-                put(packet, ipOffset, tcpLen)
-                if (paddedLen != tcpLen) put(0)
+        val pseudoHeader =
+            if (isIPv6) {
+                ByteBuffer.allocate(40 + paddedLen).apply {
+                    order(ByteOrder.BIG_ENDIAN)
+                    put(srcIp)
+                    put(dstIp)
+                    putInt(tcpLen)
+                    put(ByteArray(3))
+                    put(6)
+                    put(packet, ipOffset, tcpLen)
+                    if (paddedLen != tcpLen) put(0)
+                }
+            } else {
+                ByteBuffer.allocate(12 + paddedLen).apply {
+                    order(ByteOrder.BIG_ENDIAN)
+                    put(srcIp)
+                    put(dstIp)
+                    put(0)
+                    put(6)
+                    putShort(tcpLen.toShort())
+                    put(packet, ipOffset, tcpLen)
+                    if (paddedLen != tcpLen) put(0)
+                }
             }
-        } else {
-            ByteBuffer.allocate(12 + paddedLen).apply {
-                order(ByteOrder.BIG_ENDIAN)
-                put(srcIp)
-                put(dstIp)
-                put(0)
-                put(6)
-                putShort(tcpLen.toShort())
-                put(packet, ipOffset, tcpLen)
-                if (paddedLen != tcpLen) put(0)
-            }
-        }
 
         var sum = 0L
         pseudoHeader.position(0)
@@ -65,7 +76,13 @@ object ChecksumCalculator {
         return sum.inv().toShort()
     }
 
-    fun icmpv6Checksum(packet: ByteArray, srcIp: ByteArray, dstIp: ByteArray, icmpOffset: Int, icmpLen: Int): Short {
+    fun icmpv6Checksum(
+        packet: ByteArray,
+        srcIp: ByteArray,
+        dstIp: ByteArray,
+        icmpOffset: Int,
+        icmpLen: Int,
+    ): Short {
         // ICMPv6 伪头部: srcIp(16) + dstIp(16) + length(4) + zeros(3) + nextHeader(1)
         val pseudoHeader = ByteBuffer.allocate(40 + icmpLen)
         pseudoHeader.order(ByteOrder.BIG_ENDIAN)
@@ -78,8 +95,10 @@ object ChecksumCalculator {
 
         var sum = 0L
         pseudoHeader.position(0)
-        for (i in 0 until pseudoHeader.limit() step 2) {
+        var pos = 0
+        while (pos < pseudoHeader.limit()) {
             sum += (pseudoHeader.getShort().toInt() and 0xFFFF)
+            pos += 2
         }
         while (sum shr 16 != 0L) {
             sum = (sum and 0xFFFF) + (sum shr 16)

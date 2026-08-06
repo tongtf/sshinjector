@@ -37,7 +37,10 @@ class GfwListMatcher(
         return h.ifEmpty { null }
     }
 
-    private fun matchSuffix(set: Set<String>, host: String): Boolean {
+    private fun matchSuffix(
+        set: Set<String>,
+        host: String,
+    ): Boolean {
         var h = host
         while (h.isNotEmpty()) {
             if (set.contains(h)) return true
@@ -52,10 +55,13 @@ class GfwListMatcher(
         private val IPV4_REGEX = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
 
         fun parse(rawText: String): GfwListMatcher {
-            val blockSuffix = HashSet<String>()
-            val exceptSuffix = HashSet<String>()
-            val blockPatterns = mutableListOf<Regex>()
-            val exceptPatterns = mutableListOf<Regex>()
+            val builder =
+                GfwListBuilder(
+                    blockSuffix = HashSet(),
+                    exceptSuffix = HashSet(),
+                    blockPatterns = mutableListOf(),
+                    exceptPatterns = mutableListOf(),
+                )
 
             val text = if (rawText.startsWith("\uFEFF")) rawText.substring(1) else rawText
             text.lineSequence()
@@ -66,26 +72,43 @@ class GfwListMatcher(
                     if (line.startsWith("/")) return@forEach // 忽略 /regex/ 规则
                     val isException = line.startsWith("@@")
                     val rule = if (isException) line.substring(2) else line
-                    addRule(rule, isException, blockSuffix, exceptSuffix, blockPatterns, exceptPatterns)
+                    addRule(builder, rule, isException)
                 }
 
-            return GfwListMatcher(blockSuffix, exceptSuffix, blockPatterns, exceptPatterns)
+            return GfwListMatcher(
+                builder.blockSuffix,
+                builder.exceptSuffix,
+                builder.blockPatterns,
+                builder.exceptPatterns,
+            )
         }
 
+        private data class GfwListBuilder(
+            val blockSuffix: MutableSet<String>,
+            val exceptSuffix: MutableSet<String>,
+            val blockPatterns: MutableList<Regex>,
+            val exceptPatterns: MutableList<Regex>,
+        )
+
         private fun addRule(
+            builder: GfwListBuilder,
             rule: String,
             isException: Boolean,
-            blockSuffix: MutableSet<String>,
-            exceptSuffix: MutableSet<String>,
-            blockPatterns: MutableList<Regex>,
-            exceptPatterns: MutableList<Regex>,
         ) {
             val host = extractHost(rule) ?: return
             if (host.contains('*')) {
                 val regex = wildcardToRegex(host)
-                if (isException) exceptPatterns.add(regex) else blockPatterns.add(regex)
+                if (isException) {
+                    builder.exceptPatterns.add(regex)
+                } else {
+                    builder.blockPatterns.add(regex)
+                }
             } else {
-                if (isException) exceptSuffix.add(host) else blockSuffix.add(host)
+                if (isException) {
+                    builder.exceptSuffix.add(host)
+                } else {
+                    builder.blockSuffix.add(host)
+                }
             }
         }
 

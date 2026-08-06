@@ -4,7 +4,6 @@ import cn.srv0.sshinjector.domain.vpn.TunnelChannel
 import kotlinx.coroutines.flow.StateFlow
 
 interface TunnelPlugin {
-
     val id: String
 
     val displayName: String
@@ -21,11 +20,18 @@ interface TunnelPlugin {
 
     val state: StateFlow<TunnelState>
 
-    fun openTcpChannel(host: String, port: Int): TunnelChannel?
+    fun openTcpChannel(
+        host: String,
+        port: Int,
+    ): TunnelChannel?
 
     val localSocksPort: Int get() = 0
 
-    fun sendUdp(dstHost: String, dstPort: Int, payload: ByteArray) {
+    fun sendUdp(
+        dstHost: String,
+        dstPort: Int,
+        payload: ByteArray,
+    ) {
         throw UnsupportedOperationException("UDP not supported by $id")
     }
 

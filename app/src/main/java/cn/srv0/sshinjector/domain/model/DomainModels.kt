@@ -1,6 +1,5 @@
 package cn.srv0.sshinjector.domain.model
 
-import java.net.InetAddress
 import java.util.*
 
 data class ServerConfig(
@@ -27,6 +26,7 @@ data class ServerConfig(
     val hostKeyFingerprint: String? = null, // SSH Host Key 指纹 (SHA256)
 ) {
     enum class KeyAlgorithm { Ed25519, RSA4096, ECDSA_P256 }
+
     enum class DnsMode { Remote, Local, System }
 }
 
@@ -63,6 +63,6 @@ data class VpnState(
         Connected,
         Disconnecting,
         Reconnecting,
-        Failed
+        Failed,
     }
 }

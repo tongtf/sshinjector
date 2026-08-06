@@ -11,7 +11,7 @@ data class TunnelState(
         Authenticating,
         Connected,
         Disconnecting,
-        Failed
+        Failed,
     }
 }
 

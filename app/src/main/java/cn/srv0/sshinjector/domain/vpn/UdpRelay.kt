@@ -35,7 +35,7 @@ fun releaseBuffer(buffer: ByteBuffer) {
  */
 class UdpRelay(
     private val tunWriterProvider: () -> ((ByteArray) -> Unit)?,
-    private val stats: PacketStats
+    private val stats: PacketStats,
 ) {
     companion object {
         private const val TAG = "PacketProcessor"
@@ -61,7 +61,6 @@ class UdpRelay(
         dstIp: InetAddress,
         payloadStart: Int,
         payloadLength: Int,
-        tunFd: java.io.FileDescriptor
     ): Boolean {
         if (payloadLength < 8) return false
 
@@ -73,7 +72,8 @@ class UdpRelay(
 
         // DNS 查询拦截 (UDP 53)
         if (dstPort == 53 || srcPort == 53) {
-            return handleDnsPacket(buffer, srcIp, dstIp, srcPort, dstPort, payloadLength, tunFd)
+            buffer.limit(payloadStart + payloadLength)
+            return handleDnsPacket(buffer, srcIp, dstIp, srcPort, dstPort)
         }
 
         // UDP 关联查找
@@ -104,8 +104,6 @@ class UdpRelay(
         dstIp: InetAddress,
         srcPort: Int,
         dstPort: Int,
-        length: Int,
-        tunFd: java.io.FileDescriptor
     ): Boolean {
         val interceptor = dnsInterceptor
         if (interceptor == null) {
@@ -115,17 +113,23 @@ class UdpRelay(
 
         try {
             // 诊断日志：记录所有 53 端口 UDP 包
-            if (IS_DEBUG) android.util.Log.d(TAG, "handleDnsPacket: src=$srcIp:$srcPort dst=$dstIp:$dstPort len=$length mode=${interceptor.getTransportMode()}")
+            if (IS_DEBUG) {
+                android.util.Log.d(
+                    TAG,
+                    "handleDnsPacket: src=$srcIp:$srcPort dst=$dstIp:$dstPort " +
+                        "mode=${interceptor.getTransportMode()}",
+                )
+            }
 
-            // 提取 DNS 查询 payload (buffer 已跳过 UDP 头部 8 字节)
-            val dnsPayloadLen = length - 8
+            // 提取 DNS 查询 payload (buffer 已跳过 UDP 头部 8 字节, limit 为 DNS 负载长度)
             val dnsBuffer = buffer.slice()
+            val dnsPayloadLen = dnsBuffer.remaining()
             dnsBuffer.limit(dnsPayloadLen)
 
             // 委托 DnsInterceptor 处理
-            val processed = interceptor.processDnsQuery(dnsBuffer, srcIp, dstIp, srcPort, dstPort)
+            interceptor.processDnsQuery(dnsBuffer, srcIp, dstIp, srcPort, dstPort)
             stats.packetsProcessed.value++
-            stats.bytesProcessed.value = stats.bytesProcessed.value + length.toLong()
+            stats.bytesProcessed.value = stats.bytesProcessed.value + dnsPayloadLen.toLong()
             return true
         } catch (e: Exception) {
             android.util.Log.e(TAG, "handleDnsPacket failed", e)
@@ -142,7 +146,7 @@ class UdpRelay(
         assoc: UdpAssociation,
         buffer: ByteBuffer,
         payloadStart: Int,
-        length: Int
+        length: Int,
     ) {
         // 在 launch 前复制数据，避免异步执行时底层 readBuffer 被覆盖
         val payloadCopy = ByteArray(length)
@@ -176,11 +180,14 @@ class UdpRelay(
                     }
 
                     // UDP ASSOCIATE 请求 (CMD=0x03)
-                    val assocReq = byteArrayOf(
-                        0x05, 0x03, 0x00, 0x01, // VER CMD RSV ATYP(IPv4)
-                        0x00, 0x00, 0x00, 0x00, // BND.ADDR (0.0.0.0)
-                        0x00, 0x00               // BND.PORT (0)
-                    )
+                    val assocReq =
+                        byteArrayOf(
+                            // VER CMD RSV ATYP(IPv4)
+                            0x05, 0x03, 0x00, 0x01,
+                            0x00, 0x00, 0x00, 0x00, // BND.ADDR (0.0.0.0)
+                            // BND.PORT (0)
+                            0x00, 0x00,
+                        )
                     sock.write(ByteBuffer.wrap(assocReq))
                     val assocResp = ByteBuffer.allocate(32)
                     val arRead = sock.read(assocResp)
@@ -194,9 +201,8 @@ class UdpRelay(
                     // 解析 UDP relay 地址 (简化: 使用同一端口)
                     assocResp.flip()
                     assocResp.position(assocResp.position() + 4) // Skip VER REP RSV ATYP
-                    val relayIp = ByteArray(4)
-                    assocResp.get(relayIp)
-                    val relayPort = assocResp.short.toInt() and 0xFFFF
+                    assocResp.position(assocResp.position() + 4) // Skip BND.ADDR (4字节 IPv4)
+                    assocResp.short // Skip BND.PORT
 
                     // 绑定本地端口用于 UDP relay
                     assoc.datagramChannel = DatagramChannel.open()
@@ -218,7 +224,6 @@ class UdpRelay(
 
                 socksUdpFrame.flip()
                 assoc.datagramChannel.send(socksUdpFrame, InetSocketAddress("127.0.0.1", socksPort))
-
             } catch (e: IOException) {
                 Log.e(TAG, "forwardUdpToSocks failed", e)
                 stats.errors.value++
@@ -227,7 +232,11 @@ class UdpRelay(
     }
 
     private fun createUdpAssociation(
-        key: Long, srcIp: InetAddress, dstIp: InetAddress, srcPort: Int, dstPort: Int
+        key: Long,
+        srcIp: InetAddress,
+        dstIp: InetAddress,
+        srcPort: Int,
+        dstPort: Int,
     ): UdpAssociation {
         val id = connectionIdCounter.incrementAndGet()
         val channel = DatagramChannel.open().apply { configureBlocking(false) }
@@ -263,38 +272,37 @@ class UdpRelay(
 
                         // 解析 SOCKS5 UDP 帧: RSV(2) FRAG(1) ATYP(1) DST.ADDR(*) DST.PORT(2) DATA(*)
                         if (frame.size >= 10) {
-                            val frag = frame[2].toInt() and 0xFF
                             val atyp = frame[3].toInt() and 0xFF
 
                             var addrOffset = 4
-                            var dstIpBytes: ByteArray
                             when (atyp) {
                                 0x01 -> { // IPv4
-                                    dstIpBytes = frame.sliceArray(addrOffset until addrOffset + 4)
                                     addrOffset += 4
                                 }
                                 0x04 -> { // IPv6
-                                    dstIpBytes = frame.sliceArray(addrOffset until addrOffset + 16)
                                     addrOffset += 16
                                 }
-                                else -> continue // 不支持的地址类型
                             }
 
-                            if (frame.size < addrOffset + 2) continue
-                            val dstPort = ((frame[addrOffset].toInt() and 0xFF) shl 8) or (frame[addrOffset + 1].toInt() and 0xFF)
-                            addrOffset += 2
+                            if (frame.size >= addrOffset + 2 && (atyp == 0x01 || atyp == 0x04)) {
+                                val dstPort =
+                                    ((frame[addrOffset].toInt() and 0xFF) shl 8) or
+                                        (frame[addrOffset + 1].toInt() and 0xFF)
+                                addrOffset += 2
 
-                            val payload = frame.sliceArray(addrOffset until frame.size)
+                                val payload = frame.sliceArray(addrOffset until frame.size)
 
-                            // 构造 IPv4/UDP 响应包写回 TUN
-                            val responsePacket = buildUdpResponsePacket(
-                                srcIp = assoc.dstIp.address,
-                                dstIp = assoc.srcIp.address,
-                                srcPort = assoc.dstPort,
-                                dstPort = assoc.srcPort,
-                                payload = payload
-                            )
-                            writer(responsePacket)
+                                // 构造 IPv4/UDP 响应包写回 TUN
+                                val responsePacket =
+                                    buildUdpResponsePacket(
+                                        srcIp = assoc.dstIp.address,
+                                        dstIp = assoc.srcIp.address,
+                                        srcPort = assoc.dstPort,
+                                        dstPort = assoc.srcPort,
+                                        payload = payload,
+                                    )
+                                writer(responsePacket)
+                            }
                         }
                     }
                 }
@@ -310,9 +318,11 @@ class UdpRelay(
      * 构建 UDP 响应包 (用于 DNS 回程)
      */
     fun buildUdpResponsePacket(
-        srcIp: ByteArray, dstIp: ByteArray,
-        srcPort: Int, dstPort: Int,
-        payload: ByteArray
+        srcIp: ByteArray,
+        dstIp: ByteArray,
+        srcPort: Int,
+        dstPort: Int,
+        payload: ByteArray,
     ): ByteArray {
         val udpLen = 8 + payload.size
         val ipHeaderLen = 20
@@ -355,9 +365,14 @@ class UdpRelay(
         val now = System.currentTimeMillis()
         udpAssociations.values.removeIf { assoc ->
             if (now - assoc.lastActivity > timeoutMs) {
-                try { assoc.datagramChannel.close() } catch (_: Exception) {}
+                try {
+                    assoc.datagramChannel.close()
+                } catch (_: Exception) {
+                }
                 true
-            } else false
+            } else {
+                false
+            }
         }
     }
 
@@ -368,6 +383,6 @@ class UdpRelay(
         val dstIp: InetAddress,
         val dstPort: Int,
         var datagramChannel: DatagramChannel,
-        var lastActivity: Long = System.currentTimeMillis()
+        var lastActivity: Long = System.currentTimeMillis(),
     )
 }

@@ -1,6 +1,8 @@
 package cn.srv0.sshinjector.domain.vpn
 
 import android.util.Log
+import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
+import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelPlugin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -13,8 +15,6 @@ import java.nio.ByteOrder
 import java.nio.channels.SocketChannel
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
-import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
-import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelPlugin
 
 private val IS_DEBUG = android.util.Log.isLoggable("PacketProcessor", android.util.Log.DEBUG)
 
@@ -24,12 +24,14 @@ private val IS_DEBUG = android.util.Log.isLoggable("PacketProcessor", android.ut
 class TcpStateMachine(
     private val tunnelManager: TunnelManager,
     private val tunWriterProvider: () -> ((ByteArray) -> Unit)?,
-    private val stats: PacketStats
+    private val stats: PacketStats,
 ) {
     companion object {
         private const val TAG = "PacketProcessor"
         private const val RELAY_BUFFER_SIZE = 65535
         private const val MAX_TCP_SEGMENT = 1460
+        private const val UINT32_MASK = 0xFFFFFFFFL
+        private const val TUN_CONNECT_TIMEOUT_MS = 5000
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -58,9 +60,20 @@ class TcpStateMachine(
         var serverSeq: Long = 0,
         var forwardedBytes: Long = 0,
         var pendingConnect: Boolean = false,
-        var socksLocalPort: Int = 0
+        var socksLocalPort: Int = 0,
     ) {
-        enum class TcpState { SynSent, SynReceived, Established, FinWait1, FinWait2, CloseWait, Closing, LastAck, TimeWait, Closed }
+        enum class TcpState {
+            SynSent,
+            SynReceived,
+            Established,
+            FinWait1,
+            FinWait2,
+            CloseWait,
+            Closing,
+            LastAck,
+            TimeWait,
+            Closed,
+        }
     }
 
     /**
@@ -72,7 +85,6 @@ class TcpStateMachine(
         dstIp: InetAddress,
         payloadStart: Int,
         payloadLength: Int,
-        tunFd: java.io.FileDescriptor
     ): Boolean {
         if (payloadLength < 20) return false // 最小 TCP 头部
 
@@ -98,7 +110,6 @@ class TcpStateMachine(
         val fin = (flags and 0x01) != 0
         val syn = (flags and 0x02) != 0
         val rst = (flags and 0x04) != 0
-        val psh = (flags and 0x08) != 0
         val ack = (flags and 0x10) != 0
 
         // 连接标识符 (五元组哈希)
@@ -108,14 +119,17 @@ class TcpStateMachine(
         if (syn && !ack) {
             if (conn == null) {
                 conn = createTcpConnection(connKey, srcIp, dstIp, srcPort, dstPort)
-                conn.browserSeq = (seqNum.toLong()) and 0xFFFFFFFFL
+                conn.browserSeq = (seqNum.toLong()) and UINT32_MASK
                 conn.state = TcpConnection.TcpState.SynSent
 
                 // Route through tunnel plugin or fallback to local SOCKS5
-                val hasActiveTunnel = try {
-                    tunnelManager.getActiveOrFallback()
-                    true
-                } catch (_: Exception) { false }
+                val hasActiveTunnel =
+                    try {
+                        tunnelManager.getActiveOrFallback()
+                        true
+                    } catch (_: Exception) {
+                        false
+                    }
 
                 if (hasActiveTunnel) {
                     forwardSynToTunnel(conn)
@@ -123,7 +137,7 @@ class TcpStateMachine(
                     forwardSynToSocks(conn)
                 }
             } else {
-                conn.browserSeq = (seqNum.toLong()) and 0xFFFFFFFFL
+                conn.browserSeq = (seqNum.toLong()) and UINT32_MASK
                 conn.lastActivity = System.currentTimeMillis()
             }
         } else if (conn != null) {
@@ -138,8 +152,8 @@ class TcpStateMachine(
                     conn.state = TcpConnection.TcpState.Established
                 }
                 if (hasPayload) {
-                    val expectedBrowserSeq = (conn.browserSeq + 1 + conn.forwardedBytes) and 0xFFFFFFFFL
-                    val receivedSeq = seqNum.toLong() and 0xFFFFFFFFL
+                    val expectedBrowserSeq = (conn.browserSeq + 1 + conn.forwardedBytes) and UINT32_MASK
+                    val receivedSeq = seqNum.toLong() and UINT32_MASK
                     if (receivedSeq == expectedBrowserSeq) {
                         conn.forwardedBytes += payloadLen.toLong()
                         if (conn.pendingConnect) {
@@ -156,11 +170,23 @@ class TcpStateMachine(
                         sendAckToBrowser(conn, connKey)
                     } else if (receivedSeq < expectedBrowserSeq) {
                         // 重传段 (seq < expected): 数据已转发过, 丢弃重复, 回 ACK 推进浏览器窗口
-                        if (IS_DEBUG) Log.d(TAG, "Retransmit (dup) for conn ${conn.id}: seq=$receivedSeq expected=$expectedBrowserSeq fwd=${conn.forwardedBytes}, acking")
+                        if (IS_DEBUG) {
+                            Log.d(
+                                TAG,
+                                "Retransmit (dup) for conn ${conn.id}: seq=$receivedSeq expected=$expectedBrowserSeq " +
+                                    "fwd=${conn.forwardedBytes}, acking",
+                            )
+                        }
                         sendAckToBrowser(conn, connKey)
                     } else {
                         // 乱序段 (seq > expected): 尚未能按序转发, 丢弃并回 ACK, 触发浏览器快重传缺失段
-                        if (IS_DEBUG) Log.d(TAG, "Out-of-order for conn ${conn.id}: seq=$receivedSeq expected=$expectedBrowserSeq fwd=${conn.forwardedBytes}, acking")
+                        if (IS_DEBUG) {
+                            Log.d(
+                                TAG,
+                                "Out-of-order for conn ${conn.id}: seq=$receivedSeq expected=$expectedBrowserSeq " +
+                                    "fwd=${conn.forwardedBytes}, acking",
+                            )
+                        }
                         sendAckToBrowser(conn, connKey)
                     }
                 } else {
@@ -211,7 +237,11 @@ class TcpStateMachine(
     /**
      * 通过本地 SOCKS5 代理转发 (保持原有 SOCKS5 握手流程)
      */
-    private suspend fun forwardThroughLocalSocks(conn: TcpConnection, plugin: TunnelPlugin, socksPort: Int) {
+    private suspend fun forwardThroughLocalSocks(
+        conn: TcpConnection,
+        ignoredPlugin: TunnelPlugin,
+        socksPort: Int,
+    ) {
         val sock = SocketChannel.open()
         sock.configureBlocking(true)
         sock.connect(InetSocketAddress("127.0.0.1", socksPort))
@@ -290,30 +320,36 @@ class TcpStateMachine(
     /**
      * 构建 SOCKS5 CONNECT 请求
      */
-    private fun buildSocks5ConnectRequest(dstIp: java.net.InetAddress, dstPort: Int, domain: String?): ByteArray {
+    private fun buildSocks5ConnectRequest(
+        dstIp: java.net.InetAddress,
+        dstPort: Int,
+        domain: String?,
+    ): ByteArray {
         val buf: ByteArray
         if (domain != null) {
             val domainBytes = domain.toByteArray(Charsets.US_ASCII)
-            buf = ByteBuffer.allocate(4 + 1 + domainBytes.size + 2).apply {
-                put(0x05) // VER
-                put(0x01) // CMD: CONNECT
-                put(0x00) // RSV
-                put(0x03) // ATYP: Domain
-                put(domainBytes.size.toByte())
-                put(domainBytes)
-                putShort(dstPort.toShort())
-            }.array()
+            buf =
+                ByteBuffer.allocate(4 + 1 + domainBytes.size + 2).apply {
+                    put(0x05) // VER
+                    put(0x01) // CMD: CONNECT
+                    put(0x00) // RSV
+                    put(0x03) // ATYP: Domain
+                    put(domainBytes.size.toByte())
+                    put(domainBytes)
+                    putShort(dstPort.toShort())
+                }.array()
         } else {
             val ipBytes = dstIp.address
             val atyp = if (ipBytes.size == 4) 0x01 else 0x04
-            buf = ByteBuffer.allocate(4 + ipBytes.size + 2).apply {
-                put(0x05) // VER
-                put(0x01) // CMD: CONNECT
-                put(0x00) // RSV
-                put(atyp.toByte())
-                put(ipBytes)
-                putShort(dstPort.toShort())
-            }.array()
+            buf =
+                ByteBuffer.allocate(4 + ipBytes.size + 2).apply {
+                    put(0x05) // VER
+                    put(0x01) // CMD: CONNECT
+                    put(0x00) // RSV
+                    put(atyp.toByte())
+                    put(ipBytes)
+                    putShort(dstPort.toShort())
+                }.array()
         }
         return buf
     }
@@ -321,7 +357,11 @@ class TcpStateMachine(
     /**
      * 将隧道/代理读到的数据按 MTU 安全切片后逐个构造 TCP 段写回 TUN。
      */
-    private fun writeTcpPayloadToTun(conn: TcpConnection, payload: ByteArray, connKey: Long) {
+    private fun writeTcpPayloadToTun(
+        conn: TcpConnection,
+        payload: ByteArray,
+        connKey: Long,
+    ) {
         val writer = tunWriterProvider() ?: return
         var offset = 0
         while (offset < payload.size) {
@@ -338,7 +378,10 @@ class TcpStateMachine(
     /**
      * 从 SOCKS5 代理读取数据并写回 TUN
      */
-    private fun startRelayFromSocks(conn: TcpConnection, connKey: Long) {
+    private fun startRelayFromSocks(
+        conn: TcpConnection,
+        connKey: Long,
+    ) {
         val socksChannel = conn.socksChannel ?: return
 
         scope.launch(Dispatchers.IO) {
@@ -366,8 +409,12 @@ class TcpStateMachine(
     /**
      * 通过隧道插件直接转发 (无本地 SOCKS5 代理)
      */
-    private suspend fun forwardThroughDirectChannel(conn: TcpConnection, plugin: TunnelPlugin, channel: TunnelChannel) {
-        val connected = channel.connect(5000)
+    private suspend fun forwardThroughDirectChannel(
+        conn: TcpConnection,
+        plugin: TunnelPlugin,
+        channel: TunnelChannel,
+    ) {
+        val connected = channel.connect(TUN_CONNECT_TIMEOUT_MS)
         if (!connected) {
             Log.e(TAG, "channel.connect failed for plugin ${plugin.id}")
             channel.disconnect()
@@ -394,7 +441,10 @@ class TcpStateMachine(
     /**
      * 从隧道插件读取数据并写回 TUN
      */
-    private fun startRelayFromTunnel(conn: TcpConnection, connKey: Long) {
+    private fun startRelayFromTunnel(
+        conn: TcpConnection,
+        connKey: Long,
+    ) {
         val channel = conn.tunnelChannel ?: return
         val input = channel.inputStream ?: return
 
@@ -427,7 +477,11 @@ class TcpStateMachine(
     /**
      * 完成延迟的连接: 从首个数据包提取域名，通过隧道插件转发
      */
-    private fun completeDeferredConnect(conn: TcpConnection, firstData: ByteArray, connKey: Long) {
+    private fun completeDeferredConnect(
+        conn: TcpConnection,
+        firstData: ByteArray,
+        connKey: Long,
+    ) {
         try {
             val domain = extractSniFromTls(firstData) ?: extractHostFromHttp(firstData)
             if (domain != null) {
@@ -437,7 +491,7 @@ class TcpStateMachine(
 
             val plugin = tunnelManager.getActiveOrFallback()
             val channel = plugin.openTcpChannel(conn.dstIp.hostAddress, conn.dstPort)
-            if (channel != null && channel.connect(5000)) {
+            if (channel != null && channel.connect(TUN_CONNECT_TIMEOUT_MS)) {
                 conn.tunnelChannel = channel
                 conn.pendingConnect = false
                 conn.state = TcpConnection.TcpState.Established
@@ -508,7 +562,10 @@ class TcpStateMachine(
                 if (data.size < offset + 5) return null
                 offset += 2 // server name list length
                 val nameType = data[offset].toInt() and 0xFF
-                if (nameType != 0) { offset += extDataLen - 2; continue }
+                if (nameType != 0) {
+                    offset += extDataLen - 2
+                    continue
+                }
                 offset += 1
                 val nameLen = ((data[offset].toInt() and 0xFF) shl 8) or (data[offset + 1].toInt() and 0xFF)
                 offset += 2
@@ -531,7 +588,10 @@ class TcpStateMachine(
         for (method in methods) {
             if (data.size >= method.length) {
                 val prefix = String(data, 0, method.length, Charsets.US_ASCII)
-                if (prefix == method) { isHttp = true; break }
+                if (prefix == method) {
+                    isHttp = true
+                    break
+                }
             }
         }
         if (!isHttp) return null
@@ -560,7 +620,11 @@ class TcpStateMachine(
     /**
      * 构建反向 IP/TCP 响应包: src ↔ dst 互换 (支持 IPv4/IPv6)
      */
-    private fun buildTcpResponsePacket(conn: TcpConnection, payload: ByteArray, connKey: Long): ByteArray? {
+    private fun buildTcpResponsePacket(
+        conn: TcpConnection,
+        payload: ByteArray,
+        connKey: Long,
+    ): ByteArray? {
         try {
             val srcPort = conn.dstPort
             val dstPort = conn.srcPort
@@ -569,9 +633,9 @@ class TcpStateMachine(
             val isIPv6 = srcIp.size == 16
 
             val seqNum = conn.serverSeq
-            val ackNum = (conn.browserSeq + 1 + conn.forwardedBytes) and 0xFFFFFFFFL
+            val ackNum = (conn.browserSeq + 1 + conn.forwardedBytes) and UINT32_MASK
 
-            conn.serverSeq = (seqNum + payload.size) and 0xFFFFFFFFL
+            conn.serverSeq = (seqNum + payload.size) and UINT32_MASK
             nextTcpAck[connKey] = conn.serverSeq
             nextTcpSeq[connKey] = ackNum
 
@@ -619,7 +683,8 @@ class TcpStateMachine(
                 packet.putShort(ipChecksum)
             }
 
-            val tcpChecksum = ChecksumCalculator.tcpChecksum(srcIp, dstIp, packet.array(), ipHeaderLen, payload.size + tcpHeaderLen)
+            val tcpChecksum =
+                ChecksumCalculator.tcpChecksum(srcIp, dstIp, packet.array(), ipHeaderLen, payload.size + tcpHeaderLen)
             packet.position(ipHeaderLen + 16)
             packet.putShort(tcpChecksum)
 
@@ -629,7 +694,12 @@ class TcpStateMachine(
 
             return packet.array().copyOfRange(0, totalLen)
         } catch (e: Exception) {
-            Log.e(TAG, "buildTcpResponsePacket failed: ${e::class.simpleName}: conn.srcIp.size=${conn.srcIp.address.size} payload.size=${payload.size}", e)
+            Log.e(
+                TAG,
+                "buildTcpResponsePacket failed: ${e::class.simpleName}: conn.srcIp.size=${conn.srcIp.address.size} " +
+                    "payload.size=${payload.size}",
+                e,
+            )
             return null
         }
     }
@@ -637,7 +707,10 @@ class TcpStateMachine(
     /**
      * 构建 SYN-ACK 包 (支持 IPv4/IPv6)
      */
-    private fun buildSynAckPacket(conn: TcpConnection, connKey: Long): ByteArray? {
+    private fun buildSynAckPacket(
+        conn: TcpConnection,
+        connKey: Long,
+    ): ByteArray? {
         try {
             val srcPort = conn.dstPort
             val dstPort = conn.srcPort
@@ -648,7 +721,7 @@ class TcpStateMachine(
             val seqNum = conn.serverSeq
             val ackNum = conn.browserSeq + 1
 
-            conn.serverSeq = (seqNum + 1) and 0xFFFFFFFFL
+            conn.serverSeq = (seqNum + 1) and UINT32_MASK
             nextTcpAck[connKey] = conn.serverSeq
             nextTcpSeq[connKey] = ackNum
 
@@ -716,7 +789,10 @@ class TcpStateMachine(
     /**
      * 构建纯 ACK 包 (无 payload), 确认浏览器已发送的数据
      */
-    private fun buildAckPacket(conn: TcpConnection, connKey: Long): ByteArray? {
+    private fun buildAckPacket(
+        conn: TcpConnection,
+        ignoredConnKey: Long,
+    ): ByteArray? {
         try {
             val srcPort = conn.dstPort
             val dstPort = conn.srcPort
@@ -725,7 +801,7 @@ class TcpStateMachine(
             val isIPv6 = srcIp.size == 16
 
             val seqNum = conn.serverSeq
-            val ackNum = (conn.browserSeq + 1 + conn.forwardedBytes) and 0xFFFFFFFFL
+            val ackNum = (conn.browserSeq + 1 + conn.forwardedBytes) and UINT32_MASK
             val tcpHeaderLen = 20
             val ipHeaderLen = if (isIPv6) 40 else 20
             val totalLen = ipHeaderLen + tcpHeaderLen
@@ -781,7 +857,10 @@ class TcpStateMachine(
         }
     }
 
-    private fun buildRstPacket(conn: TcpConnection, connKey: Long): ByteArray? {
+    private fun buildRstPacket(
+        conn: TcpConnection,
+        ignoredConnKey: Long,
+    ): ByteArray? {
         try {
             val srcPort = conn.dstPort
             val dstPort = conn.srcPort
@@ -790,7 +869,7 @@ class TcpStateMachine(
             val isIPv6 = srcIp.size == 16
 
             val seqNum = conn.serverSeq
-            val ackNum = (conn.browserSeq + 1 + conn.forwardedBytes) and 0xFFFFFFFFL
+            val ackNum = (conn.browserSeq + 1 + conn.forwardedBytes) and UINT32_MASK
             val tcpHeaderLen = 20
             val ipHeaderLen = if (isIPv6) 40 else 20
             val totalLen = ipHeaderLen + tcpHeaderLen
@@ -837,7 +916,9 @@ class TcpStateMachine(
             packet.position(ipHeaderLen + 16)
             packet.putShort(tcpChecksum)
 
-            if (IS_DEBUG) Log.d(TAG, "RST packet ${totalLen}B for conn ${conn.id} ${conn.srcIp.hostAddress}:${conn.srcPort}")
+            if (IS_DEBUG) {
+                Log.d(TAG, "RST packet ${totalLen}B for conn ${conn.id} ${conn.srcIp.hostAddress}:${conn.srcPort}")
+            }
             return packet.array().copyOfRange(0, totalLen)
         } catch (e: Exception) {
             Log.e(TAG, "buildRstPacket failed: ${e::class.simpleName}: ${e.message}", e)
@@ -852,10 +933,13 @@ class TcpStateMachine(
         conn: TcpConnection,
         buffer: ByteBuffer,
         payloadStart: Int,
-        payloadLength: Int
+        payloadLength: Int,
     ) {
         if (conn.state != TcpConnection.TcpState.Established) {
-            Log.w(TAG, "forwardToSocks: conn ${conn.id} not established (state=${conn.state}), dropping ${payloadLength}B")
+            Log.w(
+                TAG,
+                "forwardToSocks: conn ${conn.id} not established (state=${conn.state}), dropping ${payloadLength}B",
+            )
             return
         }
 
@@ -871,12 +955,21 @@ class TcpStateMachine(
                     buffer.get(payload)
                     output.write(payload)
                     output.flush()
-                    if (IS_DEBUG) Log.d(TAG, "forwardToTunnel: wrote ${payloadLength}B for conn ${conn.id} → ${conn.dstIp}:${conn.dstPort}")
+                    if (IS_DEBUG) {
+                        Log.d(
+                            TAG,
+                            "forwardToTunnel: wrote ${payloadLength}B for conn ${conn.id} → " +
+                                "${conn.dstIp}:${conn.dstPort}",
+                        )
+                    }
                 }
             } catch (e: IOException) {
                 Log.e(TAG, "forwardToTunnel failed", e)
                 stats.errors.value++
-                closeTcpConnection(IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort), conn)
+                closeTcpConnection(
+                    IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort),
+                    conn,
+                )
             }
             return
         }
@@ -894,12 +987,17 @@ class TcpStateMachine(
                 socksChannel.write(buffer)
             }
             if (IS_DEBUG) {
-                val hexPayload = ByteArray(payloadLength).also {
-                    val dup = buffer.duplicate()
-                    dup.position(payloadStart)
-                    dup.get(it)
-                }.joinToString("") { "%02x".format(it) }.take(40)
-                Log.d(TAG, "forwardToSocks: wrote ${payloadLength}B for conn ${conn.id} → ${conn.dstIp}:${conn.dstPort} hex=$hexPayload")
+                val hexPayload =
+                    ByteArray(payloadLength).also {
+                        val dup = buffer.duplicate()
+                        dup.position(payloadStart)
+                        dup.get(it)
+                    }.joinToString("") { "%02x".format(it) }.take(40)
+                Log.d(
+                    TAG,
+                    "forwardToSocks: wrote ${payloadLength}B for conn ${conn.id} → " +
+                        "${conn.dstIp}:${conn.dstPort} hex=$hexPayload",
+                )
             }
         } catch (e: IOException) {
             Log.e(TAG, "forwardToSocks failed", e)
@@ -908,7 +1006,10 @@ class TcpStateMachine(
         }
     }
 
-    private fun sendAckToBrowser(conn: TcpConnection, connKey: Long) {
+    private fun sendAckToBrowser(
+        conn: TcpConnection,
+        connKey: Long,
+    ) {
         val writer = tunWriterProvider() ?: return
         val ackPacket = buildAckPacket(conn, connKey) ?: return
         try {
@@ -919,7 +1020,11 @@ class TcpStateMachine(
     }
 
     private fun createTcpConnection(
-        key: Long, srcIp: InetAddress, dstIp: InetAddress, srcPort: Int, dstPort: Int
+        key: Long,
+        srcIp: InetAddress,
+        dstIp: InetAddress,
+        srcPort: Int,
+        dstPort: Int,
     ): TcpConnection {
         val id = connectionIdCounter.incrementAndGet()
         val conn = TcpConnection(id, srcIp, dstIp, srcPort, dstPort)
@@ -927,18 +1032,29 @@ class TcpStateMachine(
         return conn
     }
 
-    private fun closeTcpConnection(key: Long, conn: TcpConnection) {
+    private fun closeTcpConnection(
+        key: Long,
+        conn: TcpConnection,
+    ) {
         tcpConnections.remove(key)
-        try { conn.socksChannel?.close() } catch (_: Exception) {}
+        try {
+            conn.socksChannel?.close()
+        } catch (_: Exception) {
+        }
     }
 
     fun cleanupStaleConnections(timeoutMs: Long) {
         val now = System.currentTimeMillis()
         tcpConnections.values.removeIf { conn ->
             if (now - conn.lastActivity > timeoutMs) {
-                closeTcpConnection(IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort), conn)
+                closeTcpConnection(
+                    IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort),
+                    conn,
+                )
                 true
-            } else false
+            } else {
+                false
+            }
         }
     }
 }
