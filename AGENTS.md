@@ -40,7 +40,8 @@ Traffic path: VpnService TUN → PacketProcessor → TunnelRouter (per-UID selec
 - **VPN**: `vpn/SshVpnService` (foreground service), `vpn/BootReceiver`
 - **Navigation**: `ui/navigation/NavGraph.kt` (separated from MainActivity)
 - **Key storage**: Android Keystore (hardware encryption) + BiometricPrompt
-- **Tests**: unit tests in `app/src/test/` (PacketProcessor, Socks5Protocol, DnsInterceptor, SshKeyManager, VpnController); androidTest (Database/Settings integration) requires a device
+- **One-click server provisioning** (`data/remote/config/ServerProvisioner.kt` + `ui/screen/server/ServerEditScreen.kt`): embedded in the "add server" page. Creates fixed tunnel account `sshproxy` with chroot jail, key-based auth, and sshd hardening. Fixed script in `assets/ssh_setup_script.sh` with hardcoded SHA-256 (`ServerProvisioning.SETUP_SCRIPT_SHA256`) verified on the server before execution. Public key passed via SSH stdin (never shell args). sshd reload gated by `sshd -t` + config ownership/permission check; config backed up and restored on failure. Manual guide: `docs/server-setup.md`
+- **Tests**: unit tests in `app/src/test/` (PacketProcessor, Socks5Protocol, DnsInterceptor, SshKeyManager, VpnController, ServerProvisioner); androidTest (Database/Settings integration) requires a device
 
 ## Key Gotchas
 
