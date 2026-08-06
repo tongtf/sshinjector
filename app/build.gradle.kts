@@ -12,6 +12,12 @@ android {
     namespace = "cn.srv0.sshinjector"
     compileSdk = 35
 
+    testOptions {
+        unitTests {
+            isReturnDefaultValues = true
+        }
+    }
+
     defaultConfig {
         applicationId = "cn.srv0.sshinjector"
         minSdk = 34
