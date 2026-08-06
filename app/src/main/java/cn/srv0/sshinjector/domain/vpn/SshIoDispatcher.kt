@@ -16,9 +16,9 @@ import javax.inject.Singleton
  * Dispatchers.IO 上又会占满其 64 线程上限, 拖垮 DNS/业务协程。
  *
  * 用 ThreadPoolExecutor + SynchronousQueue 实现负载驱动动态伸缩:
- * - 空闲时收缩到 core(16) 线程, 省调度开销
+ * - 懒创建: 空闲时 0 线程
  * - 连接多时增长到连接数(上限 max=128), 覆盖多页面并发
- * - 空闲线程 60s 后回收
+ * - allowCoreThreadTimeOut: 所有空闲线程 60s 后回收(含 core), 完全空闲回到 0
  */
 @Singleton
 class SshIoDispatcher
@@ -37,6 +37,8 @@ class SshIoDispatcher
                     { r -> Thread(r, "ssh-io").also { it.isDaemon = true } },
                     ThreadPoolExecutor.CallerRunsPolicy(),
                 )
+            // core 线程空闲同样回收, 完全空闲时回到 0 线程
+            executor.allowCoreThreadTimeOut(true)
             return executor.asCoroutineDispatcher()
         }
 
