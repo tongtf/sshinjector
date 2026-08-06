@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>服务器一键配置流程</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Roboto:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --paper:#f8f9ff; --ink:#191c20; --muted:#535f70; --soft:#73777f;
+          --accent:#1565c0; --accent-tint:rgba(21,101,192,0.08); --rule:rgba(25,28,32,0.12); }
+  body { margin:0; background:var(--paper); color:var(--ink); font-family:'Roboto',sans-serif; }
+  .wrap { max-width:940px; margin:0 auto; padding:40px 32px 24px; }
+  .eyebrow { font-family:'Geist Mono',monospace; font-size:12px; font-weight:500;
+             letter-spacing:0.18em; text-transform:uppercase; color:var(--muted); margin:0; }
+  h1 { font-family:'Instrument Serif',serif; font-weight:400; font-size:44px; margin:8px 0 4px; }
+  .sub { color:var(--muted); font-size:15px; margin:0 0 24px; }
+  .fig { border:1px solid var(--rule); border-radius:8px; padding:16px; overflow-x:auto; }
+  svg { display:block; }
+  .foot { margin-top:16px; font-family:'Geist Mono',monospace; font-size:11px;
+          color:var(--soft); border-top:1px solid var(--rule); padding-top:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">FLOWCHART · PROVISIONING</p>
+  <h1>服务器一键配置流程</h1>
+  <p class="sub">ServerWizard → ServerProvisioner 六步编排 · 脚本 SHA-256 防篡改（ServerProvisioner.kt:79-112）</p>
+  <div class="fig">
+  <svg viewBox="0 0 940 820" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
+    <defs>
+      <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#535f70"/>
+      </marker>
+      <marker id="arrow-dash" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#73777f"/>
+      </marker>
+      <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#1565c0"/>
+      </marker>
+    </defs>
+
+    <!-- arrows -->
+    <path d="M 380,68 V 100" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 380,148 V 180" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 380,260 V 300" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 380,380 V 420" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 380,500 V 540" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 380,588 V 620" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 380,700 V 740" fill="none" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+    <path d="M 480,220 H 700" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
+    <path d="M 480,340 H 700" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
+    <path d="M 480,460 H 700" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
+    <path d="M 480,660 H 700" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
+
+    <!-- failure labels -->
+    <rect x="576" y="204" width="188" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="670" y="213" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">无权限 → LocalOnly</text>
+    <rect x="572" y="324" width="208" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="676" y="333" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">哈希不符 → TamperDetected</text>
+    <rect x="576" y="444" width="172" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="662" y="453" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">公钥非法 → Failed</text>
+    <rect x="568" y="644" width="184" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="660" y="653" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">验证失败 → Failed</text>
+
+    <!-- nodes -->
+    <rect x="300" y="24" width="160" height="44" rx="20" fill="#f8f9ff"/>
+    <rect x="300" y="24" width="160" height="44" rx="20" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="380" y="51" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">向导填写</text>
+
+    <rect x="270" y="100" width="220" height="48" rx="6" fill="#f8f9ff"/>
+    <rect x="270" y="100" width="220" height="48" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="380" y="127" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">生成密钥</text>
+    <text x="380" y="141" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">ECDSA P-256 · 公钥经 stdin</text>
+
+    <path d="M 280,220 L 380,180 L 480,220 L 380,260 Z" fill="#f8f9ff" stroke="#191c20" stroke-width="1"/>
+    <text x="380" y="216" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">有 root / sudo？</text>
+    <text x="380" y="230" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">id -u · sudo -n · sudo -S</text>
+
+    <path d="M 280,340 L 380,300 L 480,340 L 380,380 Z" fill="#f8f9ff" stroke="#191c20" stroke-width="1"/>
+    <text x="380" y="336" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">SHA-256 一致？</text>
+    <text x="380" y="350" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">上传脚本 · 远端校验</text>
+
+    <path d="M 280,460 L 380,420 L 480,460 L 380,500 Z" fill="#f8f9ff" stroke="#191c20" stroke-width="1"/>
+    <text x="380" y="456" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">公钥合法？</text>
+    <text x="380" y="470" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">ssh-ed25519 / rsa / ecdsa</text>
+
+    <rect x="270" y="540" width="220" height="48" rx="6" fill="#f8f9ff"/>
+    <rect x="270" y="540" width="220" height="48" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="380" y="567" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">执行配置脚本</text>
+    <text x="380" y="581" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">sshproxy 账号 · chroot · Match</text>
+
+    <path d="M 280,660 L 380,620 L 480,660 L 380,700 Z" fill="#f8f9ff" stroke="#191c20" stroke-width="1"/>
+    <text x="380" y="656" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">验证通过？</text>
+    <text x="380" y="670" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">id + Match / dropbear marker</text>
+
+    <rect x="290" y="740" width="180" height="44" rx="20" fill="#f8f9ff"/>
+    <rect x="290" y="740" width="180" height="44" rx="20" fill="rgba(21,101,192,0.08)" stroke="#1565c0" stroke-width="1"/>
+    <text x="380" y="767" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">FullSuccess</text>
+
+    <!-- legend -->
+    <line x1="24" y1="804" x2="916" y2="804" stroke="rgba(25,28,32,0.10)" stroke-width="0.8"/>
+    <text x="24" y="816" fill="#535f70" font-size="8" font-family="'Geist Mono',monospace" letter-spacing="0.14em">LEGEND</text>
+    <line x1="120" y1="810" x2="160" y2="810" stroke="#535f70" stroke-width="1.2"/>
+    <text x="168" y="813" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">校验通过</text>
+    <line x1="244" y1="810" x2="284" y2="810" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3"/>
+    <text x="292" y="813" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">失败 / 中止</text>
+  </svg>
+  </div>
+  <p class="foot">SSHInjector · 脚本与 SHA-256 硬编码一致（ServerProvisioning.kt:13）；成功保存 username=sshproxy · ECDSA_P256</p>
+</div>
+</body>
+</html>

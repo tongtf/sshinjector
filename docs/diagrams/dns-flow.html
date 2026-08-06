@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNS 拦截流程</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Roboto:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --paper:#f8f9ff; --ink:#191c20; --muted:#535f70; --soft:#73777f;
+          --accent:#1565c0; --accent-tint:rgba(21,101,192,0.08); --rule:rgba(25,28,32,0.12); }
+  body { margin:0; background:var(--paper); color:var(--ink); font-family:'Roboto',sans-serif; }
+  .wrap { max-width:1000px; margin:0 auto; padding:40px 32px 24px; }
+  .eyebrow { font-family:'Geist Mono',monospace; font-size:12px; font-weight:500;
+             letter-spacing:0.18em; text-transform:uppercase; color:var(--muted); margin:0; }
+  h1 { font-family:'Instrument Serif',serif; font-weight:400; font-size:44px; margin:8px 0 4px; }
+  .sub { color:var(--muted); font-size:15px; margin:0 0 24px; }
+  .fig { border:1px solid var(--rule); border-radius:8px; padding:16px; overflow-x:auto; }
+  svg { display:block; }
+  .foot { margin-top:16px; font-family:'Geist Mono',monospace; font-size:11px;
+          color:var(--soft); border-top:1px solid var(--rule); padding-top:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">FLOWCHART · DNS</p>
+  <h1>DNS 拦截流程</h1>
+  <p class="sub">DnsInterceptor 三种模式决策 · 假 IP 伪造 / 系统真实解析（DnsInterceptor.kt:204-424）</p>
+  <div class="fig">
+  <svg viewBox="0 0 1000 760" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
+    <defs>
+      <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#535f70"/>
+      </marker>
+      <marker id="arrow-dash" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#73777f"/>
+      </marker>
+      <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#1565c0"/>
+      </marker>
+    </defs>
+
+    <!-- arrows -->
+    <path d="M 490,68 V 100" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 490,148 V 200" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 490,280 V 320" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 590,200 H 640 V 352 a 8,8 0 0,0 0,16 V 480 H 440 V 560" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
+    <path d="M 490,400 V 424 H 210 V 440" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 590,360 H 800 V 440" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 210,496 V 520 H 380 V 560" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
+    <path d="M 800,496 V 520 H 540 V 560" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
+    <path d="M 490,608 V 640" fill="none" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+
+    <!-- labels -->
+    <rect x="588" y="188" width="56" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="616" y="197" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">缓存命中</text>
+    <rect x="384" y="404" width="140" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="454" y="413" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">REMOTE / WHITELIST</text>
+    <rect x="600" y="348" width="172" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="686" y="357" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">SYSTEM / SPLIT 未命中</text>
+    <rect x="128" y="504" width="96" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="176" y="513" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">假响应</text>
+    <rect x="660" y="504" width="96" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="708" y="513" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">真实响应</text>
+
+    <!-- nodes -->
+    <rect x="410" y="24" width="160" height="44" rx="20" fill="#f8f9ff"/>
+    <rect x="410" y="24" width="160" height="44" rx="20" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="490" y="51" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">DNS 查询</text>
+
+    <rect x="380" y="100" width="220" height="48" rx="6" fill="#f8f9ff"/>
+    <rect x="380" y="100" width="220" height="48" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="490" y="127" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">解析 · 校验</text>
+    <text x="490" y="141" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">Opcode.QUERY · 有 QUESTION</text>
+
+    <path d="M 390,240 L 490,200 L 590,240 L 490,280 Z" fill="#f8f9ff" stroke="#191c20" stroke-width="1"/>
+    <text x="490" y="236" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">缓存命中？</text>
+    <text x="490" y="250" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">$qname.$qtype</text>
+
+    <path d="M 390,360 L 490,320 L 590,360 L 490,400 Z" fill="#f8f9ff" stroke="#191c20" stroke-width="1"/>
+    <text x="490" y="356" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">走系统 DNS？</text>
+    <text x="490" y="370" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">useSystemDns</text>
+
+    <rect x="100" y="440" width="220" height="56" rx="6" fill="#f8f9ff"/>
+    <rect x="100" y="440" width="220" height="56" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="210" y="465" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">假 IP 伪造</text>
+    <text x="210" y="479" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">A→198.18.x · AAAA→fd00::x</text>
+    <text x="210" y="491" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">ipToDomain[fake]=域名</text>
+
+    <rect x="700" y="440" width="200" height="56" rx="6" fill="#f8f9ff"/>
+    <rect x="700" y="440" width="200" height="56" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="800" y="465" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">系统 DNS 解析</text>
+    <text x="800" y="479" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">protect socket · 5s 超时</text>
+    <text x="800" y="491" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">恢复 ID · 建 ipToDomain</text>
+
+    <rect x="380" y="560" width="220" height="48" rx="6" fill="#f8f9ff"/>
+    <rect x="380" y="560" width="220" height="48" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="490" y="587" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">pendingResponses</text>
+    <text x="490" y="601" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">ConcurrentLinkedQueue</text>
+
+    <rect x="380" y="640" width="220" height="48" rx="6" fill="#f8f9ff"/>
+    <rect x="380" y="640" width="220" height="48" rx="6" fill="rgba(21,101,192,0.08)" stroke="#1565c0" stroke-width="1"/>
+    <text x="490" y="667" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">交付 → 写回 TUN</text>
+    <text x="490" y="681" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">dnsResponseDeliveryLoop</text>
+
+    <!-- legend -->
+    <line x1="24" y1="740" x2="976" y2="740" stroke="rgba(25,28,32,0.10)" stroke-width="0.8"/>
+    <text x="24" y="752" fill="#535f70" font-size="8" font-family="'Geist Mono',monospace" letter-spacing="0.14em">LEGEND</text>
+    <line x1="120" y1="746" x2="160" y2="746" stroke="#535f70" stroke-width="1.2"/>
+    <text x="168" y="749" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">主流程</text>
+    <line x1="244" y1="746" x2="284" y2="746" stroke="#1565c0" stroke-width="1.2"/>
+    <text x="292" y="749" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">交付</text>
+    <line x1="344" y1="746" x2="384" y2="746" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3"/>
+    <text x="392" y="749" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">缓存 / 响应回程</text>
+  </svg>
+  </div>
+  <p class="foot">SSHInjector · 缓存 TTL 300s · 映射表上限 4096 · 清理周期 30s；SYSTEM 模式 DNS 走受保护 socket 绕过 VPN</p>
+</div>
+</body>
+</html>

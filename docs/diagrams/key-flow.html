@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>密钥管理流程</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Roboto:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --paper:#f8f9ff; --ink:#191c20; --muted:#535f70; --soft:#73777f;
+          --accent:#1565c0; --accent-tint:rgba(21,101,192,0.08); --rule:rgba(25,28,32,0.12); }
+  body { margin:0; background:var(--paper); color:var(--ink); font-family:'Roboto',sans-serif; }
+  .wrap { max-width:1000px; margin:0 auto; padding:40px 32px 24px; }
+  .eyebrow { font-family:'Geist Mono',monospace; font-size:12px; font-weight:500;
+             letter-spacing:0.18em; text-transform:uppercase; color:var(--muted); margin:0; }
+  h1 { font-family:'Instrument Serif',serif; font-weight:400; font-size:44px; margin:8px 0 4px; }
+  .sub { color:var(--muted); font-size:15px; margin:0 0 24px; }
+  .fig { border:1px solid var(--rule); border-radius:8px; padding:16px; overflow-x:auto; }
+  svg { display:block; }
+  .foot { margin-top:16px; font-family:'Geist Mono',monospace; font-size:11px;
+          color:var(--soft); border-top:1px solid var(--rule); padding-top:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">FLOWCHART · KEY MANAGEMENT</p>
+  <h1>密钥管理流程</h1>
+  <p class="sub">SshKeyManager 三来源 · Keystore 硬件密钥 / AES-GCM 落盘 · JSch 认证接入（SshKeyManager.kt:25-750）</p>
+  <div class="fig">
+  <svg viewBox="0 0 1000 760" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
+    <defs>
+      <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#535f70"/>
+      </marker>
+      <marker id="arrow-dash" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#73777f"/>
+      </marker>
+      <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#1565c0"/>
+      </marker>
+    </defs>
+
+    <!-- arrows -->
+    <path d="M 490,68 V 120" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 390,120 H 170 V 220" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 490,160 V 220" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 590,120 H 810 V 220" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 170,276 V 296 H 380 V 320" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
+    <path d="M 490,276 V 320" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 810,276 V 296 H 600 V 320" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
+    <path d="M 490,368 V 420" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 390,420 H 160 V 440" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
+    <path d="M 590,420 H 700 V 440" fill="none" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+    <path d="M 160,496 V 520 H 380 V 560" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
+    <path d="M 800,496 V 520 H 600 V 560" fill="none" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+
+    <!-- labels -->
+    <rect x="180" y="104" width="32" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="196" y="113" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">生成</text>
+    <rect x="416" y="144" width="56" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="444" y="153" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">导入私钥</text>
+    <rect x="600" y="104" width="56" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="628" y="113" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">导入公钥</text>
+    <rect x="216" y="404" width="52" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="242" y="413" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">非硬件</text>
+    <rect x="596" y="404" width="96" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="644" y="413" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">硬件 Keystore</text>
+
+    <!-- nodes -->
+    <rect x="410" y="24" width="160" height="44" rx="20" fill="#f8f9ff"/>
+    <rect x="410" y="24" width="160" height="44" rx="20" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="490" y="51" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">密钥操作</text>
+
+    <path d="M 390,160 L 490,120 L 590,160 L 490,200 Z" fill="#f8f9ff" stroke="#191c20" stroke-width="1"/>
+    <text x="490" y="156" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">来源</text>
+    <text x="490" y="170" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">getKeyKind</text>
+
+    <rect x="60" y="220" width="220" height="56" rx="6" fill="#f8f9ff"/>
+    <rect x="60" y="220" width="220" height="56" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="170" y="245" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">Keystore 生成</text>
+    <text x="170" y="259" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">ECDSA / RSA / Ed25519</text>
+    <text x="170" y="271" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">生物识别可配 · 私钥不落地</text>
+
+    <rect x="380" y="220" width="220" height="56" rx="6" fill="#f8f9ff"/>
+    <rect x="380" y="220" width="220" height="56" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="490" y="245" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">导入私钥</text>
+    <text x="490" y="259" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">JSch KeyPair.load</text>
+    <text x="490" y="271" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">AES-GCM 加密落盘</text>
+
+    <rect x="700" y="220" width="220" height="56" rx="6" fill="#f8f9ff"/>
+    <rect x="700" y="220" width="220" height="56" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="810" y="245" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">导入公钥</text>
+    <text x="810" y="259" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">明文 .pub + .meta</text>
+    <text x="810" y="271" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">仅服务器授权</text>
+
+    <rect x="380" y="320" width="220" height="48" rx="6" fill="#f8f9ff"/>
+    <rect x="380" y="320" width="220" height="48" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="490" y="347" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">统一出口 getPublicKey</text>
+    <text x="490" y="361" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">OpenSSH 格式 · 缓存</text>
+
+    <path d="M 390,460 L 490,420 L 590,460 L 490,500 Z" fill="#f8f9ff" stroke="#191c20" stroke-width="1"/>
+    <text x="490" y="456" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">硬件密钥？</text>
+    <text x="490" y="470" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">privateKey.encoded == null</text>
+
+    <rect x="700" y="440" width="200" height="56" rx="6" fill="#f8f9ff"/>
+    <rect x="700" y="440" width="200" height="56" rx="6" fill="rgba(21,101,192,0.08)" stroke="#1565c0" stroke-width="1"/>
+    <text x="800" y="465" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">AndroidKeyStoreIdentity</text>
+    <text x="800" y="479" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">签名包装 · 私钥不泄露</text>
+    <text x="800" y="491" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">ECDSA r/s 分离</text>
+
+    <rect x="60" y="440" width="200" height="56" rx="6" fill="#f8f9ff"/>
+    <rect x="60" y="440" width="200" height="56" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="160" y="465" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">PEM → JSch</text>
+    <text x="160" y="479" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">addIdentity(导入/落盘)</text>
+    <text x="160" y="491" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">passphrase 解密</text>
+
+    <rect x="380" y="560" width="220" height="48" rx="6" fill="#f8f9ff"/>
+    <rect x="380" y="560" width="220" height="48" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="490" y="587" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">JSch 认证 · 签名</text>
+    <text x="490" y="601" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">EC→SHA256withECDSA</text>
+
+    <!-- legend -->
+    <line x1="24" y1="740" x2="976" y2="740" stroke="rgba(25,28,32,0.10)" stroke-width="0.8"/>
+    <text x="24" y="752" fill="#535f70" font-size="8" font-family="'Geist Mono',monospace" letter-spacing="0.14em">LEGEND</text>
+    <line x1="120" y1="746" x2="160" y2="746" stroke="#535f70" stroke-width="1.2"/>
+    <text x="168" y="749" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">主流程</text>
+    <line x1="244" y1="746" x2="284" y2="746" stroke="#1565c0" stroke-width="1.2"/>
+    <text x="292" y="749" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">硬件密钥路径</text>
+    <line x1="400" y1="746" x2="440" y2="746" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3"/>
+    <text x="448" y="749" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">非硬件 / 分支</text>
+  </svg>
+  </div>
+  <p class="foot">SSHInjector · Keystore 别名前缀 ssh_key_（对外去前缀）· 导入包装密钥 ssh_import_wrapper_aes · 缓存上限 10 条</p>
+</div>
+</body>
+</html>

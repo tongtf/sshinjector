@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>数据包处理流程</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Roboto:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --paper:#f8f9ff; --ink:#191c20; --muted:#535f70; --soft:#73777f;
+          --accent:#1565c0; --accent-tint:rgba(21,101,192,0.08); --rule:rgba(25,28,32,0.12); }
+  body { margin:0; background:var(--paper); color:var(--ink); font-family:'Roboto',sans-serif; }
+  .wrap { max-width:1020px; margin:0 auto; padding:40px 32px 24px; }
+  .eyebrow { font-family:'Geist Mono',monospace; font-size:12px; font-weight:500;
+             letter-spacing:0.18em; text-transform:uppercase; color:var(--muted); margin:0; }
+  h1 { font-family:'Instrument Serif',serif; font-weight:400; font-size:44px; margin:8px 0 4px; }
+  .sub { color:var(--muted); font-size:15px; margin:0 0 24px; }
+  .fig { border:1px solid var(--rule); border-radius:8px; padding:16px; overflow-x:auto; }
+  svg { display:block; }
+  .foot { margin-top:16px; font-family:'Geist Mono',monospace; font-size:11px;
+          color:var(--soft); border-top:1px solid var(--rule); padding-top:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">FLOWCHART · PACKET</p>
+  <h1>数据包处理流程</h1>
+  <p class="sub">VpnController.packetLoop → PacketProcessor 协议分派（VpnController.kt:448 · PacketProcessor.kt）</p>
+  <div class="fig">
+  <svg viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
+    <defs>
+      <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#535f70"/>
+      </marker>
+      <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#1565c0"/>
+      </marker>
+    </defs>
+
+    <!-- arrows -->
+    <path d="M 490,68 V 100" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 490,148 V 180" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 490,260 V 296" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 490,376 V 412" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 590,220 H 790 V 316" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+    <path d="M 590,336 H 700" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+    <path d="M 590,452 H 280" fill="none" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+    <path d="M 490,492 V 528" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 590,452 H 700" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+    <path d="M 790,372 H 380 V 610 H 500 V 618" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+
+    <!-- branch labels -->
+    <rect x="600" y="204" width="24" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="612" y="213" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">是</text>
+    <rect x="600" y="320" width="24" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="612" y="329" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">是</text>
+    <rect x="306" y="436" width="32" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="322" y="445" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">TCP</text>
+    <rect x="496" y="500" width="32" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="512" y="509" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">UDP</text>
+    <rect x="600" y="436" width="56" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="628" y="445" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">ICMPv6</text>
+
+    <!-- nodes -->
+    <rect x="410" y="24" width="160" height="44" rx="20" fill="#f8f9ff"/>
+    <rect x="410" y="24" width="160" height="44" rx="20" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="490" y="51" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">读 TUN 包</text>
+
+    <rect x="380" y="100" width="220" height="48" rx="6" fill="#f8f9ff"/>
+    <rect x="380" y="100" width="220" height="48" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="490" y="127" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">解析版本 · 提取目标 IP</text>
+    <text x="490" y="141" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">version=0 时扫描 tun_pi ≤8B</text>
+
+    <path d="M 390,220 L 490,180 L 590,220 L 490,260 Z" fill="#f8f9ff" stroke="#191c20" stroke-width="1"/>
+    <text x="490" y="216" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">命中排除路由？</text>
+    <text x="490" y="230" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">shouldBypassVpn</text>
+
+    <path d="M 390,336 L 490,296 L 590,336 L 490,376 Z" fill="#f8f9ff" stroke="#191c20" stroke-width="1"/>
+    <text x="490" y="332" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">DOMAIN_SPLIT</text>
+    <text x="490" y="346" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">非假 IP 且白名单未命?</text>
+
+    <path d="M 390,452 L 490,412 L 590,452 L 490,492 Z" fill="#f8f9ff" stroke="#191c20" stroke-width="1"/>
+    <text x="490" y="448" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">协议</text>
+    <text x="490" y="462" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">TCP/UDP/ICMPv6</text>
+
+    <rect x="80" y="440" width="200" height="48" rx="6" fill="#f8f9ff"/>
+    <rect x="80" y="440" width="200" height="48" rx="6" fill="rgba(21,101,192,0.08)" stroke="#1565c0" stroke-width="1"/>
+    <text x="180" y="467" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">TcpStateMachine</text>
+    <text x="180" y="481" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">连接跟踪 · 转发 · 背压</text>
+
+    <rect x="390" y="528" width="220" height="48" rx="6" fill="#f8f9ff"/>
+    <rect x="390" y="528" width="220" height="48" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="500" y="555" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">UdpRelay</text>
+    <text x="500" y="569" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">端口 53 → DnsInterceptor</text>
+
+    <rect x="700" y="440" width="200" height="48" rx="6" fill="#f8f9ff"/>
+    <rect x="700" y="440" width="200" height="48" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="800" y="467" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">ICMPv6 / 其他</text>
+    <text x="800" y="481" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">responder 响应 / 透传</text>
+
+    <rect x="700" y="316" width="180" height="48" rx="6" fill="#f8f9ff"/>
+    <rect x="700" y="316" width="180" height="48" rx="6" fill="rgba(25,28,32,0.05)" stroke="#535f70" stroke-width="1"/>
+    <text x="790" y="343" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">原样写回 TUN</text>
+    <text x="790" y="357" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">writeToTun 直连</text>
+
+    <rect x="420" y="618" width="160" height="44" rx="20" fill="#f8f9ff"/>
+    <rect x="420" y="618" width="160" height="44" rx="20" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="500" y="645" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">结束</text>
+
+    <!-- legend -->
+    <line x1="24" y1="680" x2="976" y2="680" stroke="rgba(25,28,32,0.10)" stroke-width="0.8"/>
+    <text x="24" y="692" fill="#535f70" font-size="8" font-family="'Geist Mono',monospace" letter-spacing="0.14em">LEGEND</text>
+    <line x1="120" y1="686" x2="160" y2="686" stroke="#535f70" stroke-width="1.2"/>
+    <text x="168" y="689" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">进入隧道路径</text>
+    <line x1="280" y1="686" x2="320" y2="686" stroke="#1565c0" stroke-width="1.2"/>
+    <text x="328" y="689" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">TCP 主路径</text>
+    <line x1="408" y1="686" x2="448" y2="686" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3"/>
+    <text x="456" y="689" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">直连 / 透传</text>
+  </svg>
+  </div>
+  <p class="foot">SSHInjector · 排除路由与白名单直连不进入隧道；DOMAIN_SPLIT 下 TCP 全量直连、仅 53 端口 DNS 走隧道</p>
+</div>
+</body>
+</html>

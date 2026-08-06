@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TCP 数据通路流程</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Roboto:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --paper:#f8f9ff; --ink:#191c20; --muted:#535f70; --soft:#73777f;
+          --accent:#1565c0; --accent-tint:rgba(21,101,192,0.08); --rule:rgba(25,28,32,0.12); }
+  body { margin:0; background:var(--paper); color:var(--ink); font-family:'Roboto',sans-serif; }
+  .wrap { max-width:980px; margin:0 auto; padding:40px 32px 24px; }
+  .eyebrow { font-family:'Geist Mono',monospace; font-size:12px; font-weight:500;
+             letter-spacing:0.18em; text-transform:uppercase; color:var(--muted); margin:0; }
+  h1 { font-family:'Instrument Serif',serif; font-weight:400; font-size:44px; margin:8px 0 4px; }
+  .sub { color:var(--muted); font-size:15px; margin:0 0 24px; }
+  .fig { border:1px solid var(--rule); border-radius:8px; padding:16px; overflow-x:auto; }
+  svg { display:block; }
+  .foot { margin-top:16px; font-family:'Geist Mono',monospace; font-size:11px;
+          color:var(--soft); border-top:1px solid var(--rule); padding-top:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">FLOWCHART · TCP PATH</p>
+  <h1>TCP 数据通路流程</h1>
+  <p class="sub">TcpStateMachine.processTcpPacket — 连接建立 · SOCKS5 通道 · 回向直通（TcpStateMachine.kt:85-339）</p>
+  <div class="fig">
+  <svg viewBox="0 0 960 700" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
+    <defs>
+      <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#535f70"/>
+      </marker>
+      <marker id="arrow-dash" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#73777f"/>
+      </marker>
+      <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#1565c0"/>
+      </marker>
+    </defs>
+
+    <!-- arrows -->
+    <path d="M 360,68 V 100" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 360,148 V 180" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 360,260 V 300" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 360,356 V 400" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 360,480 V 520" fill="none" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+    <path d="M 360,568 V 600" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 460,220 H 660 V 544 H 470" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
+    <path d="M 460,440 H 652 a 8,8 0 0,1 16,0 H 680" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
+    <path d="M 250,328 H 170 V 560" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
+
+    <!-- labels -->
+    <rect x="300" y="244" width="48" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="324" y="253" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">是</text>
+    <rect x="316" y="464" width="48" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="340" y="473" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">成功</text>
+    <rect x="466" y="424" width="48" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="490" y="433" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">失败</text>
+    <rect x="444" y="204" width="52" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="470" y="213" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">无隧道</text>
+    <rect x="140" y="424" width="128" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="204" y="433" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">注册回向回调</text>
+
+    <!-- nodes -->
+    <rect x="280" y="24" width="160" height="44" rx="20" fill="#f8f9ff"/>
+    <rect x="280" y="24" width="160" height="44" rx="20" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="360" y="51" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">收到 SYN</text>
+
+    <rect x="250" y="100" width="220" height="48" rx="6" fill="#f8f9ff"/>
+    <rect x="250" y="100" width="220" height="48" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="360" y="127" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">分配连接 · SynSent</text>
+    <text x="360" y="141" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">五元组 key 登记</text>
+
+    <path d="M 260,220 L 360,180 L 460,220 L 360,260 Z" fill="#f8f9ff" stroke="#191c20" stroke-width="1"/>
+    <text x="360" y="216" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">活跃隧道？</text>
+    <text x="360" y="230" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">getActiveOrFallback</text>
+
+    <rect x="250" y="300" width="220" height="56" rx="6" fill="#f8f9ff"/>
+    <rect x="250" y="300" width="220" height="56" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="360" y="325" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">本地 SOCKS5 连接</text>
+    <text x="360" y="339" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">127.0.0.1:1080 · 注册回调</text>
+    <text x="360" y="351" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">握手 + CONNECT 请求</text>
+
+    <path d="M 260,440 L 360,400 L 460,440 L 360,480 Z" fill="#f8f9ff" stroke="#191c20" stroke-width="1"/>
+    <text x="360" y="436" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">响应 rep = 0？</text>
+    <text x="360" y="450" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">CONNECT 应答校验</text>
+
+    <rect x="250" y="520" width="220" height="48" rx="6" fill="#f8f9ff"/>
+    <rect x="250" y="520" width="220" height="48" rx="6" fill="rgba(21,101,192,0.08)" stroke="#1565c0" stroke-width="1"/>
+    <text x="360" y="547" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">回 SYN-ACK · Established</text>
+    <text x="360" y="561" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">buildSynAckPacket → TUN</text>
+
+    <rect x="250" y="600" width="220" height="56" rx="6" fill="#f8f9ff"/>
+    <rect x="250" y="600" width="220" height="56" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="360" y="625" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">双向数据中继</text>
+    <text x="360" y="639" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">出向: toSshChannel · 背压</text>
+    <text x="360" y="651" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">回向: 直通回调 → 写 TUN</text>
+
+    <rect x="680" y="410" width="200" height="48" rx="6" fill="#f8f9ff"/>
+    <rect x="680" y="410" width="200" height="48" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="780" y="437" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">发 RST · 关闭连接</text>
+    <text x="780" y="451" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">移除 map · 关 socket</text>
+
+    <rect x="60" y="560" width="220" height="56" rx="6" fill="#f8f9ff"/>
+    <rect x="60" y="560" width="220" height="56" rx="6" fill="rgba(21,101,192,0.08)" stroke="#1565c0" stroke-width="1"/>
+    <text x="170" y="585" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">回向直通 callback</text>
+    <text x="170" y="599" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">SSH 数据 → writeTcpPayloadToTun</text>
+    <text x="170" y="611" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">跳过本地 SOCKS 往返</text>
+
+    <!-- legend -->
+    <line x1="24" y1="680" x2="936" y2="680" stroke="rgba(25,28,32,0.10)" stroke-width="0.8"/>
+    <text x="24" y="692" fill="#535f70" font-size="8" font-family="'Geist Mono',monospace" letter-spacing="0.14em">LEGEND</text>
+    <line x1="120" y1="686" x2="160" y2="686" stroke="#535f70" stroke-width="1.2"/>
+    <text x="168" y="689" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">主路径</text>
+    <line x1="244" y1="686" x2="284" y2="686" stroke="#1565c0" stroke-width="1.2"/>
+    <text x="292" y="689" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">成功 / 直通</text>
+    <line x1="380" y1="686" x2="420" y2="686" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3"/>
+    <text x="428" y="689" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">降级 / 失败</text>
+  </svg>
+  </div>
+  <p class="foot">SSHInjector · 已建连接数据按 seq 严格校验（重传丢弃、乱序触发快重传）；FIN/RST 关闭连接</p>
+</div>
+</body>
+</html>

@@ -1,58 +1,164 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SSHInjector 系统图表索引</title>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSHInjector 功能逻辑图集</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Roboto:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-:root{--paper:#f5f5f5;--ink:#2d3142;--muted:#4f5d75;--soft:#7a8399;--rule:rgba(45,49,66,0.12);--accent:#eb6c36;--accent-tint:rgba(235,108,54,0.08);--link:#2e5aa8}
-*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Geist',sans-serif;background:var(--paper);color:var(--ink);line-height:1.6;padding:2rem}
-header{margin-bottom:2rem}header .eyebrow{font-family:'Geist Mono',monospace;font-size:8px;letter-spacing:0.18em;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem}h1{font-family:'Instrument Serif',serif;font-size:1.75rem;font-weight:400;color:var(--ink)}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1.5rem}
-.card{background:#ffffff;border:1px solid var(--rule);border-radius:8px;padding:1.5rem;transition:border-color .2s}
-.card:hover{border-color:var(--accent)}
-.card .tag{font-family:'Geist Mono',monospace;font-size:7px;font-weight:600;color:var(--accent);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.75rem;display:block}
-.card h2{font-family:'Geist',sans-serif;font-size:1.1rem;font-weight:600;color:var(--ink);margin-bottom:0.5rem}
-.card p{font-size:0.9rem;color:var(--muted);margin-bottom:1rem}
-.card a{font-family:'Geist Mono',monospace;font-size:8px;color:var(--link);text-decoration:none;letter-spacing:0.06em}
-.card a:hover{text-decoration:underline}
-footer{margin-top:3rem;padding-top:1.5rem;border-top:1px solid var(--rule);font-family:'Geist Mono',monospace;font-size:10px;color:var(--soft);text-align:center}
+  :root { --paper:#f8f9ff; --ink:#191c20; --muted:#535f70; --soft:#73777f;
+          --accent:#1565c0; --accent-tint:rgba(21,101,192,0.08); --rule:rgba(25,28,32,0.12); }
+  body { margin:0; background:var(--paper); color:var(--ink); font-family:'Roboto',sans-serif; }
+  .wrap { max-width:1100px; margin:0 auto; padding:48px 32px 32px; }
+  .eyebrow { font-family:'Geist Mono',monospace; font-size:12px; font-weight:500;
+             letter-spacing:0.18em; text-transform:uppercase; color:var(--muted); margin:0; }
+  h1 { font-family:'Instrument Serif',serif; font-weight:400; font-size:44px; margin:8px 0 8px; }
+  .sub { color:var(--muted); font-size:15px; margin:0 0 12px; line-height:1.6; }
+  .summary { display:grid; grid-template-columns: 1.1fr 1fr 0.9fr; gap:16px; margin:24px 0 32px; }
+  .card { background:#ffffff; border:1px solid var(--rule); border-radius:6px; padding:1.25rem; }
+  .card p.eyebrow { font-size:10px; margin:0 0 8px; }
+  .card h3 { margin:0 0 6px; font-size:16px; }
+  .card ul { margin:0; padding-left:18px; color:var(--muted); font-size:13px; }
+  .card .dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:8px; }
+  .dot.blue { background:#1565c0; }
+  h2 { font-family:'Geist Mono',monospace; font-size:14px; letter-spacing:0.16em; text-transform:uppercase;
+       color:var(--muted); margin:36px 0 14px; border-top:1px solid var(--rule); padding-top:20px; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(300px,1fr)); gap:14px; }
+  .item { background:#ffffff; border:1px solid var(--rule); border-radius:6px; padding:16px;
+          text-decoration:none; color:var(--ink); display:block; transition:border-color .15s; }
+  .item:hover { border-color:var(--accent); }
+  .item .t { font-size:15px; font-weight:600; margin:0 0 4px; }
+  .item .d { font-size:12px; color:var(--muted); line-height:1.5; margin:0; }
+  .item .tag { display:inline-block; margin-top:10px; font-family:'Geist Mono',monospace; font-size:9px;
+               letter-spacing:0.1em; text-transform:uppercase; color:var(--accent); }
+  .foot { margin-top:40px; font-family:'Geist Mono',monospace; font-size:11px; color:var(--soft);
+          border-top:1px solid var(--rule); padding-top:12px; }
 </style>
 </head>
 <body>
-<header>
-<p class="eyebrow">Diagram Index</p>
-<h1>SSHInjector 系统图表</h1>
-</header>
-<div class="grid">
-<article class="card">
-<span class="tag">Architecture</span>
-<h2>系统架构图</h2>
-<p>模块划分、依赖关系、关键 Seam 位置、Leverage 分析、层级结构</p>
-<a href="architecture.html">查看图表 →</a>
-</article>
-<article class="card">
-<span class="tag">Data Flow</span>
-<h2>VPN 数据流图</h2>
-<p>App 流量 → TUN → PacketProcessor → 协议分发 → TCP/UDP/DNS → SOCKS5 → SSH → 远程服务器</p>
-<a href="data-flow.html">查看图表 →</a>
-</article>
-<article class="card">
-<span class="tag">Sequence</span>
-<h2>VPN 连接时序图</h2>
-<p>用户点击连接 → MainActivity → MainViewModel → SshVpnService → VpnController → JschSshClient → Socks5Proxy → PacketLoop</p>
-<a href="sequence.html">查看图表 →</a>
-</article>
-<article class="card">
-<span class="tag">State Machine</span>
-<h2>VPN 连接状态机</h2>
-<p>Disconnected → Connecting → Authenticating → EstablishingTunnel → Connected ↔ Disconnecting/Failed/Reconnecting</p>
-<a href="state-machine.html">查看图表 →</a>
-</article>
+<div class="wrap">
+  <p class="eyebrow">DIAGRAM INDEX · SSHINJECTOR</p>
+  <h1>功能逻辑图集</h1>
+  <p class="sub">基于代码事实梳理的架构、状态机、流程与时序图。每个图均对照源码调用链（file:line）生成，图集随代码演进需同步更新。</p>
+
+  <div class="summary">
+    <div class="card">
+      <p class="eyebrow"><span class="dot blue"></span>TRUST BOUNDARY</p>
+      <h3>三层架构</h3>
+      <ul>
+        <li>UI Layer — Compose 页面 + MainViewModel</li>
+        <li>VPN Engine — VpnController 状态机 + TUN</li>
+        <li>本地代理 — SOCKS5 + SSH 池 + 持久化</li>
+      </ul>
+    </div>
+    <div class="card">
+      <p class="eyebrow"><span class="dot blue"></span>KEY FACTS</p>
+      <h3>核心事实</h3>
+      <ul>
+        <li>回向直通跳过本地 SOCKS 往返</li>
+        <li>出向 kotlinx Channel 背压</li>
+        <li>SSH 会话池 ×3 + 线性退避重连</li>
+        <li>UDP 中继当前不工作</li>
+      </ul>
+    </div>
+    <div class="card">
+      <p class="eyebrow"><span class="dot blue"></span>KNOWN DEVIATIONS</p>
+      <h3>代码漂移点</h3>
+      <ul>
+        <li>VpnStatus 三个枚举值为死代码</li>
+        <li>pendingResponses 实为队列非 Channel</li>
+        <li>全局 MTU/IPv6 设置无运行时消费</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>架构</h2>
+  <div class="grid">
+    <a class="item" href="architecture-system.html">
+      <p class="t">系统架构</p>
+      <p class="d">UI / VPN 引擎 / 本地代理与持久化三层，数据流与配置流方向。</p>
+      <span class="tag">Architecture</span>
+    </a>
+  </div>
+
+  <h2>状态机</h2>
+  <div class="grid">
+    <a class="item" href="vpn-state.html">
+      <p class="t">VPN 连接状态机</p>
+      <p class="d">Disconnected ↔ Connecting ↔ Connected ↔ Disconnecting + Failed；标注死代码枚举值。</p>
+      <span class="tag">State Machine</span>
+    </a>
+    <a class="item" href="socks5-state.html">
+      <p class="t">SOCKS5 连接状态机</p>
+      <p class="d">握手 → 请求 → 连接 → 中继 → 关闭；超时与 UDP ASSOCIATE 空回复问题。</p>
+      <span class="tag">State Machine</span>
+    </a>
+    <a class="item" href="ssh-reconnect-state.html">
+      <p class="t">SSH 会话重连状态机</p>
+      <p class="d">3 会话池 keepAlive 检测 · 线性退避 ≤5 次 · 耗尽进入 Pool Failed。</p>
+      <span class="tag">State Machine</span>
+    </a>
+  </div>
+
+  <h2>流程</h2>
+  <div class="grid">
+    <a class="item" href="packet-flow.html">
+      <p class="t">数据包处理流程</p>
+      <p class="d">TUN 读 → 版本识别 → 排除路由 / DOMAIN_SPLIT 直连分流 → 协议分派。</p>
+      <span class="tag">Flowchart</span>
+    </a>
+    <a class="item" href="vpn-connect-flow.html">
+      <p class="t">VPN 启动连接流程</p>
+      <p class="d">生物识别 / VPN 授权门控 → 前台服务 → 建 TUN → 启动隧道 → Connected。</p>
+      <span class="tag">Flowchart</span>
+    </a>
+    <a class="item" href="tcp-flow.html">
+      <p class="t">TCP 数据通路流程</p>
+      <p class="d">SYN → 本地 SOCKS5 通道建立 → 回向直通；seq 校验与 RST 关闭。</p>
+      <span class="tag">Flowchart</span>
+    </a>
+    <a class="item" href="dns-flow.html">
+      <p class="t">DNS 拦截流程</p>
+      <p class="d">REMOTE 假 IP / SYSTEM 系统解析决策、缓存、pendingResponses 交付。</p>
+      <span class="tag">Flowchart</span>
+    </a>
+    <a class="item" href="provisioning-flow.html">
+      <p class="t">服务器一键配置流程</p>
+      <p class="d">权限检测 → 脚本 SHA 校验 → 公钥校验 → 执行 → 验证；OpenWrt/dropbear 兼容。</p>
+      <span class="tag">Flowchart</span>
+    </a>
+    <a class="item" href="udp-flow.html">
+      <p class="t">UDP 中继流程</p>
+      <p class="d">NIO 事件循环与关联表；标注 UDP 中继实际不可用的已知问题。</p>
+      <span class="tag">Flowchart</span>
+    </a>
+    <a class="item" href="key-flow.html">
+      <p class="t">密钥管理流程</p>
+      <p class="d">Keystore 生成 / AES-GCM 落盘导入 / 仅公钥三来源，硬件密钥签名包装。</p>
+      <span class="tag">Flowchart</span>
+    </a>
+  </div>
+
+  <h2>时序</h2>
+  <div class="grid">
+    <a class="item" href="vpn-start-sequence.html">
+      <p class="t">VPN 启动时序</p>
+      <p class="d">UI → VpnService → VpnController → 隧道插件 → 远端的完整调用链。</p>
+      <span class="tag">Sequence</span>
+    </a>
+    <a class="item" href="tcp-data-sequence.html">
+      <p class="t">TCP 数据通路时序</p>
+      <p class="d">连接建立、出向背压（Channel）、回向直通回调的逐消息流程。</p>
+      <span class="tag">Sequence</span>
+    </a>
+    <a class="item" href="dns-sequence.html">
+      <p class="t">DNS 解析时序</p>
+      <p class="d">REMOTE 假 IP 模式与 SYSTEM protect-socket 直连模式的对比。</p>
+      <span class="tag">Sequence</span>
+    </a>
+  </div>
+
+  <p class="foot">SSHInjector · docs/diagrams/ · 生成于 2026-08-06 功能逻辑梳理工作流（dev-workflow explore → design）</p>
 </div>
-<footer>
-Generated by diagram-design skill · SSHInjector · <script>document.write(new Date().toLocaleDateString('zh-CN'))</script>
-</footer>
 </body>
 </html>

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VPN 连接状态机</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Roboto:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --paper:#f8f9ff; --ink:#191c20; --muted:#535f70; --soft:#73777f;
+          --accent:#1565c0; --accent-tint:rgba(21,101,192,0.08); --rule:rgba(25,28,32,0.12); }
+  body { margin:0; background:var(--paper); color:var(--ink); font-family:'Roboto',sans-serif; }
+  .wrap { max-width:1200px; margin:0 auto; padding:40px 32px 24px; }
+  .eyebrow { font-family:'Geist Mono',monospace; font-size:12px; font-weight:500;
+             letter-spacing:0.18em; text-transform:uppercase; color:var(--muted); margin:0; }
+  h1 { font-family:'Instrument Serif',serif; font-weight:400; font-size:44px; margin:8px 0 4px; }
+  .sub { color:var(--muted); font-size:15px; margin:0 0 24px; }
+  .fig { border:1px solid var(--rule); border-radius:8px; padding:16px; overflow-x:auto; }
+  svg { display:block; }
+  .foot { margin-top:16px; font-family:'Geist Mono',monospace; font-size:11px;
+          color:var(--soft); border-top:1px solid var(--rule); padding-top:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">STATE MACHINE · VPN</p>
+  <h1>VPN 连接状态机</h1>
+  <p class="sub">VpnController + SshVpnService — 实际流转；枚举中 Authenticating/EstablishingTunnel/Reconnecting 为死代码</p>
+  <div class="fig">
+  <svg viewBox="0 0 1200 520" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
+    <defs>
+      <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#535f70"/>
+      </marker>
+      <marker id="arrow-dash" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#73777f"/>
+      </marker>
+      <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#1565c0"/>
+      </marker>
+    </defs>
+
+    <!-- arrows -->
+    <path d="M 530,396 V 440 H 150 V 216" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 930,216 V 300 H 150 V 216" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 410,216 V 320 H 440 V 340" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
+    <path d="M 240,188 H 320" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 500,188 H 580" fill="none" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+    <path d="M 760,188 H 840" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+    <!-- arrow labels -->
+    <rect x="250" y="172" width="128" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="314" y="181" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">UI connect()</text>
+    <rect x="500" y="172" width="148" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="574" y="181" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">隧道+DNI 配置成功</text>
+    <rect x="748" y="172" width="140" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="818" y="181" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">断开 / onRevoke / 网络</text>
+    <rect x="936" y="284" width="96" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="984" y="293" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">清理完成</text>
+    <rect x="448" y="424" width="96" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="496" y="433" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">disconnect()</text>
+    <rect x="272" y="308" width="120" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="332" y="317" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">连接失败 (VpnService)</text>
+
+    <!-- state nodes -->
+    <circle cx="150" cy="132" r="6" fill="#191c20"/>
+    <rect x="60" y="160" width="180" height="56" rx="8" fill="#f8f9ff"/>
+    <rect x="60" y="160" width="180" height="56" rx="8" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="150" y="188" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">Disconnected</text>
+    <text x="150" y="204" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">初始 / 终态</text>
+    <circle cx="150" cy="240" r="8" fill="none" stroke="#191c20" stroke-width="1.2"/>
+    <circle cx="150" cy="240" r="5" fill="#191c20"/>
+
+    <rect x="320" y="160" width="180" height="56" rx="8" fill="#f8f9ff"/>
+    <rect x="320" y="160" width="180" height="56" rx="8" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="410" y="188" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">Connecting</text>
+    <text x="410" y="204" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">隧道启动 · DNI 配置</text>
+
+    <rect x="580" y="160" width="180" height="56" rx="8" fill="#f8f9ff"/>
+    <rect x="580" y="160" width="180" height="56" rx="8" fill="rgba(21,101,192,0.08)" stroke="#1565c0" stroke-width="1"/>
+    <text x="670" y="188" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">Connected</text>
+    <text x="670" y="204" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">packetLoop 运行中</text>
+
+    <rect x="840" y="160" width="180" height="56" rx="8" fill="#f8f9ff"/>
+    <rect x="840" y="160" width="180" height="56" rx="8" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="930" y="188" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">Disconnecting</text>
+    <text x="930" y="204" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">取消协程 · 停隧道 · 关 TUN</text>
+
+    <rect x="440" y="340" width="180" height="56" rx="8" fill="#f8f9ff"/>
+    <rect x="440" y="340" width="180" height="56" rx="8" fill="rgba(21,101,192,0.08)" stroke="#1565c0" stroke-width="1"/>
+    <text x="530" y="368" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">Failed</text>
+    <text x="530" y="384" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">VpnService 层设置</text>
+
+    <!-- notes -->
+    <text x="60" y="470" fill="#73777f" font-size="11" font-family="'Geist Mono',monospace">
+* → Failed  on SSH/隧道连接失败（SshVpnService:170 / :568）
+* → Disconnected  on 断开 3s 超时兜底 forceReset（MainViewModel:617）
+    </text>
+
+    <!-- legend -->
+    <line x1="24" y1="484" x2="1176" y2="484" stroke="rgba(25,28,32,0.10)" stroke-width="0.8"/>
+    <text x="24" y="496" fill="#535f70" font-size="8" font-family="'Geist Mono',monospace" letter-spacing="0.14em">LEGEND</text>
+    <line x1="120" y1="490" x2="160" y2="490" stroke="#535f70" stroke-width="1.2"/>
+    <text x="168" y="493" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">常规转移</text>
+    <line x1="244" y1="490" x2="284" y2="490" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3"/>
+    <text x="292" y="493" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">异常路径</text>
+    <line x1="368" y1="490" x2="408" y2="490" stroke="#1565c0" stroke-width="1.2"/>
+    <text x="416" y="493" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">成功路径</text>
+  </svg>
+  </div>
+  <p class="foot">SSHInjector · VpnStatus 枚举于 DomainModels.kt:51-67 · 转移事实来自 VpnController.kt / SshVpnService.kt</p>
+</div>
+</body>
+</html>

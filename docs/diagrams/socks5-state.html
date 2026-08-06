@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SOCKS5 连接状态机</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Roboto:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --paper:#f8f9ff; --ink:#191c20; --muted:#535f70; --soft:#73777f;
+          --accent:#1565c0; --accent-tint:rgba(21,101,192,0.08); --rule:rgba(25,28,32,0.12); }
+  body { margin:0; background:var(--paper); color:var(--ink); font-family:'Roboto',sans-serif; }
+  .wrap { max-width:1100px; margin:0 auto; padding:40px 32px 24px; }
+  .eyebrow { font-family:'Geist Mono',monospace; font-size:12px; font-weight:500;
+             letter-spacing:0.18em; text-transform:uppercase; color:var(--muted); margin:0; }
+  h1 { font-family:'Instrument Serif',serif; font-weight:400; font-size:44px; margin:8px 0 4px; }
+  .sub { color:var(--muted); font-size:15px; margin:0 0 24px; }
+  .fig { border:1px solid var(--rule); border-radius:8px; padding:16px; overflow-x:auto; }
+  svg { display:block; }
+  .foot { margin-top:16px; font-family:'Geist Mono',monospace; font-size:11px;
+          color:var(--soft); border-top:1px solid var(--rule); padding-top:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">STATE MACHINE · SOCKS5</p>
+  <h1>SOCKS5 连接状态机</h1>
+  <p class="sub">Socks5ProxyServer.Socks5Connection — 本地代理握手中继（Socks5ProxyServer.kt:311-318）</p>
+  <div class="fig">
+  <svg viewBox="0 0 1080 500" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
+    <defs>
+      <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#535f70"/>
+      </marker>
+      <marker id="arrow-dash" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#73777f"/>
+      </marker>
+      <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#1565c0"/>
+      </marker>
+    </defs>
+
+    <!-- arrows -->
+    <path d="M 250,92 V 160" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 360,188 H 420" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 600,188 H 660" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 840,188 H 900" fill="none" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+    <path d="M 150,216 V 300" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
+    <path d="M 420,216 V 360 H 350 V 396" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
+    <path d="M 680,216 V 380 H 370 V 396" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
+    <path d="M 960,216 V 400 H 410 V 396" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
+
+    <!-- labels -->
+    <rect x="330" y="172" width="68" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="364" y="181" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">VER=5</text>
+    <rect x="566" y="172" width="84" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="608" y="181" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">CONNECT</text>
+    <rect x="810" y="172" width="84" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="852" y="181" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">连接成功</text>
+    <rect x="140" y="340" width="160" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="220" y="349" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">可选：无认证跳过</text>
+    <rect x="380" y="340" width="120" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="440" y="349" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">UDP ASSOCIATE</text>
+    <rect x="640" y="280" width="180" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="730" y="289" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">connect 失败 / 超时(10s)</text>
+    <rect x="888" y="300" width="100" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="938" y="309" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">EOF/空闲 300s</text>
+
+    <!-- nodes -->
+    <circle cx="250" cy="64" r="6" fill="#191c20"/>
+    <rect x="160" y="160" width="200" height="56" rx="8" fill="#f8f9ff"/>
+    <rect x="160" y="160" width="200" height="56" rx="8" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="260" y="188" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">Handshake</text>
+    <text x="260" y="204" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">读 greeting · 回复 [0x05,0x00]</text>
+
+    <rect x="420" y="160" width="180" height="56" rx="8" fill="#f8f9ff"/>
+    <rect x="420" y="160" width="180" height="56" rx="8" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="510" y="188" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">Request</text>
+    <text x="510" y="204" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">CONNECT / UDP ASSOCIATE</text>
+
+    <rect x="660" y="160" width="180" height="56" rx="8" fill="#f8f9ff"/>
+    <rect x="660" y="160" width="180" height="56" rx="8" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <text x="750" y="188" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">Connecting</text>
+    <text x="750" y="204" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">JSch direct-tcpip connect</text>
+
+    <rect x="900" y="160" width="140" height="56" rx="8" fill="#f8f9ff"/>
+    <rect x="900" y="160" width="140" height="56" rx="8" fill="rgba(21,101,192,0.08)" stroke="#1565c0" stroke-width="1"/>
+    <text x="970" y="188" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">Relaying</text>
+    <text x="970" y="204" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">双向数据中继</text>
+
+    <rect x="120" y="300" width="180" height="56" rx="8" fill="#f8f9ff"/>
+    <rect x="120" y="300" width="180" height="56" rx="8" fill="rgba(25,28,32,0.02)" stroke="rgba(25,28,32,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+    <text x="210" y="328" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">AuthMethods</text>
+    <text x="210" y="344" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">枚举保留 · 直通</text>
+
+    <rect x="300" y="396" width="140" height="56" rx="8" fill="#f8f9ff"/>
+    <rect x="300" y="396" width="140" height="56" rx="8" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <circle cx="370" cy="452" r="8" fill="none" stroke="#191c20" stroke-width="1.2"/>
+    <circle cx="370" cy="452" r="5" fill="#191c20"/>
+    <text x="370" y="424" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">Closed</text>
+    <text x="370" y="440" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">终态 · onClosed 清理</text>
+
+    <!-- note -->
+    <text x="700" y="360" fill="#73777f" font-size="11" font-family="'Geist Mono',monospace">
+注意：UDP ASSOCIATE 仅回 0.0.0.0:0 空回复，
+连接保持打开但无 UDP 转发 —— UDP 中继实际不工作
+    </text>
+
+    <!-- legend -->
+    <line x1="24" y1="470" x2="1056" y2="470" stroke="rgba(25,28,32,0.10)" stroke-width="0.8"/>
+    <text x="24" y="482" fill="#535f70" font-size="8" font-family="'Geist Mono',monospace" letter-spacing="0.14em">LEGEND</text>
+    <line x1="120" y1="476" x2="160" y2="476" stroke="#535f70" stroke-width="1.2"/>
+    <text x="168" y="479" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">常规转移</text>
+    <line x1="244" y1="476" x2="284" y2="476" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3"/>
+    <text x="292" y="479" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">异常 / 可选</text>
+    <line x1="368" y1="476" x2="408" y2="476" stroke="#1565c0" stroke-width="1.2"/>
+    <text x="416" y="479" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">成功路径</text>
+  </svg>
+  </div>
+  <p class="foot">SSHInjector · SocksState 定义于 Socks5ProxyServer.kt:311-318 · 超时 10s(连接)/300s(空闲)/5s 检查</p>
+</div>
+</body>
+</html>
