@@ -2,14 +2,20 @@ package cn.srv0.sshinjector.domain.vpn
 
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.channels.ClosedChannelException
+import java.nio.channels.ClosedSelectorException
 import java.nio.channels.DatagramChannel
-import java.nio.channels.SocketChannel
+import java.nio.channels.SelectionKey
+import java.nio.channels.Selector
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicLong
@@ -17,18 +23,7 @@ import java.util.concurrent.atomic.AtomicLong
 private val IS_DEBUG = android.util.Log.isLoggable("PacketProcessor", android.util.Log.DEBUG)
 
 private const val BUFFER_SIZE = 65536
-private val BUFFER_POOL = ConcurrentLinkedQueue<ByteBuffer>()
-
-fun acquireBuffer(): ByteBuffer {
-    return BUFFER_POOL.poll() ?: ByteBuffer.allocateDirect(BUFFER_SIZE)
-}
-
-fun releaseBuffer(buffer: ByteBuffer) {
-    if (buffer.capacity() == BUFFER_SIZE && buffer.isDirect) {
-        buffer.clear()
-        BUFFER_POOL.offer(buffer)
-    }
-}
+private const val EVENT_LOOP_SELECT_TIMEOUT_MS = 1000L
 
 /**
  * UDP 关联管理与 SOCKS5 UDP ASSOCIATE 转发。
@@ -42,11 +37,21 @@ class UdpRelay(
         private const val SOCKS_PORT = 1080
     }
 
-    private val scope = CoroutineScope(kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
+    @Volatile private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val udpAssociations = ConcurrentHashMap<Long, UdpAssociation>()
     private val connectionIdCounter = AtomicLong(0)
 
+    @Volatile private var selector: Selector? = null
+
+    @Volatile private var eventLoopStarted = false
+    private val pendingRegistrations = ConcurrentLinkedQueue<Pair<DatagramChannel, UdpAssociation>>()
+    private val readBuffer = ByteBuffer.allocateDirect(BUFFER_SIZE)
+
     private var dnsInterceptor: DnsInterceptor? = null
+
+    init {
+        startEventLoop()
+    }
 
     fun setDnsInterceptor(interceptor: DnsInterceptor) {
         dnsInterceptor = interceptor
@@ -148,6 +153,9 @@ class UdpRelay(
         payloadStart: Int,
         length: Int,
     ) {
+        val dgramChannel = assoc.datagramChannel
+        if (!dgramChannel.isOpen) return
+
         // 在 launch 前复制数据，避免异步执行时底层 readBuffer 被覆盖
         val payloadCopy = ByteArray(length)
         val origPos = buffer.position()
@@ -160,56 +168,6 @@ class UdpRelay(
 
         scope.launch {
             try {
-                val socksPort = SOCKS_PORT
-
-                // 如果没有关联通道，先建立 UDP ASSOCIATE
-                if (!assoc.datagramChannel.isOpen) {
-                    val sock = SocketChannel.open()
-                    sock.configureBlocking(true)
-                    sock.connect(InetSocketAddress("127.0.0.1", socksPort))
-
-                    // SOCKS5 握手
-                    val handshake = byteArrayOf(0x05, 0x01, 0x00)
-                    sock.write(ByteBuffer.wrap(handshake))
-                    val handshakeResp = ByteBuffer.allocate(2)
-                    val hsRead = sock.read(handshakeResp)
-                    if (hsRead <= 0) {
-                        Log.e(TAG, "UDP ASSOCIATE handshake read failed: $hsRead")
-                        sock.close()
-                        return@launch
-                    }
-
-                    // UDP ASSOCIATE 请求 (CMD=0x03)
-                    val assocReq =
-                        byteArrayOf(
-                            // VER CMD RSV ATYP(IPv4)
-                            0x05, 0x03, 0x00, 0x01,
-                            0x00, 0x00, 0x00, 0x00, // BND.ADDR (0.0.0.0)
-                            // BND.PORT (0)
-                            0x00, 0x00,
-                        )
-                    sock.write(ByteBuffer.wrap(assocReq))
-                    val assocResp = ByteBuffer.allocate(32)
-                    val arRead = sock.read(assocResp)
-                    if (arRead <= 0) {
-                        Log.e(TAG, "UDP ASSOCIATE resp read failed: $arRead")
-                        sock.close()
-                        return@launch
-                    }
-                    sock.close()
-
-                    // 解析 UDP relay 地址 (简化: 使用同一端口)
-                    assocResp.flip()
-                    assocResp.position(assocResp.position() + 4) // Skip VER REP RSV ATYP
-                    assocResp.position(assocResp.position() + 4) // Skip BND.ADDR (4字节 IPv4)
-                    assocResp.short // Skip BND.PORT
-
-                    // 绑定本地端口用于 UDP relay
-                    assoc.datagramChannel = DatagramChannel.open()
-                    assoc.datagramChannel.configureBlocking(false)
-                    assoc.datagramChannel.bind(InetSocketAddress(0))
-                }
-
                 // 封装 SOCKS5 UDP 帧 (使用复制的数据)
                 val addrBytes = dstIpCopy.address
                 val atyp = if (addrBytes.size == 4) 0x01.toByte() else 0x04.toByte() // IPv4 or IPv6
@@ -223,7 +181,7 @@ class UdpRelay(
                 socksUdpFrame.put(payloadCopy)
 
                 socksUdpFrame.flip()
-                assoc.datagramChannel.send(socksUdpFrame, InetSocketAddress("127.0.0.1", socksPort))
+                dgramChannel.send(socksUdpFrame, InetSocketAddress("127.0.0.1", SOCKS_PORT))
             } catch (e: IOException) {
                 Log.e(TAG, "forwardUdpToSocks failed", e)
                 stats.errors.value++
@@ -238,80 +196,138 @@ class UdpRelay(
         srcPort: Int,
         dstPort: Int,
     ): UdpAssociation {
+        startEventLoop()
         val id = connectionIdCounter.incrementAndGet()
         val channel = DatagramChannel.open().apply { configureBlocking(false) }
         val assoc = UdpAssociation(id, srcIp, srcPort, dstIp, dstPort, channel)
         udpAssociations[key] = assoc
 
-        // 启动 UDP 接收线程：从 SOCKS5 读取响应并写回 TUN
-        startUdpRelayReceiveThread(assoc)
+        // 注册到共享 selector，由 eventLoop 线程完成注册，避免与 select 并发
+        pendingRegistrations.offer(channel to assoc)
+        selector?.wakeup()
 
         return assoc
     }
 
     /**
-     * 启动 UDP 接收线程: 从 SOCKS5 UDP relay 读取响应并封装为 IP/UDP 包写回 TUN
+     * 启动共享 Selector 事件循环（单例，构造时启动一次，停止后首个关联创建时重启）
      */
-    private fun startUdpRelayReceiveThread(assoc: UdpAssociation) {
-        val writer = tunWriterProvider()
-        if (writer == null) {
-            Log.e(TAG, "TUN writer not set, cannot start UDP relay receive thread")
-            return
-        }
-
-        Thread({
-            val receiveBuffer = acquireBuffer()
+    private fun startEventLoop() {
+        if (eventLoopStarted) return
+        eventLoopStarted = true
+        selector =
             try {
-                while (assoc.datagramChannel.isOpen) {
-                    receiveBuffer.clear()
-                    val sender = assoc.datagramChannel.receive(receiveBuffer) as? InetSocketAddress
-                    if (sender != null && sender.address.isLoopbackAddress) {
-                        receiveBuffer.flip()
-                        val frame = ByteArray(receiveBuffer.remaining())
-                        receiveBuffer.get(frame)
+                Selector.open()
+            } catch (e: IOException) {
+                eventLoopStarted = false
+                Log.e(TAG, "UDP relay selector open failed", e)
+                return
+            }
+        scope.launch { eventLoop() }
+    }
 
-                        // 解析 SOCKS5 UDP 帧: RSV(2) FRAG(1) ATYP(1) DST.ADDR(*) DST.PORT(2) DATA(*)
-                        if (frame.size >= 10) {
-                            val atyp = frame[3].toInt() and 0xFF
-
-                            var addrOffset = 4
-                            when (atyp) {
-                                0x01 -> { // IPv4
-                                    addrOffset += 4
-                                }
-                                0x04 -> { // IPv6
-                                    addrOffset += 16
-                                }
-                            }
-
-                            if (frame.size >= addrOffset + 2 && (atyp == 0x01 || atyp == 0x04)) {
-                                val dstPort =
-                                    ((frame[addrOffset].toInt() and 0xFF) shl 8) or
-                                        (frame[addrOffset + 1].toInt() and 0xFF)
-                                addrOffset += 2
-
-                                val payload = frame.sliceArray(addrOffset until frame.size)
-
-                                // 构造 IPv4/UDP 响应包写回 TUN
-                                val responsePacket =
-                                    buildUdpResponsePacket(
-                                        srcIp = assoc.dstIp.address,
-                                        dstIp = assoc.srcIp.address,
-                                        srcPort = assoc.dstPort,
-                                        dstPort = assoc.srcPort,
-                                        payload = payload,
-                                    )
-                                writer(responsePacket)
-                            }
-                        }
+    /**
+     * 共享 Selector 事件循环：所有 UDP 关联的响应收包集中在此。
+     * 无数据时阻塞在 select()，避免每关联一个忙等线程。
+     */
+    private fun eventLoop() {
+        val sel = selector ?: return
+        val buffer = readBuffer
+        while (eventLoopStarted && sel.isOpen) {
+            drainPendingRegistrations(sel)
+            try {
+                if (sel.select(EVENT_LOOP_SELECT_TIMEOUT_MS) != 0) {
+                    val it = sel.selectedKeys().iterator()
+                    while (it.hasNext()) {
+                        val key = it.next()
+                        it.remove()
+                        if (!key.isValid) continue
+                        handleUdpRead(key, buffer)
                     }
                 }
+            } catch (e: ClosedSelectorException) {
+                break
             } catch (e: IOException) {
-                Log.w(TAG, "UDP relay receive ended: ${e.message}")
-            } finally {
-                releaseBuffer(receiveBuffer)
+                Log.w(TAG, "UDP relay eventLoop IO error", e)
             }
-        }, "UDP-Relay-Receive-${assoc.id}").start()
+        }
+    }
+
+    private fun drainPendingRegistrations(sel: Selector) {
+        while (true) {
+            val (channel, assoc) = pendingRegistrations.poll() ?: break
+            try {
+                channel.register(sel, SelectionKey.OP_READ, assoc)
+            } catch (e: ClosedChannelException) {
+                try {
+                    channel.close()
+                } catch (_: Exception) {
+                }
+                udpAssociations.entries.removeIf { it.value === assoc }
+            }
+        }
+    }
+
+    /**
+     * 处理单个就绪 UDP 通道：循环接收数据报（level-triggered 需清空），
+     * 解析 SOCKS5 UDP 帧并封装为 IP 包写回 TUN。
+     */
+    private fun handleUdpRead(
+        key: SelectionKey,
+        buffer: ByteBuffer,
+    ) {
+        val assoc = key.attachment() as? UdpAssociation ?: return
+        val channel = key.channel() as? DatagramChannel ?: return
+        if (!channel.isOpen) return
+        val writer = tunWriterProvider() ?: return
+
+        while (channel.isOpen) {
+            buffer.clear()
+            val sender =
+                try {
+                    channel.receive(buffer) as? InetSocketAddress
+                } catch (_: IOException) {
+                    null
+                } ?: break
+            if (sender.address.isLoopbackAddress) {
+                buffer.flip()
+                val frame = ByteArray(buffer.remaining())
+                buffer.get(frame)
+
+                val payload = parseSocks5UdpFrame(frame)
+                if (payload != null) {
+                    // 构造 IPv4/UDP 响应包写回 TUN
+                    val responsePacket =
+                        buildUdpResponsePacket(
+                            srcIp = assoc.dstIp.address,
+                            dstIp = assoc.srcIp.address,
+                            srcPort = assoc.dstPort,
+                            dstPort = assoc.srcPort,
+                            payload = payload,
+                        )
+                    writer(responsePacket)
+                }
+            }
+        }
+    }
+
+    /**
+     * 解析 SOCKS5 UDP 帧: RSV(2) FRAG(1) ATYP(1) DST.ADDR(*) DST.PORT(2) DATA(*)
+     * @return 负载字节数组，格式非法返回 null
+     */
+    private fun parseSocks5UdpFrame(frame: ByteArray): ByteArray? {
+        if (frame.size < 10) return null
+        val atyp = frame[3].toInt() and 0xFF
+
+        var addrOffset = 4
+        when (atyp) {
+            0x01 -> addrOffset += 4 // IPv4
+            0x04 -> addrOffset += 16 // IPv6
+            else -> return null
+        }
+        if (frame.size < addrOffset + 2) return null
+        addrOffset += 2
+        return frame.sliceArray(addrOffset until frame.size)
     }
 
     /**
@@ -374,6 +390,30 @@ class UdpRelay(
                 false
             }
         }
+    }
+
+    /**
+     * 停止事件循环并释放所有 UDP 关联资源（VPN 断开时调用）。
+     */
+    fun stop() {
+        if (!eventLoopStarted) return
+        eventLoopStarted = false
+        try {
+            selector?.wakeup()
+            selector?.close()
+        } catch (_: Exception) {
+        }
+        selector = null
+        pendingRegistrations.clear()
+        udpAssociations.values.forEach { assoc ->
+            try {
+                assoc.datagramChannel.close()
+            } catch (_: Exception) {
+            }
+        }
+        udpAssociations.clear()
+        scope.cancel()
+        scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     }
 
     data class UdpAssociation(

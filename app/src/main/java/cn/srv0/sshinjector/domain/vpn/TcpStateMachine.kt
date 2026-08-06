@@ -6,6 +6,7 @@ import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelPlugin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.io.IOException
 import java.net.InetAddress
@@ -34,11 +35,9 @@ class TcpStateMachine(
         private const val TUN_CONNECT_TIMEOUT_MS = 5000
     }
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    @Volatile private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val tcpConnections = ConcurrentHashMap<Long, TcpConnection>()
     private val connectionIdCounter = AtomicLong(0)
-    private val nextTcpSeq = ConcurrentHashMap<Long, Long>()
-    private val nextTcpAck = ConcurrentHashMap<Long, Long>()
 
     private var dnsInterceptor: DnsInterceptor? = null
 
@@ -623,7 +622,7 @@ class TcpStateMachine(
     private fun buildTcpResponsePacket(
         conn: TcpConnection,
         payload: ByteArray,
-        connKey: Long,
+        ignoredConnKey: Long,
     ): ByteArray? {
         try {
             val srcPort = conn.dstPort
@@ -636,8 +635,6 @@ class TcpStateMachine(
             val ackNum = (conn.browserSeq + 1 + conn.forwardedBytes) and UINT32_MASK
 
             conn.serverSeq = (seqNum + payload.size) and UINT32_MASK
-            nextTcpAck[connKey] = conn.serverSeq
-            nextTcpSeq[connKey] = ackNum
 
             val tcpHeaderLen = 20
             val ipHeaderLen = if (isIPv6) 40 else 20
@@ -709,7 +706,7 @@ class TcpStateMachine(
      */
     private fun buildSynAckPacket(
         conn: TcpConnection,
-        connKey: Long,
+        ignoredConnKey: Long,
     ): ByteArray? {
         try {
             val srcPort = conn.dstPort
@@ -722,8 +719,6 @@ class TcpStateMachine(
             val ackNum = conn.browserSeq + 1
 
             conn.serverSeq = (seqNum + 1) and UINT32_MASK
-            nextTcpAck[connKey] = conn.serverSeq
-            nextTcpSeq[connKey] = ackNum
 
             val tcpHeaderLen = 20
             val ipHeaderLen = if (isIPv6) 40 else 20
@@ -1041,6 +1036,12 @@ class TcpStateMachine(
             conn.socksChannel?.close()
         } catch (_: Exception) {
         }
+        try {
+            conn.tunnelChannel?.disconnect()
+        } catch (_: Exception) {
+        }
+        conn.socksChannel = null
+        conn.tunnelChannel = null
     }
 
     fun cleanupStaleConnections(timeoutMs: Long) {
@@ -1056,5 +1057,17 @@ class TcpStateMachine(
                 false
             }
         }
+    }
+
+    /**
+     * 释放所有 TCP 连接并停止内部协程（VPN 断开时调用）。
+     */
+    fun stop() {
+        tcpConnections.keys.forEach { key ->
+            tcpConnections[key]?.let { closeTcpConnection(key, it) }
+        }
+        tcpConnections.clear()
+        scope.cancel()
+        scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     }
 }
