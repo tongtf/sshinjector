@@ -12,7 +12,7 @@
 
 <div align="center">
   <img src="https://img.shields.io/badge/Android-14%2B-green.svg?style=flat-square&logo=android" alt="Android 14+">
-  <img src="https://img.shields.io/badge/Kotlin-1.9.24-blue.svg?style=flat-square&logo=kotlin" alt="Kotlin 1.9.24">
+  <img src="https://img.shields.io/badge/Kotlin-2.0.21-blue.svg?style=flat-square&logo=kotlin" alt="Kotlin 2.0.21">
   <img src="https://img.shields.io/badge/Compose-Material3-orange.svg?style=flat-square&logo=jetpackcompose" alt="Jetpack Compose">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="MIT License">
   <img src="https://img.shields.io/badge/SSH-ECDSA-red.svg?style=flat-square" alt="SSH ECDSA">
@@ -34,9 +34,9 @@
 | **白名单模式** | `VpnService.addAllowedApplication()` - 仅选中应用走代理，其他直连 |
 | **双栈网络** | 同时支持 IPv4 和 IPv6，TUN 接口分配双栈地址 |
 | **远端 DNS 解析** | 拦截 UDP:53，通过 SSH 隧道 TCP 发送到远程 DNS (8.8.8.8/1.1.1.1)，防泄露 |
-| **HTTP/3 支持** | SOCKS5 UDP ASSOCIATE 转发 QUIC 流量 |
-| **实时统计** | 上传/下载速度、累计流量、连接时长、应用级流量排行 |
-| **自动重连** | 网络切换 (WiFi↔5G) 无感重连，指数退避策略，开机自启 |
+| **HTTP/3 预留** | SOCKS5 UDP ASSOCIATE 帧处理已实现，本地 UDP 监听待完善（QUIC 暂不可用） |
+| **连接统计** | 连接状态、累计流量、连接时长（内存实时统计） |
+| **自动重连** | 网络切换 (WiFi↔5G) 自动重连（2s 去抖）；SSH 会话级线性退避重连 |
 | **Material 3 UI** | 服务器管理、白名单选择、仪表盘、设置、密钥管理 |
 
 ---
@@ -81,18 +81,17 @@
 
 | 分类 | 技术 |
 |------|------|
-| 语言/UI | Kotlin 1.9.24 + Jetpack Compose (Material 3) |
+| 语言/UI | Kotlin 2.0.21 + Jetpack Compose (Material 3) |
 | 架构 | MVVM + Clean Architecture + Repository 模式 |
-| DI | Hilt (KSP) |
+| DI | Hilt 2.53.1 (KSP) |
 | 数据库 | Room 2.6.1 (KSP) |
-| 偏好设置 | DataStore Preferences (RxJava3 Flow) |
+| 偏好设置 | DataStore Preferences (Flow) |
 | SSH 客户端 | mwiede/jsch:0.2.14 (维护活跃，支持 ECDSA P-256) |
-| DNS 解析 | dnsjava 3.5.7 |
+| DNS 解析 | dnsjava 3.6.5 |
 | 网络 I/O | Java NIO Selector + Kotlinx Coroutines |
 | 密钥存储 | Android Keystore (硬件加密) + BiometricPrompt |
-| 协程 | Kotlinx Coroutines 1.8.1 + Flow |
-| 导航 | Navigation Compose 2.7.7 |
-| 图片加载 | Coil 2.6.0 |
+| 协程 | Kotlinx Coroutines 1.9.0 + Flow |
+| 导航 | Navigation Compose 2.8.5 |
 
 ---
 
@@ -226,6 +225,9 @@ SSHInjector/
 │   │   └── AndroidManifest.xml
 │   └── build.gradle.kts
 ├── docs/
+│   ├── server-setup.md           # 服务端配置指南
+│   ├── USER_GUIDE.md             # 使用指南
+│   └── diagrams/                 # 架构/流程/状态机/时序图集
 ├── .github/workflows/ci.yml       # CI/CD
 ├── detekt.yml                     # 代码规范
 ├── build.gradle.kts / settings.gradle.kts

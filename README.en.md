@@ -12,7 +12,7 @@
 
 <div align="center">
   <img src="https://img.shields.io/badge/Android-14%2B-green.svg?style=flat-square&logo=android" alt="Android 14+">
-  <img src="https://img.shields.io/badge/Kotlin-1.9.24-blue.svg?style=flat-square&logo=kotlin" alt="Kotlin 1.9.24">
+  <img src="https://img.shields.io/badge/Kotlin-2.0.21-blue.svg?style=flat-square&logo=kotlin" alt="Kotlin 2.0.21">
   <img src="https://img.shields.io/badge/Compose-Material3-orange.svg?style=flat-square&logo=jetpackcompose" alt="Jetpack Compose">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="MIT License">
   <img src="https://img.shields.io/badge/SSH-ECDSA-red.svg?style=flat-square" alt="SSH ECDSA">
@@ -34,9 +34,9 @@
 | **Whitelist mode** | `VpnService.addAllowedApplication()` — only selected apps go through the proxy |
 | **Dual-stack network** | IPv4 + IPv6 with dual-stack addresses on the TUN interface |
 | **Remote DNS** | Intercepts UDP:53 and sends it over the SSH tunnel to a remote resolver, preventing leaks |
-| **HTTP/3 support** | QUIC traffic via SOCKS5 UDP ASSOCIATE |
-| **Live stats** | Upload/download speed, cumulative traffic, session time, per-app ranking |
-| **Auto-reconnect** | Seamless reconnect on network switch (WiFi↔5G) with exponential backoff, boot start |
+| **HTTP/3 (planned)** | SOCKS5 UDP ASSOCIATE frame handling implemented; local UDP listener pending (QUIC not yet usable) |
+| **Connection stats** | Connection status, cumulative traffic, session time (in-memory) |
+| **Auto-reconnect** | Auto-reconnect on network switch (WiFi↔5G, 2s debounce); SSH session-level linear backoff |
 | **Material 3 UI** | Server management, whitelist picker, dashboard, settings, key management |
 
 ---
@@ -80,18 +80,17 @@
 
 | Category | Tech |
 |----------|------|
-| Language/UI | Kotlin 1.9.24 + Jetpack Compose (Material 3) |
+| Language/UI | Kotlin 2.0.21 + Jetpack Compose (Material 3) |
 | Architecture | MVVM + Clean Architecture + Repository |
-| DI | Hilt (KSP) |
+| DI | Hilt 2.53.1 (KSP) |
 | Database | Room 2.6.1 (KSP) |
-| Preferences | DataStore Preferences (RxJava3 Flow) |
+| Preferences | DataStore Preferences (Flow) |
 | SSH client | mwiede/jsch:0.2.14 (active fork, ECDSA P-256 support) |
-| DNS | dnsjava 3.5.7 |
+| DNS | dnsjava 3.6.5 |
 | Network I/O | Java NIO Selector + Kotlinx Coroutines |
 | Keystore | Android Keystore (hardware) + BiometricPrompt |
-| Coroutines | Kotlinx Coroutines 1.8.1 + Flow |
-| Navigation | Navigation Compose 2.7.7 |
-| Image loading | Coil 2.6.0 |
+| Coroutines | Kotlinx Coroutines 1.9.0 + Flow |
+| Navigation | Navigation Compose 2.8.5 |
 
 ---
 
@@ -219,7 +218,9 @@ SSHInjector/
 │   │   └── AndroidManifest.xml
 │   └── build.gradle.kts
 ├── docs/
-│   └── server-setup.md             # Server setup guide
+│   ├── server-setup.md             # Server setup guide
+│   ├── USER_GUIDE.md               # User guide
+│   └── diagrams/                   # Architecture/flow/state/sequence diagrams
 ├── .github/workflows/ci.yml        # CI/CD
 ├── detekt.yml                      # Code style rules
 ├── build.gradle.kts / settings.gradle.kts

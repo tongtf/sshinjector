@@ -42,12 +42,13 @@ JAVA_HOME=/usr/lib/jvm/jdk-17.0.19+10 ./gradlew ...
 - **TCP data flow**: `VpnController.packetLoop` → `PacketProcessor` → `TcpStateMachine.processTcpPacket` → `forwardThroughLocalSocks` (SOCKS5 to `127.0.0.1:1080`) → `Socks5ProxyServer`
   - **Outgoing** (Socks5ProxyServer): eventLoop reads local channel → `enqueueToSsh` → **`kotlinx.coroutines.channels.Channel`** (`toSshChannel`) → writer coroutine `for (data in channel)` **suspends** (no thread held) → SSH. Queue-full data goes to a connection-level single slot `pendingToSshBlock` (never overwritten — read pauses right after), pausing `OP_READ` as backpressure.
   - **Return path** (`TcpStateMachine`): `registerTunCallback(localPort)` → `Socks5ProxyServer` invokes callback → `writeTcpPayloadToTun` → TUN directly (skips local SOCKS round-trip). Fallback to `startRelayFromSocks` if registration fails.
-- **SSH blocking IO isolation** (`domain/vpn/SshIoDispatcher.kt`): `ThreadPoolExecutor(core=16, max=128, SynchronousQueue, allowCoreThreadTimeOut=true, CallerRunsPolicy)`. `Socks5Connection.scope` uses it, so SSH read/write never occupy Dispatchers.IO. **Each active connection holds 1 thread** (JSch blocking read is not suspendable/reusable).
-- **UDP**: `UdpRelay` NIO selector event loop (replaced the old busy-wait thread-per-association). NOTE: `forwardUdpToSocks` sends to `127.0.0.1:1080` but `Socks5ProxyServer` only listens TCP — **UDP relay path may not actually work**.
-- **DNS**: `DnsInterceptor` REMOTE mode fakes IPs (198.18.x.x / fd00::x); SYSTEM/DOMAIN_SPLIT use protected sockets. `pendingResponses` is a kotlinx `Channel`, delivered by `VpnController.dnsResponseDeliveryLoop` (suspending).
-- **VPN**: `vpn/SshVpnService` (foreground), `vpn/BootReceiver`. `buildVpnBuilder` adds `addDisallowedApplication(ownPackage)` **only in non-whitelist mode**.
-- **Room** 2.6.1, schemas in `app/schemas/` (v1-3, ksp `room.schemaLocation`)
-- **Provisioning**: `data/remote/config/ServerProvisioner.kt` + wizard UI. Script `assets/ssh_setup_script.sh` with hardcoded SHA-256 verified server-side; pubkey via SSH stdin. Guide: `docs/server-setup.md`
+- **SSH IO threads**: writes + channel.connect run on `SshIoDispatcher` (`domain/vpn/SshIoDispatcher.kt`; `ThreadPoolExecutor(core=16, max=128, SynchronousQueue, allowCoreThreadTimeOut=true, CallerRunsPolicy)`). BUT the return-path reader `startRelayFromTarget` explicitly launches on `Dispatchers.IO` (Socks5ProxyServer.kt:669) — **each active connection holds 1 blocking thread on Dispatchers.IO** (JSch read is not suspendable/reusable).
+- **UDP**: `UdpRelay` NIO selector event loop. **Known broken**: `forwardUdpToSocks` sends to `127.0.0.1:1080/UDP` but `Socks5ProxyServer` only listens TCP (UDP ASSOCIATE just replies `0.0.0.0:0`) — UDP relay/QUIC does not actually work; the proxy server needs a real UDP listener.
+- **DNS**: `DnsInterceptor` REMOTE/WHITELIST mode fakes IPs (198.18.x.x / fd00::x) and maps `ipToDomain` for CONNECT; SYSTEM / DOMAIN_SPLIT (list miss) resolve via protected sockets. `pendingResponses` is a **`ConcurrentLinkedQueue`** (not a Channel), polled by `VpnController.dnsResponseDeliveryLoop` every 10ms.
+- **VPN**: `vpn/SshVpnService` (foreground), `vpn/BootReceiver`. `buildVpnBuilder` adds `addDisallowedApplication(ownPackage)` **only in non-whitelist mode**. State machine: `Disconnected↔Connecting↔Connected↔Disconnecting` + `Failed` (VpnService layer only).
+- **Room** 2.6.1, **DB version 4** — entities are only `Server` + `WhitelistApp` (no Session/Traffic; stats are in-memory). Migrations: 2→3 added `tunnelType`/`tunnelConfigJson`, 3→4 dropped them for `socksPort`. ksp `room.schemaLocation`
+- **Provisioning**: `data/remote/config/ServerProvisioner.kt` + wizard UI. Script `assets/ssh_setup_script.sh`, SHA-256 hardcoded in `ServerProvisioning.kt:13` (kept in sync by `SetupScriptConsistencyTest`). Auto-detects OpenSSH (full chroot+Match) vs dropbear/OpenWrt (basic mode, marker `/etc/dropbear/sshinjector.configured`); pubkey via SSH stdin. Guide: `docs/server-setup.md`
+- **Diagrams**: `docs/diagrams/index.html` — architecture, state machines, flowcharts, sequences cross-checked against file:line. Update them when you change the flows they document.
 
 ## Tests
 
@@ -66,6 +67,9 @@ Unit tests in `app/src/test/java/cn/srv0/sshinjector/`. Concurrency-critical one
 - `configurations.all` forces `androidx.tracing:tracing:1.1.0` — don't remove when bumping deps
 - `local.properties` not committed (SDK path + signing)
 - ProGuard/R8 on in Release — watch `proguard-rules.pro` for reflected code (e.g. `setChannelWindowSize` uses reflection on JSch)
+- **Dead-code enums/paths**: `VpnStatus.Authenticating/EstablishingTunnel/Reconnecting` are unused; `Failed` is set only by the VpnService layer. `TcpStateMachine.pendingConnect`/`completeDeferredConnect` never executes.
+- **Passwords are NOT encrypted**: ServerWizard/ServerEdit save via `serverDao.insert` directly, bypassing `CredentialCrypto` (only `ServerRepository` mapping encrypts). Server `password` is effectively null in the UI flow — don't add crypto expecting it.
+- **DataStore global MTU/KeepAlive/IPv6 settings are decorative** — runtime uses per-server fields. `last_server_id` is never written, so BootReceiver auto-connect never actually fires.
 
 ## Device Testing (adb)
 

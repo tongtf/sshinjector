@@ -12,7 +12,7 @@
 
 <div align="center">
   <img src="https://img.shields.io/badge/Android-14%2B-green.svg?style=flat-square&logo=android" alt="Android 14+">
-  <img src="https://img.shields.io/badge/Kotlin-1.9.24-blue.svg?style=flat-square&logo=kotlin" alt="Kotlin 1.9.24">
+  <img src="https://img.shields.io/badge/Kotlin-2.0.21-blue.svg?style=flat-square&logo=kotlin" alt="Kotlin 2.0.21">
   <img src="https://img.shields.io/badge/Compose-Material3-orange.svg?style=flat-square&logo=jetpackcompose" alt="Jetpack Compose">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="MIT License">
   <img src="https://img.shields.io/badge/SSH-ECDSA-red.svg?style=flat-square" alt="SSH ECDSA">
@@ -34,9 +34,9 @@
 | **Режим белого списка** | `VpnService.addAllowedApplication()` — через прокси идут только выбранные приложения |
 | **Двойной стек** | IPv4 + IPv6 с адресами обоих стеков на интерфейсе TUN |
 | **Удалённый DNS** | Перехватывает UDP:53 и отправляет через SSH-туннель на удалённый резолвер, предотвращая утечки |
-| **Поддержка HTTP/3** | Трафик QUIC через SOCKS5 UDP ASSOCIATE |
-| **Живая статистика** | Скорость загрузки/отдачи, общий трафик, время сессии, рейтинг по приложениям |
-| **Автопереподключение** | Бесшовное переподключение при смене сети (WiFi↔5G) с экспоненциальной задержкой, запуск при загрузке |
+| **HTTP/3 (запланировано)** | Обработка кадров SOCKS5 UDP ASSOCIATE реализована; локальный UDP-слушатель в разработке (QUIC пока недоступен) |
+| **Статистика соединения** | Статус соединения, общий трафик, время сессии (в памяти) |
+| **Автопереподключение** | Автопереподключение при смене сети (WiFi↔5G, задержка 2с); линейная задержка на уровне SSH-сессии |
 | **UI Material 3** | Управление серверами, выбор белого списка, панель, настройки, управление ключами |
 
 ---
@@ -80,18 +80,17 @@
 
 | Категория | Технология |
 |-----------|------------|
-| Язык/UI | Kotlin 1.9.24 + Jetpack Compose (Material 3) |
+| Язык/UI | Kotlin 2.0.21 + Jetpack Compose (Material 3) |
 | Архитектура | MVVM + Clean Architecture + Repository |
-| DI | Hilt (KSP) |
+| DI | Hilt 2.53.1 (KSP) |
 | База данных | Room 2.6.1 (KSP) |
-| Настройки | DataStore Preferences (RxJava3 Flow) |
+| Настройки | DataStore Preferences (Flow) |
 | SSH-клиент | mwiede/jsch:0.2.14 (активный форк, поддержка ECDSA P-256) |
-| DNS | dnsjava 3.5.7 |
+| DNS | dnsjava 3.6.5 |
 | Сеть I/O | Java NIO Selector + Kotlinx Coroutines |
 | Keystore | Android Keystore (аппаратный) + BiometricPrompt |
-| Coroutines | Kotlinx Coroutines 1.8.1 + Flow |
-| Навигация | Navigation Compose 2.7.7 |
-| Изображения | Coil 2.6.0 |
+| Coroutines | Kotlinx Coroutines 1.9.0 + Flow |
+| Навигация | Navigation Compose 2.8.5 |
 
 ---
 
@@ -219,7 +218,9 @@ SSHInjector/
 │   │   └── AndroidManifest.xml
 │   └── build.gradle.kts
 ├── docs/
-│   └── server-setup.md             # Руководство по настройке сервера
+│   ├── server-setup.md             # Руководство по настройке сервера
+│   ├── USER_GUIDE.md               # Руководство пользователя
+│   └── diagrams/                   # Диаграммы архитектуры/потоков/состояний
 ├── .github/workflows/ci.yml        # CI/CD
 ├── detekt.yml                      # Правила стиля кода
 ├── build.gradle.kts / settings.gradle.kts
