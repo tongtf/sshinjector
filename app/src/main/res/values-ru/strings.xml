@@ -152,6 +152,26 @@
     <string name="server_placeholder_username">root</string>
     <string name="server_placeholder_socks">1080</string>
 
+    <string name="wizard_auto_provision">Настроить сервер (в один клик)</string>
+    <string name="wizard_login_username">Пользователь (SSH)</string>
+    <string name="wizard_placeholder_login_username">root</string>
+    <string name="wizard_login_password">Пароль (SSH)</string>
+    <string name="wizard_placeholder_login_password">••••••••</string>
+    <string name="wizard_title">Настройка сервера</string>
+    <string name="wizard_desc">Создаёт туннельный аккаунт sshproxy, chroot, вход по ключу и усиливает sshd. Учётные данные не сохраняются.</string>
+    <string name="wizard_start">Начать настройку</string>
+    <string name="wizard_require_fields">Заполните имя, хост и пользователя</string>
+    <string name="wizard_invalid_port">Порт должен быть 1-65535</string>
+    <string name="wizard_success" formatted="false">Готово! Туннельный аккаунт: %s</string>
+    <string name="wizard_local_only" formatted="false">Нет прав root/sudo, сохраняется только локальная конфигурация: %s</string>
+    <string name="wizard_failed" formatted="false">Ошибка настройки: %s</string>
+    <string name="wizard_step_privilege">Проверка прав</string>
+    <string name="wizard_step_upload_script">Загрузка скрипта и проверка</string>
+    <string name="wizard_step_upload_pubkey">Загрузка открытого ключа</string>
+    <string name="wizard_step_execute">Выполнение конфигурации</string>
+    <string name="wizard_step_verify">Проверка конфигурации</string>
+    <string name="wizard_step_done">Готово</string>
+
     <!-- Управление ключами -->
     <string name="key_title">Управление ключами</string>
     <string name="key_current">Активный ключ</string>

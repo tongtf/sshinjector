@@ -6,6 +6,7 @@ import android.util.Log
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.vpn.SshChannelFactory
 import cn.srv0.sshinjector.domain.vpn.TunnelChannel
+import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.HostKey
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.JSchException
@@ -19,6 +20,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileWriter
 import java.security.MessageDigest
@@ -27,6 +31,15 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/**
+ * 单次远程命令执行结果。
+ */
+data class ExecResult(
+    val exitCode: Int,
+    val stdout: String,
+    val stderr: String,
+)
 
 /**
  * SSH Host Key 管理工具
@@ -155,7 +168,7 @@ class JschSshClient
     constructor(
         private val keyManager: SshKeyManager,
         private val knownHostsManager: KnownHostsManager,
-    ) : SshChannelFactory {
+    ) : SshChannelFactory, RemoteCommandExecutor {
         companion object {
             private const val TAG = "JschSshClient"
             private const val SESSION_POOL_SIZE = 3
@@ -561,6 +574,142 @@ class JschSshClient
         }
 
         fun getSession(): Session? = pool.firstOrNull()?.session
+
+        /**
+         * 单次远程命令执行（用于服务器端配置助手）。
+         *
+         * 独立 Session，不占用 VPN 会话池；执行完立即断开。
+         * 与 createSession 相同的安全算法白名单 + hostKey TOFU 校验。
+         *
+         * @param host 目标主机
+         * @param port SSH 端口
+         * @param username 登录账户
+         * @param password 可选密码（仅内存，不落日志）
+         * @param keyAlias 可选密钥别名（密码/密钥二选一）
+         * @param stdinData 可选 stdin 数据（脚本/公钥/密码，避免 shell 参数拼接）
+         * @param command 要执行的命令（由调用方构造，脚本内容固定）
+         * @param timeoutMs 命令超时
+         */
+        override suspend fun execSingleShot(
+            target: SshConnectionTarget,
+            stdinData: ByteArray?,
+            command: String,
+            timeoutMs: Int,
+        ): ExecResult {
+            val config =
+                ServerConfig(
+                    name = "provision",
+                    host = target.host,
+                    port = target.port,
+                    username = target.username,
+                    keyAlias = target.keyAlias ?: "",
+                    password = target.password,
+                    connectTimeout = 15000,
+                )
+            return withContext(Dispatchers.IO) {
+                var session: Session? = null
+                var channel: ChannelExec? = null
+                try {
+                    val jsch = JSch()
+                    if (!target.keyAlias.isNullOrEmpty()) {
+                        keyManager.createJSchIdentity(jsch, target.keyAlias)
+                    }
+                    val s = jsch.getSession(target.username, target.host, target.port)
+                    if (!target.password.isNullOrEmpty()) {
+                        val passwordBytes = target.password.toByteArray(Charsets.UTF_8)
+                        try {
+                            s.setPassword(passwordBytes)
+                        } finally {
+                            java.util.Arrays.fill(passwordBytes, 0)
+                        }
+                    }
+                    s.setConfig("StrictHostKeyChecking", "no")
+                    s.setConfig("PreferredAuthentications", "publickey,password")
+                    s.setConfig("PubkeyAuthentication", "yes")
+                    s.setConfig("PasswordAuthentication", "yes")
+                    s.setConfig(
+                        "KexAlgorithms",
+                        "curve25519-sha256,curve25519-sha256@libssh.org," +
+                            "diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256",
+                    )
+                    s.setConfig(
+                        "HostKeyAlgorithms",
+                        "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,ssh-rsa",
+                    )
+                    s.setConfig(
+                        "PubkeyAcceptedAlgorithms",
+                        "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,ssh-rsa",
+                    )
+                    s.setTimeout(config.connectTimeout)
+                    s.connect()
+
+                    verifyHostKey(config, s.getHostKey())
+
+                    session = s
+                    val exec = s.openChannel("exec") as ChannelExec
+                    channel = exec
+                    exec.setCommand(command)
+                    if (stdinData != null) {
+                        exec.setInputStream(ByteArrayInputStream(stdinData))
+                    } else {
+                        exec.setInputStream(java.io.ByteArrayInputStream(ByteArray(0)))
+                    }
+                    exec.setErrStream(ByteArrayOutputStream())
+                    exec.connect(timeoutMs)
+
+                    val stdout = ByteArrayOutputStream()
+                    val stderr = ByteArrayOutputStream()
+                    val outStream = exec.getInputStream()
+                    val buf = ByteArray(8192)
+                    val deadline = System.currentTimeMillis() + timeoutMs
+                    var timedOut = false
+                    var interrupted = false
+                    while (!exec.isClosed && !timedOut && !interrupted) {
+                        if (System.currentTimeMillis() > deadline) {
+                            timedOut = true
+                            break
+                        }
+                        if (outStream.available() > 0) {
+                            val n = outStream.read(buf)
+                            if (n > 0) stdout.write(buf, 0, n)
+                        }
+                        val errData = (exec.errStream as? ByteArrayOutputStream)?.toByteArray()
+                        if (errData != null && errData.isNotEmpty()) {
+                            stderr.write(errData)
+                            (exec.errStream as ByteArrayOutputStream).reset()
+                        }
+                        try {
+                            Thread.sleep(50)
+                        } catch (_: InterruptedException) {
+                            interrupted = true
+                        }
+                    }
+                    // 通道关闭前可能残留未读数据
+                    if (exec.isClosed && outStream.available() > 0) {
+                        val n = outStream.read(buf)
+                        if (n > 0) stdout.write(buf, 0, n)
+                    }
+                    if (timedOut) {
+                        exec.disconnect()
+                        return@withContext ExecResult(-1, stdout.toString(Charsets.UTF_8.name()), "timeout")
+                    }
+                    val exitCode = exec.exitStatus
+                    ExecResult(exitCode, stdout.toString(Charsets.UTF_8.name()), stderr.toString(Charsets.UTF_8.name()))
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "execSingleShot failed: ${e.message}")
+                    ExecResult(-1, "", e.message ?: "exec failed")
+                } finally {
+                    try {
+                        channel?.disconnect()
+                    } catch (_: Exception) {
+                    }
+                    try {
+                        session?.disconnect()
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+        }
 
         suspend fun cleanup() {
             disconnect()

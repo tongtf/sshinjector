@@ -6,6 +6,7 @@ import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
 import cn.srv0.sshinjector.data.remote.ssh.CredentialCrypto
 import cn.srv0.sshinjector.data.remote.ssh.JschSshClient
 import cn.srv0.sshinjector.data.remote.ssh.KnownHostsManager
+import cn.srv0.sshinjector.data.remote.ssh.RemoteCommandExecutor
 import cn.srv0.sshinjector.data.remote.ssh.SshKeyManager
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
@@ -89,6 +90,10 @@ object AppModule {
     ): JschSshClient {
         return JschSshClient(keyManager, knownHostsManager)
     }
+
+    @Provides
+    @Singleton
+    fun provideRemoteCommandExecutor(client: JschSshClient): RemoteCommandExecutor = client
 
     @Provides
     @Singleton

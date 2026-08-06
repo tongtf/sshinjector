@@ -152,6 +152,26 @@
     <string name="server_placeholder_username">root</string>
     <string name="server_placeholder_socks">1080</string>
 
+    <string name="wizard_auto_provision">Provision server (one-click)</string>
+    <string name="wizard_login_username">Login username (SSH)</string>
+    <string name="wizard_placeholder_login_username">root</string>
+    <string name="wizard_login_password">Login password (SSH)</string>
+    <string name="wizard_placeholder_login_password">••••••••</string>
+    <string name="wizard_title">One-click server provisioning</string>
+    <string name="wizard_desc">Creates tunnel account sshproxy, chroot jail, key-based auth and hardens sshd. Credentials are used once and never stored.</string>
+    <string name="wizard_start">Start provisioning</string>
+    <string name="wizard_require_fields">Please fill name, host and login username</string>
+    <string name="wizard_invalid_port">Port must be 1-65535</string>
+    <string name="wizard_success" formatted="false">Success! Tunnel account: %s</string>
+    <string name="wizard_local_only" formatted="false">No root/sudo access, saving local config only: %s</string>
+    <string name="wizard_failed" formatted="false">Provisioning failed: %s</string>
+    <string name="wizard_step_privilege">Detecting privilege</string>
+    <string name="wizard_step_upload_script">Uploading script &amp; verifying</string>
+    <string name="wizard_step_upload_pubkey">Uploading public key</string>
+    <string name="wizard_step_execute">Executing server config</string>
+    <string name="wizard_step_verify">Verifying config</string>
+    <string name="wizard_step_done">Done</string>
+
     <!-- Key Management -->
     <string name="key_title">Key Management</string>
     <string name="key_current">Active Key</string>

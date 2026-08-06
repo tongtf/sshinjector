@@ -152,6 +152,26 @@
     <string name="server_placeholder_username">root</string>
     <string name="server_placeholder_socks">1080</string>
 
+    <string name="wizard_auto_provision">一键配置服务器端</string>
+    <string name="wizard_login_username">登录账户 (SSH)</string>
+    <string name="wizard_placeholder_login_username">root</string>
+    <string name="wizard_login_password">登录密码 (SSH)</string>
+    <string name="wizard_placeholder_login_password">••••••••</string>
+    <string name="wizard_title">一键服务器配置</string>
+    <string name="wizard_desc">自动创建隧道账号 sshproxy、chroot 隔离、公钥免密，并加固 sshd。登录凭证仅用于本次配置，不入库。</string>
+    <string name="wizard_start">开始一键配置</string>
+    <string name="wizard_require_fields">请填写名称、主机和登录账户</string>
+    <string name="wizard_invalid_port">端口必须在 1-65535</string>
+    <string name="wizard_success" formatted="false">配置成功！隧道账号: %s</string>
+    <string name="wizard_local_only" formatted="false">账户无 root/sudo 权限，仅保存本机配置: %s</string>
+    <string name="wizard_failed" formatted="false">配置失败: %s</string>
+    <string name="wizard_step_privilege">检测权限</string>
+    <string name="wizard_step_upload_script">上传配置脚本并校验</string>
+    <string name="wizard_step_upload_pubkey">上传公钥</string>
+    <string name="wizard_step_execute">执行服务器配置</string>
+    <string name="wizard_step_verify">验证配置</string>
+    <string name="wizard_step_done">完成</string>
+
     <!-- 密钥管理 -->
     <string name="key_title">密钥管理</string>
     <string name="key_current">当前密钥</string>
