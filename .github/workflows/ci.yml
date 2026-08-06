@@ -7,6 +7,9 @@ on:
   pull_request:
     branches: [main, develop]
 
+permissions:
+  contents: write
+
 env:
   GRADLE_OPTS: "-Xmx3072m -Dorg.gradle.jvmargs=-Xmx3072m -Dorg.gradle.workers.max=2 -Dkotlin.compiler.execution.strategy=in-process"
 
@@ -49,18 +52,14 @@ jobs:
         run: chmod +x ./gradlew
       
       # 拆分质量任务, 避免 detekt+lint 同跑耗尽 runner 内存
-      # 诊断模式: continue-on-error 让 CI 跑完全部, 便于定位环境相关失败(如 ktlint 本地通过但 CI 失败)
       - name: Run ktlint
         run: ./gradlew ktlintCheck
-        continue-on-error: true
       
       - name: Run detekt
         run: ./gradlew detekt
-        continue-on-error: true
       
       - name: Run Android Lint
         run: ./gradlew lint
-        continue-on-error: true
       
       - name: Run Unit Tests
         run: ./gradlew testDebugUnitTest
