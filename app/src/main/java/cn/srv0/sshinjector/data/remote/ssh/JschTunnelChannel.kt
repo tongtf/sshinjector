@@ -1,7 +1,7 @@
 package cn.srv0.sshinjector.data.remote.ssh
 
-import com.jcraft.jsch.ChannelDirectTCPIP
 import cn.srv0.sshinjector.domain.vpn.TunnelChannel
+import com.jcraft.jsch.ChannelDirectTCPIP
 import java.io.InputStream
 import java.io.OutputStream
 
@@ -9,9 +9,8 @@ class JschTunnelChannel(
     private val channel: ChannelDirectTCPIP,
     private val cachedInput: InputStream,
     private val cachedOutput: OutputStream,
-    private val onClose: (() -> Unit)? = null
+    private val onClose: (() -> Unit)? = null,
 ) : TunnelChannel {
-
     override fun connect(timeoutMs: Int): Boolean {
         if (channel.isConnected) return true
         return try {
@@ -32,7 +31,10 @@ class JschTunnelChannel(
         get() = channel.isConnected
 
     override fun disconnect() {
-        try { channel.disconnect() } catch (_: Exception) {}
+        try {
+            channel.disconnect()
+        } catch (_: Exception) {
+        }
         onClose?.invoke()
     }
 }
