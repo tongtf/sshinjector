@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/Kotlin-1.9.24-blue.svg?style=flat-square&logo=kotlin" alt="Kotlin 1.9.24">
   <img src="https://img.shields.io/badge/Compose-Material3-orange.svg?style=flat-square&logo=jetpackcompose" alt="Jetpack Compose">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="MIT License">
-  <img src="https://img.shields.io/badge/SSH-Ed25519-red.svg?style=flat-square" alt="SSH Ed25519">
+  <img src="https://img.shields.io/badge/SSH-ECDSA-red.svg?style=flat-square" alt="SSH ECDSA">
 </div>
 
 <div align="center">
@@ -29,7 +29,7 @@
 
 | Функция | Описание |
 |---------|----------|
-| **SSH-аутентификация** | Ed25519 хранится в аппаратном Android Keystore, биометрическая разблокировка, генерация/импорт/экспорт в приложении |
+| **SSH-аутентификация** | ECDSA P-256 хранится в аппаратном Android Keystore, биометрическая разблокировка, генерация/импорт/экспорт в приложении |
 | **SOCKS5-прокси** | Полная реализация RFC 1928: TCP CONNECT + UDP ASSOCIATE, IPv4/IPv6/домены |
 | **Режим белого списка** | `VpnService.addAllowedApplication()` — через прокси идут только выбранные приложения |
 | **Двойной стек** | IPv4 + IPv6 с адресами обоих стеков на интерфейсе TUN |
@@ -52,7 +52,7 @@
 │  ├── ServerListScreen   ← серверы/тест/ключи                │
 │  ├── WhitelistScreen    ← список приложений/группы/пресеты  │
 │  ├── SettingsScreen     ← MTU/keepalive/DNS/IPv6/тема       │
-│  └── KeyManagerScreen   ← генерация Ed25519/импорт/экспорт  │
+│  └── KeyManagerScreen   ← генерация ECDSA P-256/импорт/экспорт  │
 ├─────────────────────────────────────────────────────────────┤
 │  Domain Layer (UseCases)                                    │
 │  ├── VpnController       ← жизненный цикл VPN/состояние     │
@@ -85,7 +85,7 @@
 | DI | Hilt (KSP) |
 | База данных | Room 2.6.1 (KSP) |
 | Настройки | DataStore Preferences (RxJava3 Flow) |
-| SSH-клиент | mwiede/jsch:0.2.14 (активный форк, поддержка Ed25519) |
+| SSH-клиент | mwiede/jsch:0.2.14 (активный форк, поддержка ECDSA P-256) |
 | DNS | dnsjava 3.5.7 |
 | Сеть I/O | Java NIO Selector + Kotlinx Coroutines |
 | Keystore | Android Keystore (аппаратный) + BiometricPrompt |
@@ -106,11 +106,11 @@
 ### Настройка сервера
 
 ```bash
-# 1. Создайте пару ключей Ed25519 (в приложении безопаснее)
-ssh-keygen -t ed25519 -C "your-phone@android"
+# 1. Создайте пару ключей ECDSA P-256 (в приложении безопаснее)
+ssh-keygen -t ecdsa -b 256 -C "your-phone@android"
 
 # 2. Скопируйте открытый ключ на сервер
-ssh-copy-id -i ~/.ssh/id_ed25519.pub user@your-vps
+ssh-copy-id -i ~/.ssh/id_ecdsa.pub user@your-vps
 
 # 3. Проверьте конфигурацию SSH
 grep -E '^(AllowTcpForwarding|GatewayPorts|PermitTunnel)' /etc/ssh/sshd_config
@@ -144,7 +144,7 @@ cd sshinjector
 
 1. Нажмите **+**, чтобы добавить сервер
 2. Заполните: имя, хост, порт (по умолчанию 22), пользователя
-3. Нажмите **Создать ключ** для генерации пары Ed25519 (требуется биометрия)
+3. Нажмите **Создать ключ** для генерации пары ECDSA P-256 (требуется биометрия)
 4. Скопируйте открытый ключ → вставьте в `~/.ssh/authorized_keys` на VPS
 5. Нажмите **Проверить соединение**
 
@@ -293,7 +293,7 @@ SOFTWARE.
 
 ## 🙏 Благодарности
 
-- [mwiede/jsch](https://github.com/mwiede/jsch) — активно поддерживаемый форк JSch с поддержкой Ed25519
+- [mwiede/jsch](https://github.com/mwiede/jsch) — активно поддерживаемый форк JSch с поддержкой ECDSA P-256
 - [dnsjava](https://github.com/dnsjava/dnsjava) — библиотека DNS-протокола для Java
 - [Android Networking Samples](https://github.com/android/networking-samples) — пример VpnService
 - [SocksDroid](https://github.com/6b6b6b/socksdroid) — пример SOCKS5-прокси

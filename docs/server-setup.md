@@ -96,7 +96,7 @@ cp -n /etc/host.conf /etc/nsswitch.conf /etc/resolv.conf "$CHROOT/etc/" 2>/dev/n
 
 ## 4. 安装公钥（免密登录）
 
-将 APP 生成的 **OpenSSH 公钥**（形如 `ssh-ed25519 AAAA... comment`）追加到授权文件。
+将 APP 生成的 **OpenSSH 公钥**（形如 `ecdsa-sha2-nistp256 AAAA... comment`）追加到授权文件。
 
 ```bash
 AUTHKEYS=/home/sshproxy/.ssh/authorized_keys
@@ -105,8 +105,8 @@ AUTHKEYS=/home/sshproxy/.ssh/authorized_keys
 chattr -i "$AUTHKEYS" 2>/dev/null || true
 
 # 幂等追加（已存在则跳过）
-grep -qF "ssh-ed25519" "$AUTHKEYS" 2>/dev/null \
-  || echo "ssh-ed25519 <你的公钥内容>" >> "$AUTHKEYS"
+grep -qF "ecdsa-sha2-nistp256" "$AUTHKEYS" 2>/dev/null \
+  || echo "ecdsa-sha2-nistp256 <你的公钥内容>" >> "$AUTHKEYS"
 
 # 属主与权限
 chown sshproxy:sshproxy "$AUTHKEYS"
@@ -182,7 +182,7 @@ ls -ld /home/sshproxy/chroot
 grep "Match User sshproxy" /etc/ssh/sshd_config
 
 # 公钥已授权
-grep "ssh-ed25519" /home/sshproxy/.ssh/authorized_keys
+grep "ecdsa-sha2-nistp256" /home/sshproxy/.ssh/authorized_keys
 
 # 从本机冒烟测试 ssh -D
 ssh -D 1080 -N sshproxy@<服务器IP> -p 22

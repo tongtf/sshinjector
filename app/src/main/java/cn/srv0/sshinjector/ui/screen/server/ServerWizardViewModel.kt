@@ -142,7 +142,7 @@ class ServerWizardViewModel
             viewModelScope.launch {
                 val alias = "server_key_${System.currentTimeMillis()}"
                 try {
-                    keyManager.generateKeyPair(alias, 3, requireBiometric = false)
+                    keyManager.generateKeyPair(alias, 0, requireBiometric = false)
                 } catch (e: Exception) {
                     _currentStep.value = WizardStep.RESULT
                     _result.value = WizardResult.Failed("密钥生成失败: ${e.message}")
@@ -205,7 +205,7 @@ class ServerWizardViewModel
                         port = _port.value.toIntOrNull() ?: 22,
                         username = account,
                         keyAlias = alias,
-                        keyAlgorithm = "Ed25519",
+                        keyAlgorithm = "ECDSA_P256",
                         isActive = false,
                     ),
                 )

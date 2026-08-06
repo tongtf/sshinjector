@@ -15,7 +15,7 @@ sealed class TunnelConfig {
         val sshUsername: String,
         val sshKeyAlias: String,
         val sshPassword: String? = null,
-        val sshKeyAlgorithm: String = "Ed25519",
+        val sshKeyAlgorithm: String = "ECDSA_P256",
         val socksPort: Int = 1080,
     ) : TunnelConfig()
 }

@@ -129,7 +129,7 @@ private fun ServerEntity.toDomain(credentialCrypto: CredentialCrypto): ServerCon
             try {
                 ServerConfig.KeyAlgorithm.valueOf(keyAlgorithm)
             } catch (_: Exception) {
-                ServerConfig.KeyAlgorithm.Ed25519
+                ServerConfig.KeyAlgorithm.ECDSA_P256
             },
         password = credentialCrypto.decrypt(password),
         isActive = isActive,

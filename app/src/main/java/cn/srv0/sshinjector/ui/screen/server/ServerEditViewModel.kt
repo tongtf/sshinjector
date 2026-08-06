@@ -45,7 +45,7 @@ class ServerEditViewModel
                 try {
                     val newAlias = "server_key_${System.currentTimeMillis()}"
                     val useBiometric = settingsDataStore.biometricUnlock.first()
-                    keyManager.generateKeyPair(newAlias, 3, useBiometric)
+                    keyManager.generateKeyPair(newAlias, 0, useBiometric)
                     refreshKeys()
                     onGenerated(newAlias)
                 } catch (e: Exception) {

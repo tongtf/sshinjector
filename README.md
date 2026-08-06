@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/Kotlin-1.9.24-blue.svg?style=flat-square&logo=kotlin" alt="Kotlin 1.9.24">
   <img src="https://img.shields.io/badge/Compose-Material3-orange.svg?style=flat-square&logo=jetpackcompose" alt="Jetpack Compose">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="MIT License">
-  <img src="https://img.shields.io/badge/SSH-Ed25519-red.svg?style=flat-square" alt="SSH Ed25519">
+  <img src="https://img.shields.io/badge/SSH-ECDSA-red.svg?style=flat-square" alt="SSH ECDSA">
 </div>
 
 <div align="center">
@@ -29,7 +29,7 @@
 
 | 功能 | 说明 |
 |------|------|
-| **SSH 密钥认证** | Ed25519 硬件加密存储，生物识别解锁，支持应用内生成/导入/导出 |
+| **SSH 密钥认证** | ECDSA P-256 硬件加密存储，生物识别解锁，支持应用内生成/导入/导出 |
 | **SOCKS5 代理** | 完整 RFC 1928 实现：TCP CONNECT + UDP ASSOCIATE，支持 IPv4/IPv6/域名 |
 | **白名单模式** | `VpnService.addAllowedApplication()` - 仅选中应用走代理，其他直连 |
 | **双栈网络** | 同时支持 IPv4 和 IPv6，TUN 接口分配双栈地址 |
@@ -52,7 +52,7 @@
 │  ├── ServerListScreen   ← 服务器增删改查/测试连接/密钥管理   │
 │  ├── WhitelistScreen    ← 应用列表搜索/分组/全选/预设模式    │
 │  ├── SettingsScreen     ← MTU/保活/DNS/IPv6/主题/生物识别   │
-│  └── KeyManagerScreen   ← Ed25519 生成/导入/导出/二维码分享  │
+│  └── KeyManagerScreen   ← ECDSA P-256 生成/导入/导出/二维码分享  │
 ├─────────────────────────────────────────────────────────────┤
 │  Domain Layer (UseCases)                                    │
 │  ├── VpnController       ← VPN 生命周期/状态机/统计聚合      │
@@ -86,7 +86,7 @@
 | DI | Hilt (KSP) |
 | 数据库 | Room 2.6.1 (KSP) |
 | 偏好设置 | DataStore Preferences (RxJava3 Flow) |
-| SSH 客户端 | mwiede/jsch:0.2.14 (维护活跃，支持 Ed25519) |
+| SSH 客户端 | mwiede/jsch:0.2.14 (维护活跃，支持 ECDSA P-256) |
 | DNS 解析 | dnsjava 3.5.7 |
 | 网络 I/O | Java NIO Selector + Kotlinx Coroutines |
 | 密钥存储 | Android Keystore (硬件加密) + BiometricPrompt |
@@ -107,11 +107,11 @@
 ### 服务端准备
 
 ```bash
-# 1. 生成 Ed25519 密钥对 (在手机应用内生成更安全)
-ssh-keygen -t ed25519 -C "your-phone@android"
+# 1. 生成 ECDSA P-256 密钥对 (在手机应用内生成更安全)
+ssh-keygen -t ecdsa -b 256 -C "your-phone@android"
 
 # 2. 将公钥添加到服务器
-ssh-copy-id -i ~/.ssh/id_ed25519.pub user@your-vps
+ssh-copy-id -i ~/.ssh/id_ecdsa.pub user@your-vps
 
 # 3. 验证 SSH 配置
 grep -E '^(AllowTcpForwarding|GatewayPorts|PermitTunnel)' /etc/ssh/sshd_config
@@ -148,7 +148,7 @@ KEY_PASSWORD=your_key_pass" > local.properties
 
 1. 点击「+」添加服务器
 2. 填写：名称、主机、端口(默认22)、用户名
-3. 点击「生成密钥」创建 Ed25519 密钥对 (需生物识别授权)
+3. 点击「生成密钥」创建 ECDSA P-256 密钥对 (需生物识别授权)
 4. 复制公钥 → 粘贴到 VPS `~/.ssh/authorized_keys`
 5. 点击「测试连接」验证
 
@@ -304,7 +304,7 @@ SOFTWARE.
 
 ## 🙏 致谢
 
-- [mwiede/jsch](https://github.com/mwiede/jsch) - 活跃维护的 JSch 分支，支持 Ed25519
+- [mwiede/jsch](https://github.com/mwiede/jsch) - 活跃维护的 JSch 分支，支持 ECDSA P-256
 - [dnsjava](https://github.com/dnsjava/dnsjava) - Java DNS 协议实现
 - [Android VPN Toy](https://github.com/android/networking-samples) - VPNService 参考实现
 - [SocksDroid](https://github.com/6b6b6b/socksdroid) - SOCKS5 代理参考

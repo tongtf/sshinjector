@@ -9,7 +9,7 @@ data class ServerConfig(
     val port: Int = 22,
     val username: String,
     val keyAlias: String,
-    val keyAlgorithm: KeyAlgorithm = KeyAlgorithm.Ed25519,
+    val keyAlgorithm: KeyAlgorithm = KeyAlgorithm.ECDSA_P256,
     var isActive: Boolean = false,
     val createdAt: Date = Date(),
     var updatedAt: Date = Date(),

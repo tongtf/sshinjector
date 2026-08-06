@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/Kotlin-1.9.24-blue.svg?style=flat-square&logo=kotlin" alt="Kotlin 1.9.24">
   <img src="https://img.shields.io/badge/Compose-Material3-orange.svg?style=flat-square&logo=jetpackcompose" alt="Jetpack Compose">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="MIT License">
-  <img src="https://img.shields.io/badge/SSH-Ed25519-red.svg?style=flat-square" alt="SSH Ed25519">
+  <img src="https://img.shields.io/badge/SSH-ECDSA-red.svg?style=flat-square" alt="SSH ECDSA">
 </div>
 
 <div align="center">
@@ -29,7 +29,7 @@
 
 | Feature | Description |
 |---------|-------------|
-| **SSH key auth** | Ed25519 stored in hardware-backed Android Keystore, biometric unlock, in-app generate/import/export |
+| **SSH key auth** | ECDSA P-256 stored in hardware-backed Android Keystore, biometric unlock, in-app generate/import/export |
 | **SOCKS5 proxy** | Full RFC 1928: TCP CONNECT + UDP ASSOCIATE, IPv4/IPv6/domain |
 | **Whitelist mode** | `VpnService.addAllowedApplication()` — only selected apps go through the proxy |
 | **Dual-stack network** | IPv4 + IPv6 with dual-stack addresses on the TUN interface |
@@ -52,7 +52,7 @@
 │  ├── ServerListScreen   ← server CRUD / test / keys         │
 │  ├── WhitelistScreen    ← app list / groups / presets       │
 │  ├── SettingsScreen     ← MTU / keepalive / DNS / IPv6/theme│
-│  └── KeyManagerScreen   ← Ed25519 gen/import/export/QR      │
+│  └── KeyManagerScreen   ← ECDSA P-256 gen/import/export/QR      │
 ├─────────────────────────────────────────────────────────────┤
 │  Domain Layer (UseCases)                                    │
 │  ├── VpnController       ← VPN lifecycle / state machine    │
@@ -85,7 +85,7 @@
 | DI | Hilt (KSP) |
 | Database | Room 2.6.1 (KSP) |
 | Preferences | DataStore Preferences (RxJava3 Flow) |
-| SSH client | mwiede/jsch:0.2.14 (active fork, Ed25519 support) |
+| SSH client | mwiede/jsch:0.2.14 (active fork, ECDSA P-256 support) |
 | DNS | dnsjava 3.5.7 |
 | Network I/O | Java NIO Selector + Kotlinx Coroutines |
 | Keystore | Android Keystore (hardware) + BiometricPrompt |
@@ -106,11 +106,11 @@
 ### Server setup
 
 ```bash
-# 1. Generate an Ed25519 key pair (generating in-app is more secure)
-ssh-keygen -t ed25519 -C "your-phone@android"
+# 1. Generate an ECDSA P-256 key pair (generating in-app is more secure)
+ssh-keygen -t ecdsa -b 256 -C "your-phone@android"
 
 # 2. Copy the public key to the server
-ssh-copy-id -i ~/.ssh/id_ed25519.pub user@your-vps
+ssh-copy-id -i ~/.ssh/id_ecdsa.pub user@your-vps
 
 # 3. Verify SSH config
 grep -E '^(AllowTcpForwarding|GatewayPorts|PermitTunnel)' /etc/ssh/sshd_config
@@ -144,7 +144,7 @@ cd sshinjector
 
 1. Tap **+** to add a server
 2. Fill in: name, host, port (default 22), username
-3. Tap **Generate key** to create an Ed25519 key pair (biometric required)
+3. Tap **Generate key** to create an ECDSA P-256 key pair (biometric required)
 4. Copy the public key → paste into `~/.ssh/authorized_keys` on the VPS
 5. Tap **Test connection** to verify
 
@@ -293,7 +293,7 @@ SOFTWARE.
 
 ## 🙏 Acknowledgments
 
-- [mwiede/jsch](https://github.com/mwiede/jsch) — actively maintained JSch fork with Ed25519
+- [mwiede/jsch](https://github.com/mwiede/jsch) — actively maintained JSch fork with ECDSA P-256 support
 - [dnsjava](https://github.com/dnsjava/dnsjava) — Java DNS protocol library
 - [Android Networking Samples](https://github.com/android/networking-samples) — VPNService reference
 - [SocksDroid](https://github.com/6b6b6b/socksdroid) — SOCKS5 proxy reference

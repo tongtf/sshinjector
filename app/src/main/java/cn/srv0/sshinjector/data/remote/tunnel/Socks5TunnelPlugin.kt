@@ -52,7 +52,7 @@ class Socks5TunnelPlugin
                             key = "sshKeyAlgorithm",
                             label = "密钥算法",
                             options =
-                                listOf("Ed25519" to "Ed25519", "RSA4096" to "RSA 4096", "ECDSA_P256" to "ECDSA P-256"),
+                                listOf("ECDSA_P256" to "ECDSA P-256", "Ed25519" to "Ed25519", "RSA4096" to "RSA 4096"),
                         ),
                         ConfigField.NumberField(
                             key = "socksPort",

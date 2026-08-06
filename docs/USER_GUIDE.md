@@ -46,7 +46,7 @@ cd sshinjector
 ## 2. 快速开始
 
 1. **添加服务器**：主页 →「+」→ 填写服务器信息
-2. **生成密钥**：应用内生成 Ed25519 密钥对（需生物识别授权）
+2. **生成密钥**：应用内生成 ECDSA P-256 密钥对（需生物识别授权）
 3. **部署公钥**：复制公钥到服务器 `~/.ssh/authorized_keys`
 4. **测试连接**：确认 SSH 认证通过
 5. **配置白名单**：选择要走代理的应用
@@ -64,7 +64,7 @@ cd sshinjector
 | 主机 | 服务器 IP 或域名 |
 | 端口 | SSH 端口（默认 22） |
 | 用户名 | SSH 登录用户 |
-| 密钥算法 | Ed25519 / RSA 4096 / ECDSA P-256 |
+| 密钥算法 | ECDSA P-256 / RSA 4096 / Ed25519 |
 
 ### 服务端要求
 
@@ -82,7 +82,7 @@ grep -E '^(AllowTcpForwarding|GatewayPorts)' /etc/ssh/sshd_config
 
 ## 4. 密钥管理
 
-- **生成**：应用内生成 Ed25519 密钥对，私钥保存在 Android Keystore（硬件级隔离）
+- **生成**：应用内生成 ECDSA P-256 密钥对，私钥保存在 Android Keystore（硬件级隔离）
 - **导入**：从文件导入已有私钥（OpenSSH 格式）
 - **导出**：导出公钥（OpenSSH 格式）部署到服务器
 - **二维码**：通过二维码分享公钥
@@ -177,7 +177,7 @@ grep -E '^(AllowTcpForwarding|GatewayPorts)' /etc/ssh/sshd_config
 ## 10. FAQ
 
 **Q: 支持哪些 SSH 密钥类型？**
-A: Ed25519（推荐）、RSA 4096、ECDSA P-256。
+A: ECDSA P-256（推荐）、RSA 4096、Ed25519。
 
 **Q: 支持 HTTP/3 (QUIC) 吗？**
 A: 通过 SOCKS5 UDP ASSOCIATE 转发 UDP 流量（QUIC）。
