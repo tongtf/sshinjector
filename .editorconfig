@@ -17,3 +17,9 @@ import_ordering=java,kotlin,blank,static
 
 # 空行
 empty_line_between_package_and_imports=true
+
+# Composable 组件函数名允许大写开头（官方推荐配置）
+ktlint_function_naming_ignore_when_annotated_with=Composable
+
+[*.kt]
+ktlint_function_naming_ignore_when_annotated_with=Composable

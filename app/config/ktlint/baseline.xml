@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="utf-8"?>
+<baseline version="1.0">
+    <file name="src/androidTest/java/cn/srv0/sshinjector/DatabaseIntegrationTest.kt">
+        <error line="12" column="1" source="standard:no-wildcard-imports" />
+    </file>
+    <file name="src/androidTest/java/cn/srv0/sshinjector/SettingsIntegrationTest.kt">
+        <error line="9" column="1" source="standard:no-wildcard-imports" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/data/local/database/AppDatabase.kt">
+        <error line="33" column="31" source="standard:property-naming" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/data/local/entity/Entities.kt">
+        <error line="15" column="58" source="standard:discouraged-comment-location" />
+        <error line="17" column="76" source="standard:discouraged-comment-location" />
+        <error line="21" column="78" source="standard:discouraged-comment-location" />
+        <error line="25" column="86" source="standard:discouraged-comment-location" />
+        <error line="26" column="80" source="standard:discouraged-comment-location" />
+        <error line="27" column="78" source="standard:discouraged-comment-location" />
+        <error line="28" column="64" source="standard:discouraged-comment-location" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/data/remote/ssh/SshKeyManager.kt">
+        <error line="353" column="21" source="standard:property-naming" />
+        <error line="356" column="21" source="standard:property-naming" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/di/Modules.kt">
+        <error line="1" column="1" source="standard:filename" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/domain/model/DomainModels.kt">
+        <error line="3" column="1" source="standard:no-wildcard-imports" />
+        <error line="24" column="35" source="standard:discouraged-comment-location" />
+        <error line="25" column="32" source="standard:discouraged-comment-location" />
+        <error line="26" column="45" source="standard:discouraged-comment-location" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/domain/usecase/VpnController.kt">
+        <error line="348" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/domain/vpn/DnsInterceptor.kt">
+        <error line="94" column="21" source="standard:property-naming" />
+        <error line="95" column="21" source="standard:property-naming" />
+        <error line="170" column="37" source="standard:discouraged-comment-location" />
+        <error line="171" column="37" source="standard:discouraged-comment-location" />
+        <error line="172" column="31" source="standard:discouraged-comment-location" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/domain/vpn/IpPacketParser.kt">
+        <error line="109" column="20" source="standard:discouraged-comment-location" />
+        <error line="110" column="21" source="standard:discouraged-comment-location" />
+        <error line="111" column="21" source="standard:discouraged-comment-location" />
+        <error line="112" column="21" source="standard:discouraged-comment-location" />
+        <error line="113" column="22" source="standard:discouraged-comment-location" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/domain/vpn/Socks5ProxyServer.kt">
+        <error line="660" column="1" source="standard:max-line-length" />
+        <error line="701" column="37" source="standard:discouraged-comment-location" />
+        <error line="702" column="37" source="standard:discouraged-comment-location" />
+        <error line="703" column="25" source="standard:discouraged-comment-location" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/domain/vpn/TcpStateMachine.kt">
+        <error line="165" column="1" source="standard:max-line-length" />
+        <error line="174" column="1" source="standard:max-line-length" />
+        <error line="685" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/domain/vpn/UdpRelay.kt">
+        <error line="186" column="53" source="standard:discouraged-comment-location" />
+        <error line="187" column="53" source="standard:discouraged-comment-location" />
+        <error line="188" column="41" source="standard:discouraged-comment-location" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/ui/MainActivity.kt">
+        <error line="78" column="5" source="standard:function-naming" />
+        <error line="149" column="5" source="standard:function-naming" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/ui/biometric/BiometricAuth.kt">
+        <error line="22" column="9" source="standard:kdoc-wrapping" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/ui/component/FloatingNavIcon.kt">
+        <error line="24" column="5" source="standard:function-naming" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/ui/navigation/NavGraph.kt">
+        <error line="18" column="5" source="standard:function-naming" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/ui/screen/dashboard/DashboardScreen.kt">
+        <error line="77" column="5" source="standard:function-naming" />
+        <error line="583" column="5" source="standard:function-naming" />
+        <error line="639" column="5" source="standard:function-naming" />
+        <error line="781" column="5" source="standard:function-naming" />
+        <error line="836" column="5" source="standard:function-naming" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/ui/screen/keymanager/KeyAddScreen.kt">
+        <error line="44" column="5" source="standard:function-naming" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/ui/screen/keymanager/KeyManagerScreen.kt">
+        <error line="70" column="5" source="standard:function-naming" />
+        <error line="509" column="9" source="standard:function-naming" />
+        <error line="586" column="9" source="standard:function-naming" />
+        <error line="621" column="9" source="standard:function-naming" />
+        <error line="694" column="9" source="standard:function-naming" />
+        <error line="786" column="6" source="standard:no-trailing-spaces" />
+        <error line="790" column="5" source="standard:function-naming" />
+        <error line="859" column="5" source="standard:function-naming" />
+        <error line="889" column="5" source="standard:function-naming" />
+        <error line="949" column="5" source="standard:function-naming" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/ui/screen/server/ServerEditScreen.kt">
+        <error line="64" column="5" source="standard:function-naming" />
+        <error line="375" column="5" source="standard:function-naming" />
+        <error line="398" column="5" source="standard:function-naming" />
+        <error line="414" column="5" source="standard:function-naming" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/ui/screen/server/ServerListScreen.kt">
+        <error line="56" column="5" source="standard:function-naming" />
+        <error line="204" column="5" source="standard:function-naming" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/ui/screen/settings/DomainListSettingsScreen.kt">
+        <error line="52" column="5" source="standard:function-naming" />
+        <error line="239" column="13" source="standard:function-naming" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/ui/screen/settings/SettingsScreen.kt">
+        <error line="50" column="5" source="standard:function-naming" />
+        <error line="388" column="5" source="standard:function-naming" />
+        <error line="420" column="5" source="standard:function-naming" />
+        <error line="449" column="13" source="standard:function-naming" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/ui/screen/whitelist/WhitelistScreen.kt">
+        <error line="83" column="5" source="standard:function-naming" />
+        <error line="461" column="5" source="standard:function-naming" />
+        <error line="524" column="5" source="standard:function-naming" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/ui/theme/Theme.kt">
+        <error line="125" column="5" source="standard:function-naming" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/ui/viewmodel/MainViewModel.kt">
+        <error line="353" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/main/java/cn/srv0/sshinjector/vpn/SshVpnService.kt">
+        <error line="507" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/test/java/cn/srv0/sshinjector/DnsInterceptorTest.kt">
+        <error line="3" column="1" source="standard:no-wildcard-imports" />
+    </file>
+    <file name="src/test/java/cn/srv0/sshinjector/DnsModePrototypeTest.kt">
+        <error line="3" column="1" source="standard:no-wildcard-imports" />
+        <error line="5" column="1" source="standard:no-wildcard-imports" />
+        <error line="198" column="44" source="standard:discouraged-comment-location" />
+    </file>
+    <file name="src/test/java/cn/srv0/sshinjector/PacketProcessorTest.kt">
+        <error line="3" column="1" source="standard:no-wildcard-imports" />
+    </file>
+    <file name="src/test/java/cn/srv0/sshinjector/Socks5ProtocolTest.kt">
+        <error line="3" column="1" source="standard:no-wildcard-imports" />
+        <error line="40" column="41" source="standard:discouraged-comment-location" />
+        <error line="41" column="41" source="standard:discouraged-comment-location" />
+        <error line="42" column="29" source="standard:discouraged-comment-location" />
+    </file>
+    <file name="src/test/java/cn/srv0/sshinjector/SshKeyManagerTest.kt">
+        <error line="3" column="1" source="standard:no-wildcard-imports" />
+    </file>
+    <file name="src/test/java/cn/srv0/sshinjector/VpnControllerTest.kt">
+        <error line="3" column="1" source="standard:no-wildcard-imports" />
+    </file>
+</baseline>

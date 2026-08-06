@@ -4,6 +4,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.dagger.hilt.android")
     id("com.google.devtools.ksp")
+    id("org.jlleitschuh.gradle.ktlint")
+    id("io.gitlab.arturbosch.detekt")
 }
 
 android {
@@ -47,7 +49,7 @@ android {
             isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
+                "proguard-rules.pro",
             )
             signingConfig = signingConfigs.getByName("debug")
         }
@@ -66,9 +68,10 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
-        freeCompilerArgs += listOf(
-            "-Xopt-in=kotlin.RequiresOptIn"
-        )
+        freeCompilerArgs +=
+            listOf(
+                "-Xopt-in=kotlin.RequiresOptIn",
+            )
     }
 
     buildFeatures {
@@ -79,16 +82,17 @@ android {
 
     packaging {
         resources {
-            excludes += listOf(
-                "META-INF/DEPENDENCIES",
-                "META-INF/LICENSE",
-                "META-INF/LICENSE.txt",
-                "META-INF/license.txt",
-                "META-INF/NOTICE",
-                "META-INF/NOTICE.txt",
-                "META-INF/notice.txt",
-                "META-INF/services/java.net.spi.InetAddressResolverProvider"
-            )
+            excludes +=
+                listOf(
+                    "META-INF/DEPENDENCIES",
+                    "META-INF/LICENSE",
+                    "META-INF/LICENSE.txt",
+                    "META-INF/license.txt",
+                    "META-INF/NOTICE",
+                    "META-INF/NOTICE.txt",
+                    "META-INF/notice.txt",
+                    "META-INF/services/java.net.spi.InetAddressResolverProvider",
+                )
         }
         jniLibs {
             useLegacyPackaging = true
@@ -160,6 +164,14 @@ configurations.all {
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
     arg("hilt.disableAggregatingTask", "true")
+}
+
+detekt {
+    config.setFrom(file("../detekt.yml"))
+}
+
+ktlint {
+    android.set(true)
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
