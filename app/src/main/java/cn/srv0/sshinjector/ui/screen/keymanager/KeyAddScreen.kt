@@ -2,7 +2,6 @@ package cn.srv0.sshinjector.ui.screen.keymanager
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,10 +33,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.compose.ui.res.stringResource
 import cn.srv0.sshinjector.R
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -45,7 +44,7 @@ import cn.srv0.sshinjector.R
 fun KeyAddScreen(
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier,
-    viewModel: KeyManagerViewModel = hiltViewModel()
+    viewModel: KeyManagerViewModel = hiltViewModel(),
 ) {
     var showGenerateDialog by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
@@ -54,49 +53,57 @@ fun KeyAddScreen(
     var importIsPublic by remember { mutableStateOf(false) }
 
     Scaffold(
+        modifier = modifier,
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.key_add_title)) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.back))
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.back),
+                        )
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
+                colors =
+                    TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                    ),
             )
-        }
+        },
     ) { innerPadding ->
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                        .copy(alpha = 0.5f)
-                ),
-                onClick = { showGenerateDialog = true }
+                colors =
+                    CardDefaults.cardColors(
+                        containerColor =
+                            MaterialTheme.colorScheme.surfaceVariant
+                                .copy(alpha = 0.5f),
+                    ),
+                onClick = { showGenerateDialog = true },
             ) {
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Icon(
                         Icons.Default.Add,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(24.dp),
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(stringResource(R.string.key_generate), fontSize = 16.sp)
@@ -104,7 +111,7 @@ fun KeyAddScreen(
                     Text(
                         stringResource(R.string.key_generate_desc),
                         fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -112,23 +119,26 @@ fun KeyAddScreen(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                        .copy(alpha = 0.5f)
-                ),
-                onClick = { showImportDialog = true }
+                colors =
+                    CardDefaults.cardColors(
+                        containerColor =
+                            MaterialTheme.colorScheme.surfaceVariant
+                                .copy(alpha = 0.5f),
+                    ),
+                onClick = { showImportDialog = true },
             ) {
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Icon(
                         Icons.Default.Edit,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(24.dp),
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(stringResource(R.string.key_import), fontSize = 16.sp)
@@ -136,7 +146,7 @@ fun KeyAddScreen(
                     Text(
                         stringResource(R.string.key_import_desc),
                         fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -148,12 +158,15 @@ fun KeyAddScreen(
             onConfirm = { algo ->
                 showGenerateDialog = false
                 viewModel.generateKeyPair(
-                    "key_${System.currentTimeMillis()}", algo, false)
+                    "key_${System.currentTimeMillis()}",
+                    algo,
+                    false,
+                )
                 onNavigateBack()
             },
             onDismiss = { showGenerateDialog = false },
             selectedAlgorithm = generateAlgorithm,
-            onAlgorithmChange = { generateAlgorithm = it }
+            onAlgorithmChange = { generateAlgorithm = it },
         )
     }
 
@@ -173,7 +186,7 @@ fun KeyAddScreen(
             isPublic = importIsPublic,
             onIsPublicChange = { importIsPublic = it },
             keyContent = importedKey,
-            onKeyContentChange = { importedKey = it }
+            onKeyContentChange = { importedKey = it },
         )
     }
 }

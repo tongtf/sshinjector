@@ -15,38 +15,58 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
-class SettingsViewModel @Inject constructor(
-    @ApplicationContext private val context: Context,
-    private val settingsDataStore: SettingsDataStore
-) : ViewModel() {
-    val autoConnect: StateFlow<Boolean> = settingsDataStore.autoConnect
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
-    val biometricUnlock: StateFlow<Boolean> = settingsDataStore.biometricUnlock
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val mtu: StateFlow<Int> = settingsDataStore.mtu
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 1500)
-    val keepAlive: StateFlow<Int> = settingsDataStore.keepAlive
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 30)
-    val enableIPv6: StateFlow<Boolean> = settingsDataStore.enableIPv6
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
-    val dnsMode: StateFlow<Int> = settingsDataStore.dnsMode
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
-    val language: StateFlow<String> = settingsDataStore.language
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "system")
+class SettingsViewModel
+    @Inject
+    constructor(
+        @ApplicationContext private val context: Context,
+        private val settingsDataStore: SettingsDataStore,
+    ) : ViewModel() {
+        val autoConnect: StateFlow<Boolean> =
+            settingsDataStore.autoConnect
+                .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+        val biometricUnlock: StateFlow<Boolean> =
+            settingsDataStore.biometricUnlock
+                .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+        val mtu: StateFlow<Int> =
+            settingsDataStore.mtu
+                .stateIn(viewModelScope, SharingStarted.Eagerly, 1500)
+        val keepAlive: StateFlow<Int> =
+            settingsDataStore.keepAlive
+                .stateIn(viewModelScope, SharingStarted.Eagerly, 30)
+        val enableIPv6: StateFlow<Boolean> =
+            settingsDataStore.enableIPv6
+                .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+        val dnsMode: StateFlow<Int> =
+            settingsDataStore.dnsMode
+                .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+        val language: StateFlow<String> =
+            settingsDataStore.language
+                .stateIn(viewModelScope, SharingStarted.Eagerly, "system")
 
-    fun setAutoConnect(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setAutoConnect(enabled) }
-    fun setBiometricUnlock(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setBiometricUnlock(enabled) }
-    fun setMtu(value: Int) = viewModelScope.launch { settingsDataStore.setMtu(value) }
-    fun setKeepAlive(value: Int) = viewModelScope.launch { settingsDataStore.setKeepAlive(value) }
-    fun setEnableIPv6(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setEnableIPv6(enabled) }
-    fun setDnsMode(mode: Int) = viewModelScope.launch {
-        settingsDataStore.setDnsMode(mode)
-        try {
-            val intent = Intent(context, SshVpnService::class.java).apply {
-                action = SshVpnService.ACTION_REBUILD
+        fun setAutoConnect(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setAutoConnect(enabled) }
+
+        fun setBiometricUnlock(enabled: Boolean) {
+            viewModelScope.launch { settingsDataStore.setBiometricUnlock(enabled) }
+        }
+
+        fun setMtu(value: Int) = viewModelScope.launch { settingsDataStore.setMtu(value) }
+
+        fun setKeepAlive(value: Int) = viewModelScope.launch { settingsDataStore.setKeepAlive(value) }
+
+        fun setEnableIPv6(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setEnableIPv6(enabled) }
+
+        fun setDnsMode(mode: Int) =
+            viewModelScope.launch {
+                settingsDataStore.setDnsMode(mode)
+                try {
+                    val intent =
+                        Intent(context, SshVpnService::class.java).apply {
+                            action = SshVpnService.ACTION_REBUILD
+                        }
+                    context.startService(intent)
+                } catch (_: Exception) {
+                }
             }
-            context.startService(intent)
-        } catch (_: Exception) {}
+
+        fun setLanguage(code: String) = viewModelScope.launch { settingsDataStore.setLanguage(code) }
     }
-    fun setLanguage(code: String) = viewModelScope.launch { settingsDataStore.setLanguage(code) }
-}

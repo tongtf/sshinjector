@@ -72,18 +72,12 @@ import cn.srv0.sshinjector.ui.component.rememberClickGuard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-data class InstalledApp(
-    val packageName: String,
-    val name: String,
-    val isSystem: Boolean
-)
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WhitelistScreen(
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier,
-    viewModel: WhitelistViewModel = hiltViewModel()
+    viewModel: WhitelistViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
@@ -100,9 +94,10 @@ fun WhitelistScreen(
 
     fun checkPermission(): Boolean {
         return try {
-            val apps = context.packageManager.getInstalledApplications(
-                PackageManager.ApplicationInfoFlags.of(0)
-            )
+            val apps =
+                context.packageManager.getInstalledApplications(
+                    PackageManager.ApplicationInfoFlags.of(0),
+                )
             apps.isNotEmpty() || true
         } catch (_: SecurityException) {
             false
@@ -113,8 +108,9 @@ fun WhitelistScreen(
 
     fun openAppSettings() {
         try {
-            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                .apply { data = Uri.parse("package:${context.packageName}") }
+            val intent =
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .apply { data = Uri.parse("package:${context.packageName}") }
             context.startActivity(intent)
         } catch (_: Exception) {
             context.startActivity(Intent(Settings.ACTION_SETTINGS))
@@ -137,11 +133,21 @@ fun WhitelistScreen(
     }
 
     val filteredApps by remember(
-        allApps, searchQuery, hideSystemApps, filterMode, enabledPackages) {
+        allApps,
+        searchQuery,
+        hideSystemApps,
+        filterMode,
+        enabledPackages,
+    ) {
         derivedStateOf {
-            var list = if (searchQuery.isBlank()) allApps
-            else allApps.filter {
-                it.name.contains(searchQuery, ignoreCase = true) }
+            var list =
+                if (searchQuery.isBlank()) {
+                    allApps
+                } else {
+                    allApps.filter {
+                        it.name.contains(searchQuery, ignoreCase = true)
+                    }
+                }
             if (hideSystemApps) list = list.filter { !it.isSystem }
             when (filterMode) {
                 1 -> list = list.filter { it.packageName in enabledPackages }
@@ -152,6 +158,7 @@ fun WhitelistScreen(
     }
 
     Scaffold(
+        modifier = modifier,
         topBar = {
             TopAppBar(
                 title = {
@@ -162,29 +169,46 @@ fun WhitelistScreen(
                             value = searchQuery,
                             onValueChange = { searchQuery = it },
                             modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text(stringResource(
-                                R.string.whitelist_search_hint)) },
+                            placeholder = {
+                                Text(
+                                    stringResource(
+                                        R.string.whitelist_search_hint,
+                                    ),
+                                )
+                            },
                             singleLine = true,
-                            leadingIcon = { Icon(Icons.Default.Search,
-                                contentDescription = stringResource(
-                                    R.string.search)) },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription =
+                                        stringResource(
+                                            R.string.search,
+                                        ),
+                                )
+                            },
                             trailingIcon = {
                                 IconButton(onClick = {
                                     searchQuery = ""
                                     isSearchActive = false
                                 }) {
-                                    Icon(Icons.Default.Close,
-                                        contentDescription = stringResource(
-                                            R.string.close))
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription =
+                                            stringResource(
+                                                R.string.close,
+                                            ),
+                                    )
                                 }
-                            }
+                            },
                         )
                     }
                 },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.back))
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.back),
+                        )
                     }
                 },
                 actions = {
@@ -192,8 +216,10 @@ fun WhitelistScreen(
                         IconButton(onClick = { isSearchActive = true }) {
                             Icon(
                                 imageVector = Icons.Default.Search,
-                                contentDescription = stringResource(
-                                    R.string.whitelist_search)
+                                contentDescription =
+                                    stringResource(
+                                        R.string.whitelist_search,
+                                    ),
                             )
                         }
                     }
@@ -202,45 +228,59 @@ fun WhitelistScreen(
                     }) {
                         Icon(
                             imageVector = Icons.Default.Refresh,
-                            contentDescription = stringResource(
-                                R.string.whitelist_refresh)
+                            contentDescription =
+                                stringResource(
+                                    R.string.whitelist_refresh,
+                                ),
                         )
                     }
                     IconButton(onClick = {
-                        hideSystemApps = !hideSystemApps }) {
+                        hideSystemApps = !hideSystemApps
+                    }) {
                         Text(
-                            text = if (hideSystemApps)
-                                stringResource(R.string.whitelist_show_system)
-                            else
-                                stringResource(R.string.whitelist_hide_system),
+                            text =
+                                if (hideSystemApps) {
+                                    stringResource(R.string.whitelist_show_system)
+                                } else {
+                                    stringResource(R.string.whitelist_hide_system)
+                                },
                             fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.primary
+                            color = MaterialTheme.colorScheme.primary,
                         )
                     }
                     if (!searchQuery.isBlank()) {
                         IconButton(onClick = {
-                            selectAll = !selectAll }) {
+                            selectAll = !selectAll
+                        }) {
                             Icon(
-                                imageVector = if (selectAll) Icons.Default.Check
-                                    else Icons.Default.Done,
-                                contentDescription = if (selectAll)
-                                    stringResource(R.string.whitelist_select_all)
-                                else
-                                    stringResource(R.string.whitelist_deselect_all)
+                                imageVector =
+                                    if (selectAll) {
+                                        Icons.Default.Check
+                                    } else {
+                                        Icons.Default.Done
+                                    },
+                                contentDescription =
+                                    if (selectAll) {
+                                        stringResource(R.string.whitelist_select_all)
+                                    } else {
+                                        stringResource(R.string.whitelist_deselect_all)
+                                    },
                             )
                         }
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer
-                )
+                colors =
+                    TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    ),
             )
-        }
+        },
     ) { innerPadding ->
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
         ) {
             if (!hasPermission) {
                 PermissionRequestScreen(
@@ -248,79 +288,106 @@ fun WhitelistScreen(
                     onRefresh = {
                         hasPermission = checkPermission()
                         if (hasPermission) loadApps()
-                    }
+                    },
                 )
             } else {
                 Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                        .background(MaterialTheme.colorScheme.primaryContainer,
-                            RoundedCornerShape(8.dp))
-                        .padding(12.dp)
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                            .background(
+                                MaterialTheme.colorScheme.primaryContainer,
+                                RoundedCornerShape(8.dp),
+                            )
+                            .padding(12.dp),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Lock, contentDescription = null,
+                        Icon(
+                            Icons.Default.Lock,
+                            contentDescription = null,
                             tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(24.dp))
+                            modifier = Modifier.size(24.dp),
+                        )
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
                             text = stringResource(R.string.whitelist_banner),
                             fontSize = 15.sp,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
                         )
                     }
                 }
 
                 Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         FilterChip(
                             selected = filterMode == 0,
                             onClick = { filterMode = 0 },
-                            label = { Text(stringResource(
-                                R.string.whitelist_filter_all,
-                                filteredApps.size)) },
-                            modifier = Modifier.weight(1f)
+                            label = {
+                                Text(
+                                    stringResource(
+                                        R.string.whitelist_filter_all,
+                                        filteredApps.size,
+                                    ),
+                                )
+                            },
+                            modifier = Modifier.weight(1f),
                         )
                         FilterChip(
                             selected = filterMode == 1,
                             onClick = { filterMode = 1 },
-                            label = { Text(stringResource(
-                                R.string.whitelist_filter_selected,
-                                enabledPackages.size)) },
-                            modifier = Modifier.weight(1f)
+                            label = {
+                                Text(
+                                    stringResource(
+                                        R.string.whitelist_filter_selected,
+                                        enabledPackages.size,
+                                    ),
+                                )
+                            },
+                            modifier = Modifier.weight(1f),
                         )
                         FilterChip(
                             selected = filterMode == 2,
                             onClick = { filterMode = 2 },
-                            label = { Text(stringResource(
-                                R.string.whitelist_filter_system,
-                                filteredApps.count { it.isSystem })) },
-                            modifier = Modifier.weight(1f)
+                            label = {
+                                Text(
+                                    stringResource(
+                                        R.string.whitelist_filter_system,
+                                        filteredApps.count { it.isSystem },
+                                    ),
+                                )
+                            },
+                            modifier = Modifier.weight(1f),
                         )
                     }
                 }
 
                 if (!loaded) {
-                    Box(modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center) {
-                        Text(stringResource(R.string.whitelist_loading),
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            stringResource(R.string.whitelist_loading),
                             fontSize = 16.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 } else {
                     LazyColumn(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        modifier =
+                            Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         items(filteredApps, key = { it.packageName }) { app ->
                             AppListItem(
@@ -328,8 +395,11 @@ fun WhitelistScreen(
                                 isEnabled = app.packageName in enabledPackages,
                                 onToggle = { pkg, enabled ->
                                     viewModel.togglePackage(
-                                        pkg, app.name, enabled)
-                                }
+                                        pkg,
+                                        app.name,
+                                        enabled,
+                                    )
+                                },
                             )
                         }
                     }
@@ -341,12 +411,27 @@ fun WhitelistScreen(
     if (showPermissionDialog) {
         AlertDialog(
             onDismissRequest = { showPermissionDialog = false },
-            icon = { Icon(Icons.Default.Warning, contentDescription = null,
-                tint = MaterialTheme.colorScheme.error) },
-            title = { Text(stringResource(
-                R.string.whitelist_permission_title)) },
-            text = { Text(stringResource(
-                R.string.whitelist_permission_msg)) },
+            icon = {
+                Icon(
+                    Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                )
+            },
+            title = {
+                Text(
+                    stringResource(
+                        R.string.whitelist_permission_title,
+                    ),
+                )
+            },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.whitelist_permission_msg,
+                    ),
+                )
+            },
             confirmButton = {
                 val guard = rememberClickGuard()
                 Button(onClick = {
@@ -362,7 +447,7 @@ fun WhitelistScreen(
                 TextButton(onClick = { showPermissionDialog = false }) {
                     Text(stringResource(R.string.cancel))
                 }
-            }
+            },
         )
     }
 }
@@ -370,57 +455,62 @@ fun WhitelistScreen(
 @Composable
 fun PermissionRequestScreen(
     onOpenSettings: () -> Unit,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
 ) {
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp),
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        verticalArrangement = Arrangement.Center,
     ) {
         Icon(
             imageVector = Icons.Default.Warning,
             contentDescription = null,
             modifier = Modifier.size(80.dp),
-            tint = MaterialTheme.colorScheme.error
+            tint = MaterialTheme.colorScheme.error,
         )
         Spacer(modifier = Modifier.height(24.dp))
         Text(
             text = stringResource(R.string.whitelist_need_permission),
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface
+            color = MaterialTheme.colorScheme.onSurface,
         )
         Spacer(modifier = Modifier.height(16.dp))
         Text(
             text = stringResource(R.string.whitelist_need_permission_desc),
             fontSize = 16.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
+            textAlign = TextAlign.Center,
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = stringResource(R.string.whitelist_need_permission_hint),
             fontSize = 14.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
+            textAlign = TextAlign.Center,
         )
         Spacer(modifier = Modifier.height(32.dp))
         val guard = rememberClickGuard()
         Button(
             onClick = { guard { onOpenSettings() } },
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(stringResource(R.string.whitelist_goto_settings),
-                fontSize = 16.sp)
+            Text(
+                stringResource(R.string.whitelist_goto_settings),
+                fontSize = 16.sp,
+            )
         }
         Spacer(modifier = Modifier.height(16.dp))
         TextButton(
-            onClick = onRefresh
+            onClick = onRefresh,
         ) {
-            Text(stringResource(R.string.whitelist_have_permission_refresh),
-                fontSize = 14.sp)
+            Text(
+                stringResource(R.string.whitelist_have_permission_refresh),
+                fontSize = 14.sp,
+            )
         }
     }
 }
@@ -429,51 +519,66 @@ fun PermissionRequestScreen(
 fun AppListItem(
     app: InstalledApp,
     isEnabled: Boolean,
-    onToggle: (String, Boolean) -> Unit
+    onToggle: (String, Boolean) -> Unit,
 ) {
     val context2 = LocalContext.current
     val iconBitmap by produceState<
-        androidx.compose.ui.graphics.ImageBitmap?>(null, app.packageName) {
-        value = withContext(Dispatchers.IO) {
-            runCatching {
-                val d = context2.packageManager.getApplicationIcon(
-                    app.packageName)
-                val w = d.intrinsicWidth.coerceAtLeast(1)
-                val h = d.intrinsicHeight.coerceAtLeast(1)
-                val bmp = android.graphics.Bitmap.createBitmap(
-                    w, h, android.graphics.Bitmap.Config.ARGB_8888)
-                val canvas = android.graphics.Canvas(bmp)
-                d.setBounds(0, 0, w, h)
-                d.draw(canvas)
-                bmp.asImageBitmap()
-            }.getOrNull()
-        }
+        androidx.compose.ui.graphics.ImageBitmap?,
+        >(null, app.packageName) {
+        value =
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    val d =
+                        context2.packageManager.getApplicationIcon(
+                            app.packageName,
+                        )
+                    val w = d.intrinsicWidth.coerceAtLeast(1)
+                    val h = d.intrinsicHeight.coerceAtLeast(1)
+                    val bmp =
+                        android.graphics.Bitmap.createBitmap(
+                            w, h, android.graphics.Bitmap.Config.ARGB_8888,
+                        )
+                    val canvas = android.graphics.Canvas(bmp)
+                    d.setBounds(0, 0, w, h)
+                    d.draw(canvas)
+                    bmp.asImageBitmap()
+                }.getOrNull()
+            }
     }
 
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 0.dp),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 0.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isEnabled)
-                MaterialTheme.colorScheme.primaryContainer
-            else MaterialTheme.colorScheme.surface
-        )
+        colors =
+            CardDefaults.cardColors(
+                containerColor =
+                    if (isEnabled) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surface
+                    },
+            ),
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
-                modifier = Modifier.size(48.dp)
-                    .background(MaterialTheme.colorScheme.surfaceVariant,
-                        RoundedCornerShape(12.dp))
-                    .clip(RoundedCornerShape(12.dp)),
-                contentAlignment = Alignment.Center
+                modifier =
+                    Modifier.size(48.dp)
+                        .background(
+                            MaterialTheme.colorScheme.surfaceVariant,
+                            RoundedCornerShape(12.dp),
+                        )
+                        .clip(RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center,
             ) {
                 val bitmap = iconBitmap
                 if (bitmap != null) {
@@ -481,14 +586,14 @@ fun AppListItem(
                         bitmap = bitmap,
                         contentDescription = app.name,
                         modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit
+                        contentScale = ContentScale.Fit,
                     )
                 } else {
                     Text(
                         text = app.name.first().toString().uppercase(),
                         fontSize = 24.sp,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -501,40 +606,53 @@ fun AppListItem(
                         text = app.name,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Medium,
-                        color = if (isEnabled)
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                        else MaterialTheme.colorScheme.onSurface
+                        color =
+                            if (isEnabled) {
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
                     )
                     if (app.isSystem) {
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = stringResource(
-                                R.string.whitelist_system_tag),
+                            text =
+                                stringResource(
+                                    R.string.whitelist_system_tag,
+                                ),
                             fontSize = 10.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.labelSmall
+                            style = MaterialTheme.typography.labelSmall,
                         )
                     }
                 }
                 Text(
                     text = app.packageName,
                     fontSize = 12.sp,
-                    color = if (isEnabled)
-                        MaterialTheme.colorScheme.onPrimaryContainer.copy(
-                            alpha = 0.7f)
-                    else MaterialTheme.colorScheme.onSurfaceVariant
+                    color =
+                        if (isEnabled) {
+                            MaterialTheme.colorScheme.onPrimaryContainer.copy(
+                                alpha = 0.7f,
+                            )
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                 )
             }
 
             Switch(
                 checked = isEnabled,
                 onCheckedChange = {
-                    enabled -> onToggle(app.packageName, enabled) },
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = MaterialTheme.colorScheme.primary,
-                    checkedTrackColor = MaterialTheme
-                        .colorScheme.primaryContainer
-                )
+                        enabled ->
+                    onToggle(app.packageName, enabled)
+                },
+                colors =
+                    SwitchDefaults.colors(
+                        checkedThumbColor = MaterialTheme.colorScheme.primary,
+                        checkedTrackColor =
+                            MaterialTheme
+                                .colorScheme.primaryContainer,
+                    ),
             )
         }
     }

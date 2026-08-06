@@ -12,7 +12,7 @@ import dagger.multibindings.StringKey
 @Module
 @InstallIn(SingletonComponent::class)
 abstract class TunnelModule {
-
-    @Binds @IntoMap @StringKey("socks5")
+    @Binds @IntoMap
+    @StringKey("socks5")
     abstract fun bindSocks5(impl: Socks5TunnelPlugin): TunnelPlugin
 }

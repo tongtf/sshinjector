@@ -15,7 +15,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -65,33 +64,40 @@ fun DomainListSettingsScreen(
                 title = { Text(stringResource(R.string.domain_list_title)) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.back))
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.back),
+                        )
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer
-                )
+                colors =
+                    TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    ),
             )
-        }
+        },
     ) { innerPadding ->
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text(stringResource(R.string.domain_list_url_label),
-                        fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        stringResource(R.string.domain_list_url_label),
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
                     Spacer(Modifier.height(8.dp))
                     Text(
                         stringResource(R.string.domain_list_url_desc),
                         fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(12.dp))
                     OutlinedTextField(
@@ -99,88 +105,130 @@ fun DomainListSettingsScreen(
                         onValueChange = { urlInput = it },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
-                        label = { Text(stringResource(
-                            R.string.domain_list_url_hint)) }
+                        label = {
+                            Text(
+                                stringResource(
+                                    R.string.domain_list_url_hint,
+                                ),
+                            )
+                        },
                     )
                     Spacer(Modifier.height(12.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         Button(
-                            onClick = { guard {
-                                viewModel.setDomainListUrl(
-                                    urlInput.trim()) } },
-                            modifier = Modifier.weight(1f)
-                        ) { Text(stringResource(
-                            R.string.domain_list_save_url)) }
+                            onClick = {
+                                guard {
+                                    viewModel.setDomainListUrl(
+                                        urlInput.trim(),
+                                    )
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(
+                                stringResource(
+                                    R.string.domain_list_save_url,
+                                ),
+                            )
+                        }
                         TextButton(onClick = {
                             urlInput = SettingsDataStore.DEFAULT_DOMAIN_LIST_URL
                             viewModel.resetToDefault()
-                        }) { Text(stringResource(
-                            R.string.domain_list_reset_default)) }
+                        }) {
+                            Text(
+                                stringResource(
+                                    R.string.domain_list_reset_default,
+                                ),
+                            )
+                        }
                     }
                 }
             }
 
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text(stringResource(R.string.domain_list_status),
-                        fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        stringResource(R.string.domain_list_status),
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
                     Spacer(Modifier.height(8.dp))
                     when (val s = state) {
-                        is DomainListState.Idle -> StatusRow(
-                            stringResource(R.string.domain_list_status),
-                            stringResource(R.string.domain_list_status_unloaded))
-                        is DomainListState.Loading -> StatusRow(
-                            stringResource(R.string.domain_list_status),
-                            stringResource(R.string.domain_list_status_loading))
+                        is DomainListState.Idle ->
+                            StatusRow(
+                                stringResource(R.string.domain_list_status),
+                                stringResource(R.string.domain_list_status_unloaded),
+                            )
+                        is DomainListState.Loading ->
+                            StatusRow(
+                                stringResource(R.string.domain_list_status),
+                                stringResource(R.string.domain_list_status_loading),
+                            )
                         is DomainListState.Ready -> {
                             StatusRow(
                                 stringResource(R.string.domain_list_status),
                                 stringResource(
-                                    R.string.domain_list_status_loaded))
+                                    R.string.domain_list_status_loaded,
+                                ),
+                            )
                             StatusRow(
                                 stringResource(R.string.domain_list_rule_count),
-                                s.matcher.ruleCount.toString())
+                                s.matcher.ruleCount.toString(),
+                            )
                             StatusRow(
                                 stringResource(R.string.domain_list_source),
                                 when (s.source) {
                                     DomainListSource.BUILTIN ->
                                         stringResource(
-                                            R.string.domain_list_source_builtin)
+                                            R.string.domain_list_source_builtin,
+                                        )
                                     DomainListSource.DISK ->
                                         stringResource(
-                                            R.string.domain_list_source_disk)
+                                            R.string.domain_list_source_disk,
+                                        )
                                     DomainListSource.URL ->
                                         stringResource(
-                                            R.string.domain_list_source_url)
-                                })
+                                            R.string.domain_list_source_url,
+                                        )
+                                },
+                            )
                             StatusRow(
                                 stringResource(
-                                    R.string.domain_list_update_time),
-                                s.updatedAt?.let(::formatTime) ?: "?")
+                                    R.string.domain_list_update_time,
+                                ),
+                                s.updatedAt?.let(::formatTime) ?: "?",
+                            )
                         }
                         is DomainListState.Error -> {
                             StatusRow(
                                 stringResource(R.string.domain_list_status),
                                 stringResource(
-                                    R.string.domain_list_status_failed))
+                                    R.string.domain_list_status_failed,
+                                ),
+                            )
                             StatusRow(
                                 stringResource(R.string.domain_list_status),
-                                s.message)
+                                s.message,
+                            )
                         }
                     }
                     Spacer(Modifier.height(16.dp))
                     Button(
                         onClick = { guard { viewModel.updateList() } },
                         enabled = state !is DomainListState.Loading,
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text(
-                        if (state is DomainListState.Loading)
-                            stringResource(R.string.domain_list_updating)
-                        else
-                            stringResource(R.string.domain_list_update_now)) }
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            if (state is DomainListState.Loading) {
+                                stringResource(R.string.domain_list_updating)
+                            } else {
+                                stringResource(R.string.domain_list_update_now)
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -188,22 +236,31 @@ fun DomainListSettingsScreen(
 }
 
 @Composable
-private fun StatusRow(label: String, value: String) {
+private fun StatusRow(
+    label: String,
+    value: String,
+) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, fontSize = 14.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            label,
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Spacer(Modifier.width(12.dp))
         Text(value, fontSize = 14.sp, fontWeight = FontWeight.Medium)
     }
 }
 
 private fun formatTime(timestamp: Long): String {
-    return SimpleDateFormat("yyyy-MM-dd HH:mm",
-        Locale.getDefault()).format(Date(timestamp))
+    return SimpleDateFormat(
+        "yyyy-MM-dd HH:mm",
+        Locale.getDefault(),
+    ).format(Date(timestamp))
 }

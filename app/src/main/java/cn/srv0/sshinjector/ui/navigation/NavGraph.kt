@@ -2,9 +2,9 @@ package cn.srv0.sshinjector.ui.navigation
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
-import androidx.navigation.NavHostController
 import cn.srv0.sshinjector.ui.screen.dashboard.DashboardScreen
 import cn.srv0.sshinjector.ui.screen.keymanager.KeyAddScreen
 import cn.srv0.sshinjector.ui.screen.keymanager.KeyManagerScreen
@@ -15,28 +15,28 @@ import cn.srv0.sshinjector.ui.screen.settings.SettingsScreen
 import cn.srv0.sshinjector.ui.screen.whitelist.WhitelistScreen
 
 @Composable
-fun AppNavGraph(navController: NavHostController, modifier: Modifier = Modifier) {
+fun AppNavGraph(
+    navController: NavHostController,
+    modifier: Modifier = Modifier,
+) {
     NavHost(
         navController = navController,
         startDestination = "dashboard",
-        modifier = modifier
+        modifier = modifier,
     ) {
         composable("dashboard") {
             DashboardScreen(
-                onNavigateToServers = { navController.navigate("servers") },
                 onNavigateToServerAdd = { navController.navigate("server/edit/-1") },
                 onNavigateToServerEdit = { id -> navController.navigate("server/edit/$id") },
-                onNavigateToWhitelist = { navController.navigate("whitelist") },
-                onNavigateToSettings = { navController.navigate("settings") },
                 onNavigateToKeys = { navController.navigate("keys") },
-                onNavigateToKeyAdd = { navController.navigate("key/add") }
+                onNavigateToKeyAdd = { navController.navigate("key/add") },
             )
         }
         composable("servers") {
             ServerListScreen(
                 onAddServer = { navController.navigate("server/edit/-1") },
                 onEditServer = { id -> navController.navigate("server/edit/$id") },
-                onNavigateBack = { navController.popBackStack() }
+                onNavigateBack = { navController.popBackStack() },
             )
         }
         composable("server/edit/{serverId}") { backStackEntry ->
@@ -44,7 +44,7 @@ fun AppNavGraph(navController: NavHostController, modifier: Modifier = Modifier)
             ServerEditScreen(
                 serverId = serverId,
                 onSave = { navController.popBackStack() },
-                onCancel = { navController.popBackStack() }
+                onCancel = { navController.popBackStack() },
             )
         }
         composable("whitelist") {
@@ -55,7 +55,7 @@ fun AppNavGraph(navController: NavHostController, modifier: Modifier = Modifier)
                 onNavigateToDomainListSettings = { navController.navigate("domain_list_settings") },
                 onNavigateToWhitelist = { navController.navigate("whitelist") },
                 onNavigateToServerManagement = { navController.navigate("servers") },
-                onNavigateToKeyManagement = { navController.navigate("keys") }
+                onNavigateToKeyManagement = { navController.navigate("keys") },
             )
         }
         composable("domain_list_settings") {

@@ -13,9 +13,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -38,7 +38,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -47,7 +46,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,7 +66,7 @@ fun ServerEditScreen(
     onSave: () -> Unit,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
-    viewModel: ServerEditViewModel = hiltViewModel()
+    viewModel: ServerEditViewModel = hiltViewModel(),
 ) {
     val isNew = serverId == -1L
     val snackbarHostState = remember { SnackbarHostState() }
@@ -110,144 +108,219 @@ fun ServerEditScreen(
     }
 
     Scaffold(
+        modifier = modifier,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text(if (isNew)
-                    stringResource(R.string.server_add)
-                else stringResource(R.string.server_edit)) },
+                title = {
+                    Text(
+                        if (isNew) {
+                            stringResource(R.string.server_add)
+                        } else {
+                            stringResource(R.string.server_edit)
+                        },
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onCancel) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.back))
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.back),
+                        )
                     }
                 },
                 actions = {
                     androidx.compose.material3.TextButton(
                         onClick = {
                             guard {
-                                val entity = ServerEntity(
-                                    id = if (isNew) 0 else serverId,
-                                    name = name,
-                                    host = host,
-                                    port = port.toIntOrNull() ?: 22,
-                                    username = username,
-                                    keyAlias = keyAlias,
-                                    isActive = setAsDefault,
-                                    enableIPv6 = enableIPv6,
-                                    mtu = mtu.toIntOrNull() ?: 1500,
-                                    keepAliveInterval = keepAlive.toIntOrNull() ?: 30,
-                                    socksPort = socksPort.toIntOrNull() ?: 1080,
-                                )
+                                val entity =
+                                    ServerEntity(
+                                        id = if (isNew) 0 else serverId,
+                                        name = name,
+                                        host = host,
+                                        port = port.toIntOrNull() ?: 22,
+                                        username = username,
+                                        keyAlias = keyAlias,
+                                        isActive = setAsDefault,
+                                        enableIPv6 = enableIPv6,
+                                        mtu = mtu.toIntOrNull() ?: 1500,
+                                        keepAliveInterval = keepAlive.toIntOrNull() ?: 30,
+                                        socksPort = socksPort.toIntOrNull() ?: 1080,
+                                    )
                                 viewModel.save(serverId, entity, onSave, setAsDefault)
                             }
-                        }
+                        },
                     ) {
-                        Icon(imageVector = Icons.Default.Check,
+                        Icon(
+                            imageVector = Icons.Default.Check,
                             contentDescription = stringResource(R.string.save),
                             modifier = Modifier.size(18.dp),
-                            tint = MaterialTheme.colorScheme.primary)
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text(stringResource(R.string.server_save),
-                            color = MaterialTheme.colorScheme.primary)
+                        Text(
+                            stringResource(R.string.server_save),
+                            color = MaterialTheme.colorScheme.primary,
+                        )
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer
-                )
+                colors =
+                    TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    ),
             )
-        }
+        },
     ) { innerPadding ->
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(16.dp)
+                    .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                colors =
+                    CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                    ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text(stringResource(R.string.server_field_basic),
-                        fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        stringResource(R.string.server_field_basic),
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextFieldRow(stringResource(R.string.server_name),
+                    OutlinedTextFieldRow(
+                        stringResource(R.string.server_name),
                         stringResource(R.string.server_placeholder_name),
-                        name, { name = it })
-                    OutlinedTextFieldRow(stringResource(R.string.server_host),
+                        name,
+                        { name = it },
+                    )
+                    OutlinedTextFieldRow(
+                        stringResource(R.string.server_host),
                         stringResource(R.string.server_placeholder_host),
-                        host, { host = it }, singleLine = true)
-                    OutlinedTextFieldRow(stringResource(R.string.server_port),
+                        host,
+                        { host = it },
+                        singleLine = true,
+                    )
+                    OutlinedTextFieldRow(
+                        stringResource(R.string.server_port),
                         stringResource(R.string.server_placeholder_port),
-                        port, { port = it }, singleLine = true, numeric = true)
-                    OutlinedTextFieldRow(stringResource(R.string.server_username),
+                        port,
+                        { port = it },
+                        singleLine = true,
+                        numeric = true,
+                    )
+                    OutlinedTextFieldRow(
+                        stringResource(R.string.server_username),
                         stringResource(R.string.server_placeholder_username),
-                        username, { username = it }, singleLine = true)
-                    KeyAliasSelector(keyAlias, availableKeys, showKeyDropdown,
-                        onSelect = { keyAlias = it; showKeyDropdown = false },
+                        username,
+                        { username = it },
+                        singleLine = true,
+                    )
+                    KeyAliasSelector(
+                        keyAlias,
+                        availableKeys,
+                        showKeyDropdown,
+                        onSelect = {
+                            keyAlias = it
+                            showKeyDropdown = false
+                        },
                         onToggleDropdown = { showKeyDropdown = !showKeyDropdown },
                         onGenerate = {
                             viewModel.generateAndAssociate {
-                                newAlias -> keyAlias = newAlias } })
+                                    newAlias ->
+                                keyAlias = newAlias
+                            }
+                        },
+                    )
                 }
             }
 
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                colors =
+                    CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                    ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text(stringResource(R.string.server_field_tunnel),
-                        fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        stringResource(R.string.server_field_tunnel),
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextFieldRow(
                         stringResource(R.string.server_socks_port),
                         stringResource(R.string.server_placeholder_socks),
-                        socksPort, { socksPort = it },
-                        singleLine = true, numeric = true)
+                        socksPort,
+                        { socksPort = it },
+                        singleLine = true,
+                        numeric = true,
+                    )
                 }
             }
 
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                colors =
+                    CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                    ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text(stringResource(R.string.server_field_network),
-                        fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        stringResource(R.string.server_field_network),
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
-                    SwitchRow(stringResource(R.string.server_set_default),
-                        setAsDefault, { setAsDefault = it })
-                    SwitchRow(stringResource(R.string.server_enable_ipv6),
-                        enableIPv6, { enableIPv6 = it })
+                    SwitchRow(
+                        stringResource(R.string.server_set_default),
+                        setAsDefault,
+                        { setAsDefault = it },
+                    )
+                    SwitchRow(
+                        stringResource(R.string.server_enable_ipv6),
+                        enableIPv6,
+                        { enableIPv6 = it },
+                    )
                     OutlinedTextFieldRow(
-                        stringResource(R.string.server_mtu), "1500",
-                        mtu, { mtu = it }, singleLine = true, numeric = true)
+                        stringResource(R.string.server_mtu),
+                        "1500",
+                        mtu,
+                        { mtu = it },
+                        singleLine = true,
+                        numeric = true,
+                    )
                     OutlinedTextFieldRow(
-                        stringResource(R.string.server_keepalive), "30",
-                        keepAlive, { keepAlive = it },
-                        singleLine = true, numeric = true)
+                        stringResource(R.string.server_keepalive),
+                        "30",
+                        keepAlive,
+                        { keepAlive = it },
+                        singleLine = true,
+                        numeric = true,
+                    )
                 }
             }
 
@@ -255,32 +328,39 @@ fun ServerEditScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer
-                    ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                    colors =
+                        CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                        ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Button(
                             modifier = Modifier.fillMaxWidth(),
-                            onClick = { guard {
-                                viewModel.delete(serverId, onSave) } },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.error,
-                                contentColor = MaterialTheme.colorScheme.onError
-                            )
+                            onClick = {
+                                guard {
+                                    viewModel.delete(serverId, onSave)
+                                }
+                            },
+                            colors =
+                                ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.error,
+                                    contentColor = MaterialTheme.colorScheme.onError,
+                                ),
                         ) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Icon(Icons.Default.Delete,
+                                Icon(
+                                    Icons.Default.Delete,
                                     contentDescription = null,
-                                    modifier = Modifier.size(20.dp))
+                                    modifier = Modifier.size(20.dp),
+                                )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(stringResource(R.string.server_delete))
                             }
@@ -299,7 +379,7 @@ fun OutlinedTextFieldRow(
     value: String,
     onValueChange: (String) -> Unit,
     singleLine: Boolean = false,
-    numeric: Boolean = false
+    numeric: Boolean = false,
 ) {
     androidx.compose.material3.OutlinedTextField(
         value = value,
@@ -308,19 +388,23 @@ fun OutlinedTextFieldRow(
         label = { Text(label) },
         placeholder = { Text(placeholder) },
         singleLine = singleLine,
-        keyboardOptions = KeyboardOptions(
-            keyboardType = if (numeric) KeyboardType.Number else KeyboardType.Text
-        )
+        keyboardOptions =
+            KeyboardOptions(
+                keyboardType = if (numeric) KeyboardType.Number else KeyboardType.Text,
+            ),
     )
 }
 
 @Composable
-fun SwitchRow(label: String, checked: Boolean,
-              onCheckedChange: (Boolean) -> Unit) {
+fun SwitchRow(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, fontSize = 16.sp)
         Switch(checked = checked, onCheckedChange = onCheckedChange)
@@ -334,27 +418,33 @@ fun KeyAliasSelector(
     isDropdownExpanded: Boolean,
     onSelect: (String) -> Unit,
     onToggleDropdown: () -> Unit,
-    onGenerate: () -> Unit
+    onGenerate: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         if (availableKeys.isEmpty()) {
             Button(
                 onClick = onGenerate,
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                )
+                colors =
+                    ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    ),
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
+                    horizontalArrangement = Arrangement.Center,
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null,
-                        modifier = Modifier.size(20.dp))
+                    Icon(
+                        Icons.Default.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(stringResource(R.string.server_generate_and_assoc),
-                        fontSize = 14.sp)
+                    Text(
+                        stringResource(R.string.server_generate_and_assoc),
+                        fontSize = 14.sp,
+                    )
                 }
             }
         } else {
@@ -364,45 +454,67 @@ fun KeyAliasSelector(
                     onValueChange = {},
                     readOnly = true,
                     label = { Text(stringResource(R.string.server_key)) },
-                    placeholder = { Text(
-                        stringResource(R.string.server_key_placeholder)) },
-                    trailingIcon = {
-                        Icon(Icons.Default.KeyboardArrowDown,
-                            contentDescription = null,
-                            modifier = Modifier.size(24.dp))
+                    placeholder = {
+                        Text(
+                            stringResource(R.string.server_key_placeholder),
+                        )
                     },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onToggleDropdown() }
+                    trailingIcon = {
+                        Icon(
+                            Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            modifier = Modifier.size(24.dp),
+                        )
+                    },
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onToggleDropdown() },
                 )
                 Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .clickable { onToggleDropdown() }
+                    modifier =
+                        Modifier
+                            .matchParentSize()
+                            .clickable { onToggleDropdown() },
                 )
                 DropdownMenu(
                     expanded = isDropdownExpanded,
-                    onDismissRequest = { onToggleDropdown() }
+                    onDismissRequest = { onToggleDropdown() },
                 ) {
                     availableKeys.forEach { key ->
                         DropdownMenuItem(
                             text = { Text(key) },
                             onClick = { onSelect(key) },
-                            trailingIcon = if (key == selectedAlias) {
-                                { Icon(Icons.Default.Check,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)) }
-                            } else null
+                            trailingIcon =
+                                if (key == selectedAlias) {
+                                    {
+                                        Icon(
+                                            Icons.Default.Check,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    }
+                                } else {
+                                    null
+                                },
                         )
                     }
                     HorizontalDivider()
                     DropdownMenuItem(
-                        text = { Text(stringResource(R.string.server_generate_key),
-                            color = MaterialTheme.colorScheme.primary) },
+                        text = {
+                            Text(
+                                stringResource(R.string.server_generate_key),
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        },
                         onClick = onGenerate,
-                        leadingIcon = { Icon(Icons.Default.Add,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)) }
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Add,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        },
                     )
                 }
             }

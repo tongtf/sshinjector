@@ -5,7 +5,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
-import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -15,32 +14,33 @@ import android.os.ParcelFileDescriptor
 import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.data.local.dao.WhitelistDao
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
-import cn.srv0.sshinjector.domain.model.ServerConfig
-import cn.srv0.sshinjector.domain.model.VpnState as DomainVpnState
 import cn.srv0.sshinjector.domain.model.ConnectionStats
+import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import cn.srv0.sshinjector.domain.usecase.VpnController
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.cancelChildren
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import cn.srv0.sshinjector.domain.model.VpnState as DomainVpnState
 
 @AndroidEntryPoint
 class SshVpnService : VpnService() {
-
     @Inject lateinit var vpnController: VpnController
+
     @Inject lateinit var serverRepository: ServerRepository
+
     @Inject lateinit var whitelistDao: WhitelistDao
+
     @Inject lateinit var settingsDataStore: SettingsDataStore
 
     private var vpnInterface: ParcelFileDescriptor? = null
@@ -67,19 +67,24 @@ class SshVpnService : VpnService() {
         registerNetworkCallback()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    override fun onStartCommand(
+        intent: Intent?,
+        flags: Int,
+        startId: Int,
+    ): Int {
         when (intent?.action) {
             ACTION_CONNECT -> {
                 // 必须立即启动前台服务，否则会崩溃
-                val notification = buildNotification(
-                    ServerConfig(
-                        name = "SSHInjector",
-                        host = "",
-                        username = "",
-                        keyAlias = ""
-                    ),
-                    "连接中..."
-                )
+                val notification =
+                    buildNotification(
+                        ServerConfig(
+                            name = "SSHInjector",
+                            host = "",
+                            username = "",
+                            keyAlias = "",
+                        ),
+                        "连接中...",
+                    )
                 // 不传递 foregroundServiceType，让系统使用 manifest 中声明的类型
                 startForeground(NOTIFICATION_ID, notification)
 
@@ -121,16 +126,18 @@ class SshVpnService : VpnService() {
         serviceVpnState.value = DomainVpnState(status = DomainVpnState.VpnStatus.Connecting)
 
         try {
-            val config: ServerConfig = serverRepository.getServerById(serverId)
-                ?: throw IllegalArgumentException("Server not found")
+            val config: ServerConfig =
+                serverRepository.getServerById(serverId)
+                    ?: throw IllegalArgumentException("Server not found")
             currentServer = config
 
             val dnsMode = settingsDataStore.dnsMode.first()
-            val allowedPackages = if (dnsMode == 2) {
-                whitelistDao.getEnabledPackageNames()
-            } else emptyList()
-
-            val dnsModeText = cn.srv0.sshinjector.ui.viewmodel.dnsModeLabel(dnsMode, this)
+            val allowedPackages =
+                if (dnsMode == 2) {
+                    whitelistDao.getEnabledPackageNames()
+                } else {
+                    emptyList()
+                }
 
             // 记录连接配置日志
 
@@ -158,19 +165,27 @@ class SshVpnService : VpnService() {
             startWhitelistObserver()
         } catch (e: Exception) {
             lastError.value = e.message
-            serviceVpnState.value = DomainVpnState(
-                status = DomainVpnState.VpnStatus.Failed,
-                error = e.message
-            )
+            serviceVpnState.value =
+                DomainVpnState(
+                    status = DomainVpnState.VpnStatus.Failed,
+                    error = e.message,
+                )
             disconnect()
         }
     }
 
-    private fun establishVpnInterface(config: ServerConfig, allowedPackages: List<String>, dnsMode: Int): java.io.FileDescriptor {
+    private fun establishVpnInterface(
+        config: ServerConfig,
+        allowedPackages: List<String>,
+        dnsMode: Int,
+    ): java.io.FileDescriptor {
         val builder = buildVpnBuilder(config, allowedPackages, dnsMode)
         val newVpnInterface = builder.establish()
         // 关闭旧接口 (重建场景), 避免 fd 泄漏
-        try { vpnInterface?.close() } catch (_: Exception) {}
+        try {
+            vpnInterface?.close()
+        } catch (_: Exception) {
+        }
         vpnInterface = newVpnInterface
         tunFd = vpnInterface?.fileDescriptor
         return tunFd ?: throw RuntimeException("Failed to establish VPN interface")
@@ -185,18 +200,23 @@ class SshVpnService : VpnService() {
     }
 
     private suspend fun rebuildVpnInterfaceInternal() {
-        val config = currentServer ?: run {
-            return
-        }
+        val config =
+            currentServer ?: run {
+                return
+            }
         try {
             val dnsMode = settingsDataStore.dnsMode.first()
-            val allowedPackages = if (dnsMode == 2) {
-                whitelistDao.getEnabledPackageNames()
-            } else emptyList()
+            val allowedPackages =
+                if (dnsMode == 2) {
+                    whitelistDao.getEnabledPackageNames()
+                } else {
+                    emptyList()
+                }
             // 关闭旧 TUN 接口并更新 VpnController 的流 (由 rebuildTunInterface 处理旧流关闭)
             val fd = establishVpnInterface(config, allowedPackages, dnsMode)
             vpnController.rebuildTunInterface(fd)
         } catch (e: Exception) {
+            android.util.Log.e("SshVpnService", "rebuildVpnInterfaceInternal failed", e)
         }
     }
 
@@ -210,37 +230,43 @@ class SshVpnService : VpnService() {
         whitelistObserverJob?.cancel()
         whitelistObserverInitial = false
         rebuildInProgress = false
-        whitelistObserverJob = scope.launch {
-            whitelistDao.getEnabled()
-                .map { list -> list.map { it.packageName }.toSet() }
-                .distinctUntilChanged()
-                .collectLatest { packages ->
-                    // 跳过首次发射 (连接时已按当前白名单建立接口)
-                    if (!whitelistObserverInitial) {
-                        whitelistObserverInitial = true
-                        return@collectLatest
-                    }
-                    val mode = settingsDataStore.dnsMode.first()
-                    if (mode == 2 && vpnController.isVpnRunning() && !rebuildInProgress) {
-                        rebuildInProgress = true
-                        try {
-                            rebuildVpnInterfaceInternal()
-                        } finally {
-                            rebuildInProgress = false
+        whitelistObserverJob =
+            scope.launch {
+                whitelistDao.getEnabled()
+                    .map { list -> list.map { it.packageName }.toSet() }
+                    .distinctUntilChanged()
+                    .collectLatest { packages ->
+                        // 跳过首次发射 (连接时已按当前白名单建立接口)
+                        if (!whitelistObserverInitial) {
+                            whitelistObserverInitial = true
+                            return@collectLatest
+                        }
+                        val mode = settingsDataStore.dnsMode.first()
+                        if (mode == 2 && vpnController.isVpnRunning() && !rebuildInProgress) {
+                            rebuildInProgress = true
+                            try {
+                                rebuildVpnInterfaceInternal()
+                            } finally {
+                                rebuildInProgress = false
+                            }
                         }
                     }
-                }
-        }
+            }
     }
 
-    private fun buildVpnBuilder(config: ServerConfig, allowedPackages: List<String>, dnsMode: Int): Builder {
-        val builder = Builder()
-            .setSession("SSHInjector VPN")
-            .addAddress("10.0.0.1", 24)
-            .addAddress("fd00::1", 64)
-            .addDnsServer("10.0.0.2")
-            .setMtu(config.mtu)
-            .setBlocking(true)
+    private fun buildVpnBuilder(
+        config: ServerConfig,
+        allowedPackages: List<String>,
+        dnsMode: Int,
+    ): Builder {
+        val builder =
+            Builder()
+                .setSession("SSHInjector VPN")
+                .addAddress("10.0.0.1", 24)
+                .addAddress("fd00::1", 64)
+                .addDnsServer("10.0.0.2")
+                .setMtu(config.mtu)
+                .setBlocking(true)
 
         // 白名单模式使用 addAllowedApplication 限定允许应用, 与 addDisallowedApplication 互斥,
         // 因此该模式下不排除自身 (自身不在白名单内时自然走直连, 不进 TUN)。
@@ -248,7 +274,6 @@ class SshVpnService : VpnService() {
         if (!isWhitelistMode) {
             builder.addDisallowedApplication(packageName)
         }
-
 
         when (dnsMode) {
             0 -> {
@@ -266,7 +291,6 @@ class SshVpnService : VpnService() {
                 if (allowedPackages.isNotEmpty()) {
                     builder.addRoute("0.0.0.0", 0)
                     builder.addRoute("::", 0)
-                } else {
                 }
             }
             3 -> {
@@ -277,10 +301,6 @@ class SshVpnService : VpnService() {
             }
         }
 
-        if (isWhitelistMode) {
-        } else {
-        }
-
         if (dnsMode == 2 && allowedPackages.isNotEmpty()) {
             for (pkg in allowedPackages) {
                 // 自身应用加入白名单会走 TUN 形成回路, 跳过
@@ -289,8 +309,8 @@ class SshVpnService : VpnService() {
                 }
                 try {
                     builder.addAllowedApplication(pkg)
-                } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
-                } catch (e: UnsupportedOperationException) {
+                } catch (ignored: android.content.pm.PackageManager.NameNotFoundException) {
+                } catch (ignored: UnsupportedOperationException) {
                 }
             }
         }
@@ -299,14 +319,15 @@ class SshVpnService : VpnService() {
     }
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            "VPN Service",
-            NotificationManager.IMPORTANCE_LOW
-        ).apply {
-            description = "SSHInjector VPN 连接状态"
-            setShowBadge(false)
-        }
+        val channel =
+            NotificationChannel(
+                CHANNEL_ID,
+                "VPN Service",
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                description = "SSHInjector VPN 连接状态"
+                setShowBadge(false)
+            }
         notificationManager?.createNotificationChannel(channel)
     }
 
@@ -321,29 +342,46 @@ class SshVpnService : VpnService() {
         notificationManager?.notify(NOTIFICATION_ID, notification)
     }
 
-    private fun buildNotification(config: ServerConfig, status: String): Notification {
-        val intent = Intent(this, cn.srv0.sshinjector.ui.MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0, intent, PendingIntent.FLAG_IMMUTABLE
-        )
+    private fun buildNotification(
+        config: ServerConfig,
+        status: String,
+    ): Notification {
+        val intent =
+            Intent(this, cn.srv0.sshinjector.ui.MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+            }
+        val pendingIntent =
+            PendingIntent.getActivity(
+                this,
+                0,
+                intent,
+                PendingIntent.FLAG_IMMUTABLE,
+            )
 
-        val disconnectIntent = Intent(this, SshVpnService::class.java).apply {
-            action = ACTION_DISCONNECT
-        }
-        val disconnectPendingIntent = PendingIntent.getService(
-            this, 1, disconnectIntent, PendingIntent.FLAG_IMMUTABLE
-        )
+        val disconnectIntent =
+            Intent(this, SshVpnService::class.java).apply {
+                action = ACTION_DISCONNECT
+            }
+        val disconnectPendingIntent =
+            PendingIntent.getService(
+                this,
+                1,
+                disconnectIntent,
+                PendingIntent.FLAG_IMMUTABLE,
+            )
 
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("SSHInjector")
             .setContentText("${config.name} - $status")
             .setSmallIcon(R.drawable.ic_vpn_key)
             .setContentIntent(pendingIntent)
-            .addAction(Notification.Action.Builder(
-                null, "断开", disconnectPendingIntent
-            ).build())
+            .addAction(
+                Notification.Action.Builder(
+                    null,
+                    "断开",
+                    disconnectPendingIntent,
+                ).build(),
+            )
             .setOngoing(true)
             .build()
     }
@@ -366,7 +404,10 @@ class SshVpnService : VpnService() {
 
         // 2. 关闭 VPN 接口
         android.util.Log.d("SshVpnService", "Closing VPN interface...")
-        try { vpnInterface?.close() } catch (_: Exception) {}
+        try {
+            vpnInterface?.close()
+        } catch (_: Exception) {
+        }
         vpnInterface = null
         tunFd = null
 
@@ -413,33 +454,53 @@ class SshVpnService : VpnService() {
     private fun registerNetworkCallback() {
         try {
             connectivityManager = getSystemService(ConnectivityManager::class.java)
-            val request = NetworkRequest.Builder()
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-                .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
-                .build()
+            val request =
+                NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                    .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
+                    .build()
             connectivityManager?.registerNetworkCallback(request, networkCallback)
         } catch (e: Exception) {
             android.util.Log.e("SshVpnService", "Failed to register network callback: ${e.message}")
         }
     }
 
-    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) = handleNetworkEvent(network, isLost = false)
-        override fun onLost(network: Network) = handleNetworkEvent(network, isLost = true)
-    }
+    private val networkCallback =
+        object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = handleNetworkEvent(network, isLost = false)
+
+            override fun onLost(network: Network) = handleNetworkEvent(network, isLost = true)
+        }
 
     /**
      * 处理网络事件。去重以 (网络id, 事件类型) 为键:
      * 同一网络的 onAvailable/onLost 是不同事件, 必须都放行;
      * 仅对同一网络的相同类型重复事件去重 (如注册时对已存在网络的 onAvailable)。
      */
-    private fun handleNetworkEvent(network: Network?, isLost: Boolean) {
-        val id = try { network?.networkHandle ?: -1L } catch (_: Exception) { -1L }
+    private fun handleNetworkEvent(
+        network: Network?,
+        isLost: Boolean,
+    ) {
+        val id =
+            try {
+                network?.networkHandle ?: -1L
+            } catch (_: Exception) {
+                -1L
+            }
         // 跳过 VPN 自身的 TUN 网络
-        val caps = try { connectivityManager?.getNetworkCapabilities(network) } catch (_: Exception) { null }
+        val caps =
+            try {
+                connectivityManager?.getNetworkCapabilities(network)
+            } catch (_: Exception) {
+                null
+            }
         if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
-        android.util.Log.d("SshVpnService", "Network event: id=$id lost=$isLost last=$lastNetworkId lastLost=$lastEventWasLost running=${vpnController.isVpnRunning()}, reconnecting=$isReconnecting")
+        android.util.Log.d(
+            "SshVpnService",
+            "Network event: id=$id lost=$isLost last=$lastNetworkId lastLost=$lastEventWasLost " +
+                "running=${vpnController.isVpnRunning()}, reconnecting=$isReconnecting",
+        )
         // 同一网络 + 同一事件类型的重复事件不触发 (去抖已覆盖时序)
         if (id == lastNetworkId && isLost == lastEventWasLost) return
         lastNetworkId = id
@@ -447,13 +508,14 @@ class SshVpnService : VpnService() {
         // 仅在 VPN 运行且未在重连时, 网络切换触发去抖重连
         if (!vpnController.isVpnRunning() || isReconnecting) return
         reconnectJob?.cancel()
-        reconnectJob = scope.launch {
-            delay(NETWORK_RECONNECT_DEBOUNCE_MS)
-            if (vpnController.isVpnRunning() && !isReconnecting && currentServer != null) {
-                android.util.Log.d("SshVpnService", "Triggering auto reconnect after debounce")
-                autoReconnect()
+        reconnectJob =
+            scope.launch {
+                delay(NETWORK_RECONNECT_DEBOUNCE_MS)
+                if (vpnController.isVpnRunning() && !isReconnecting && currentServer != null) {
+                    android.util.Log.d("SshVpnService", "Triggering auto reconnect after debounce")
+                    autoReconnect()
+                }
             }
-        }
     }
 
     /**
@@ -471,15 +533,21 @@ class SshVpnService : VpnService() {
             if (vpnController.isVpnRunning()) {
                 vpnController.disconnect()
             }
-            try { vpnInterface?.close() } catch (_: Exception) {}
+            try {
+                vpnInterface?.close()
+            } catch (_: Exception) {
+            }
             vpnInterface = null
             tunFd = null
 
             // 2. 重建接口并重连
             val dnsMode = settingsDataStore.dnsMode.first()
-            val allowedPackages = if (dnsMode == 2) {
-                whitelistDao.getEnabledPackageNames()
-            } else emptyList()
+            val allowedPackages =
+                if (dnsMode == 2) {
+                    whitelistDao.getEnabledPackageNames()
+                } else {
+                    emptyList()
+                }
             val fd = establishVpnInterface(config, allowedPackages, dnsMode)
             vpnController.setVpnInterface(fd)
             vpnController.setProtectFunction { socket -> this.protect(socket) }
@@ -495,10 +563,11 @@ class SshVpnService : VpnService() {
             android.util.Log.d("SshVpnService", "Auto reconnect succeeded to ${config.name}")
         } catch (e: Exception) {
             lastError.value = e.message
-            serviceVpnState.value = DomainVpnState(
-                status = DomainVpnState.VpnStatus.Failed,
-                error = e.message
-            )
+            serviceVpnState.value =
+                DomainVpnState(
+                    status = DomainVpnState.VpnStatus.Failed,
+                    error = e.message,
+                )
             disconnect()
         } finally {
             isReconnecting = false

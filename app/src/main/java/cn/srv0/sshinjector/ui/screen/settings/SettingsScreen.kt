@@ -35,11 +35,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.srv0.sshinjector.R
@@ -54,7 +53,7 @@ fun SettingsScreen(
     onNavigateToWhitelist: () -> Unit = {},
     onNavigateToServerManagement: () -> Unit = {},
     onNavigateToKeyManagement: () -> Unit = {},
-    viewModel: SettingsViewModel = hiltViewModel()
+    viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val biometricUnlock by viewModel.biometricUnlock.collectAsState()
     val mtu by viewModel.mtu.collectAsState()
@@ -70,75 +69,105 @@ fun SettingsScreen(
     val biometricAuth = fragmentActivity?.let { cn.srv0.sshinjector.ui.biometric.BiometricAuth.from(it) }
 
     Scaffold(
+        modifier = modifier,
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.settings_title)) },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer
-                )
+                colors =
+                    TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    ),
             )
         },
     ) { innerPadding ->
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .verticalScroll(rememberScrollState()),
         ) {
             SettingsSection(stringResource(R.string.settings_management)) {
                 SettingsRow(
                     title = stringResource(R.string.settings_server_management),
                     subtitle = stringResource(R.string.settings_server_management_desc),
-                    trailing = { Icon(Icons.Default.Settings, contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary) },
-                    onClick = onNavigateToServerManagement
+                    trailing = {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    onClick = onNavigateToServerManagement,
                 )
                 SettingsRow(
                     title = stringResource(R.string.settings_key_management),
                     subtitle = stringResource(R.string.settings_key_management_desc),
-                    trailing = { Icon(Icons.Default.Settings, contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary) },
-                    onClick = onNavigateToKeyManagement
+                    trailing = {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    onClick = onNavigateToKeyManagement,
                 )
                 SettingsRow(
                     title = stringResource(R.string.settings_whitelist),
                     subtitle = stringResource(R.string.settings_whitelist_desc),
-                    trailing = { Icon(Icons.Default.Settings, contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary) },
-                    onClick = onNavigateToWhitelist
+                    trailing = {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    onClick = onNavigateToWhitelist,
                 )
             }
 
             SettingsSection(stringResource(R.string.settings_network)) {
-                Text(stringResource(R.string.settings_mtu, mtu), fontSize = 14.sp,
-                    modifier = Modifier.padding(start = 16.dp, top = 8.dp))
+                Text(
+                    stringResource(R.string.settings_mtu, mtu),
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(start = 16.dp, top = 8.dp),
+                )
                 Slider(
                     value = mtu.toFloat(),
                     onValueChange = { viewModel.setMtu(it.toInt()) },
                     valueRange = 1280f..1500f,
                     steps = 54,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
                 )
 
-                Text(stringResource(R.string.settings_keepalive, keepAlive), fontSize = 14.sp,
-                    modifier = Modifier.padding(start = 16.dp, top = 8.dp))
+                Text(
+                    stringResource(R.string.settings_keepalive, keepAlive),
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(start = 16.dp, top = 8.dp),
+                )
                 Slider(
                     value = keepAlive.toFloat(),
                     onValueChange = { viewModel.setKeepAlive(it.toInt()) },
                     valueRange = 10f..120f,
                     steps = 21,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
                 )
 
                 SettingsRow(
                     title = stringResource(R.string.settings_ipv6),
                     subtitle = stringResource(R.string.settings_ipv6_desc),
-                    trailing = { Switch(checked = enableIPv6,
-                        onCheckedChange = { viewModel.setEnableIPv6(it) }) }
+                    trailing = {
+                        Switch(
+                            checked = enableIPv6,
+                            onCheckedChange = { viewModel.setEnableIPv6(it) },
+                        )
+                    },
                 )
 
                 SettingsRow(
@@ -148,18 +177,23 @@ fun SettingsScreen(
                         Text(
                             text = dnsModeLabel(dnsMode, context),
                             fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.primary
+                            color = MaterialTheme.colorScheme.primary,
                         )
                     },
-                    onClick = { showDnsDialog = true }
+                    onClick = { showDnsDialog = true },
                 )
 
                 SettingsRow(
                     title = stringResource(R.string.settings_domain_list),
                     subtitle = stringResource(R.string.settings_domain_list_desc),
-                    trailing = { Icon(Icons.Default.Settings, contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary) },
-                    onClick = onNavigateToDomainListSettings
+                    trailing = {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    onClick = onNavigateToDomainListSettings,
                 )
 
                 SettingsRow(
@@ -169,10 +203,10 @@ fun SettingsScreen(
                         Text(
                             text = LocaleManager.getDisplayLabel(language, context),
                             fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.primary
+                            color = MaterialTheme.colorScheme.primary,
                         )
                     },
-                    onClick = { showLangDialog = true }
+                    onClick = { showLangDialog = true },
                 )
             }
 
@@ -189,9 +223,9 @@ fun SettingsScreen(
                                 } else {
                                     viewModel.setBiometricUnlock(enabled)
                                 }
-                            }
+                            },
                         )
-                    }
+                    },
                 )
             }
 
@@ -201,20 +235,26 @@ fun SettingsScreen(
                 SettingsRow(
                     title = stringResource(R.string.settings_github),
                     subtitle = stringResource(R.string.settings_github_desc),
-                    trailing = { Icon(Icons.Default.Info, contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary) }
+                    trailing = {
+                        Icon(
+                            Icons.Default.Info,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    },
                 )
             }
         }
     }
 
     if (showLangDialog) {
-        val langOptions = listOf(
-            LocaleManager.LANGUAGE_SYSTEM,
-            LocaleManager.LANGUAGE_CHINESE,
-            LocaleManager.LANGUAGE_ENGLISH,
-            LocaleManager.LANGUAGE_RUSSIAN
-        )
+        val langOptions =
+            listOf(
+                LocaleManager.LANGUAGE_SYSTEM,
+                LocaleManager.LANGUAGE_CHINESE,
+                LocaleManager.LANGUAGE_ENGLISH,
+                LocaleManager.LANGUAGE_RUSSIAN,
+            )
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { showLangDialog = false },
             title = { Text(stringResource(R.string.language_dialog_title)) },
@@ -222,17 +262,24 @@ fun SettingsScreen(
                 Column {
                     langOptions.forEach { code ->
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { viewModel.setLanguage(code); showLangDialog = false }
-                                .padding(vertical = 12.dp),
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        viewModel.setLanguage(code)
+                                        showLangDialog = false
+                                    }
+                                    .padding(vertical = 12.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(LocaleManager.getDisplayLabel(code, context), fontSize = 16.sp)
                             if (language == code) {
-                                Icon(Icons.Default.Settings, contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary)
+                                Icon(
+                                    Icons.Default.Settings,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
                             }
                         }
                     }
@@ -240,16 +287,17 @@ fun SettingsScreen(
                     Text(
                         stringResource(R.string.language_after_change),
                         fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             },
-            confirmButton = { TextButton(onClick = { showLangDialog = false }) {
-                Text(stringResource(R.string.cancel)) }
-            }
+            confirmButton = {
+                TextButton(onClick = { showLangDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
         )
     }
-
 
     if (showDnsDialog) {
         androidx.compose.material3.AlertDialog(
@@ -265,33 +313,45 @@ fun SettingsScreen(
                         2 to stringResource(R.string.dashboard_dns_whitelist) to
                             stringResource(R.string.dns_whitelist_desc),
                         3 to stringResource(R.string.dashboard_dns_domain) to
-                            stringResource(R.string.dns_domain_desc)
+                            stringResource(R.string.dns_domain_desc),
                     ).forEach { (item, desc) ->
                         val (value, label) = item
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { viewModel.setDnsMode(value); showDnsDialog = false }
-                                .padding(vertical = 12.dp),
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        viewModel.setDnsMode(value)
+                                        showDnsDialog = false
+                                    }
+                                    .padding(vertical = 12.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(label, fontSize = 16.sp)
-                                Text(desc, fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    desc,
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
                             }
                             if (dnsMode == value) {
-                                Icon(Icons.Default.Settings, contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary)
+                                Icon(
+                                    Icons.Default.Settings,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
                             }
                         }
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { showDnsDialog = false }) {
-                Text(stringResource(R.string.cancel)) }
-            }
+            confirmButton = {
+                TextButton(onClick = { showDnsDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
         )
     }
 
@@ -310,17 +370,17 @@ fun SettingsScreen(
                                 activity = activity,
                                 title = context.getString(R.string.settings_verify_identity),
                                 onSuccess = { viewModel.setBiometricUnlock(false) },
-                                onCancelled = {}
+                                onCancelled = {},
                             )
                         }
-                    }
+                    },
                 ) { Text(stringResource(R.string.settings_biometric_verify)) }
             },
             dismissButton = {
                 TextButton(onClick = { showBiometricDialog = false }) {
                     Text(stringResource(R.string.cancel))
                 }
-            }
+            },
         )
     }
 }
@@ -328,25 +388,27 @@ fun SettingsScreen(
 @Composable
 fun SettingsSection(
     title: String,
-    content: @Composable ColumnScope.() -> Unit
+    content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp)
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
     ) {
         Text(
             text = title,
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
         )
         Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
         ) {
             Column(Modifier.padding(vertical = 4.dp)) {
                 content()
@@ -360,20 +422,24 @@ fun SettingsRow(
     title: String,
     subtitle: String,
     trailing: @Composable () -> Unit,
-    onClick: (() -> Unit)? = null
+    onClick: (() -> Unit)? = null,
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)
+                .padding(horizontal = 16.dp, vertical = 14.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(text = title, fontSize = 16.sp)
-            Text(text = subtitle, fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = subtitle,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         Spacer(Modifier.width(12.dp))
         trailing()
@@ -381,6 +447,9 @@ fun SettingsRow(
 }
 
 @Composable
-private fun TextButton(onClick: () -> Unit, content: @Composable () -> Unit) {
+private fun TextButton(
+    onClick: () -> Unit,
+    content: @Composable () -> Unit,
+) {
     androidx.compose.material3.TextButton(onClick = onClick) { content() }
 }

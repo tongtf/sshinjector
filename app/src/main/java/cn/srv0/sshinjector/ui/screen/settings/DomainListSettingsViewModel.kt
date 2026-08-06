@@ -13,21 +13,26 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
-class DomainListSettingsViewModel @Inject constructor(
-    private val domainListManager: DomainListManager,
-    private val settingsDataStore: SettingsDataStore,
-) : ViewModel() {
-    val state: StateFlow<DomainListState> = domainListManager.state
-        .stateIn(viewModelScope, SharingStarted.Eagerly, DomainListState.Idle)
+class DomainListSettingsViewModel
+    @Inject
+    constructor(
+        private val domainListManager: DomainListManager,
+        private val settingsDataStore: SettingsDataStore,
+    ) : ViewModel() {
+        val state: StateFlow<DomainListState> =
+            domainListManager.state
+                .stateIn(viewModelScope, SharingStarted.Eagerly, DomainListState.Idle)
 
-    val domainListUrl: StateFlow<String> = settingsDataStore.domainListUrl
-        .stateIn(viewModelScope, SharingStarted.Eagerly, SettingsDataStore.DEFAULT_DOMAIN_LIST_URL)
+        val domainListUrl: StateFlow<String> =
+            settingsDataStore.domainListUrl
+                .stateIn(viewModelScope, SharingStarted.Eagerly, SettingsDataStore.DEFAULT_DOMAIN_LIST_URL)
 
-    fun updateList() = viewModelScope.launch { domainListManager.update() }
+        fun updateList() = viewModelScope.launch { domainListManager.update() }
 
-    fun setDomainListUrl(url: String) = viewModelScope.launch { settingsDataStore.setDomainListUrl(url) }
+        fun setDomainListUrl(url: String) = viewModelScope.launch { settingsDataStore.setDomainListUrl(url) }
 
-    fun resetToDefault() = viewModelScope.launch {
-        settingsDataStore.setDomainListUrl(SettingsDataStore.DEFAULT_DOMAIN_LIST_URL)
+        fun resetToDefault() =
+            viewModelScope.launch {
+                settingsDataStore.setDomainListUrl(SettingsDataStore.DEFAULT_DOMAIN_LIST_URL)
+            }
     }
-}
