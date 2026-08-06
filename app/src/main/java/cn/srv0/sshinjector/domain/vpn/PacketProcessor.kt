@@ -119,12 +119,4 @@ class PacketProcessor
             tcpStateMachine.cleanupStaleConnections(timeoutMs)
             udpRelay.cleanupStaleConnections(timeoutMs)
         }
-
-        /**
-         * 停止内部 TCP/UDP 转发并释放资源（VPN 断开时调用）。
-         */
-        fun stop() {
-            tcpStateMachine.stop()
-            udpRelay.stop()
-        }
     }

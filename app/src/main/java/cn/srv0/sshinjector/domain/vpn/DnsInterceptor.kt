@@ -2,7 +2,6 @@ package cn.srv0.sshinjector.domain.vpn
 
 import android.util.Log
 import cn.srv0.sshinjector.data.local.DomainListManager
-import kotlinx.coroutines.channels.Channel
 import org.xbill.DNS.Flags
 import org.xbill.DNS.Message
 import org.xbill.DNS.Opcode
@@ -12,6 +11,7 @@ import org.xbill.DNS.Section
 import java.net.InetAddress
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
@@ -87,7 +87,7 @@ class DnsInterceptor
             }
         }
 
-        private val pendingResponses = Channel<DnsResponse>(capacity = 256)
+        private val pendingResponses = ConcurrentLinkedQueue<DnsResponse>()
         private val queryIdCounter = AtomicInteger(0)
 
         // 当前传输模式
@@ -414,7 +414,7 @@ class DnsInterceptor
 
                 // 放入响应队列
                 // pending.dstIp 是 DNS 服务器 IP (对于 SYSTEM 模式是物理网卡的 DNS，对于 REMOTE 是 8.8.8.8 等)
-                pendingResponses.trySend(
+                pendingResponses.add(
                     DnsResponse(
                         srcIp = pending.dstIp ?: InetAddress.getByName("8.8.8.8"),
                         dstIp = pending.srcIp,
@@ -517,7 +517,7 @@ class DnsInterceptor
             )
 
             // 发送响应 (DNS 服务器 IP 用假 IP 作为 srcIp, 不影响)
-            pendingResponses.trySend(
+            pendingResponses.add(
                 DnsResponse(
                     srcIp = fakeInetAddress,
                     dstIp = srcIp,
@@ -546,7 +546,7 @@ class DnsInterceptor
             records.forEach { response.addRecord(it, Section.ANSWER) }
 
             // 缓存响应没有特定的源 DNS IP，使用默认
-            pendingResponses.trySend(
+            pendingResponses.add(
                 DnsResponse(
                     srcIp = InetAddress.getByName("8.8.8.8"),
                     dstIp = srcIp,
@@ -567,7 +567,7 @@ class DnsInterceptor
             response.header.setRcode(rcode)
             response.addRecord(pending.question, Section.QUESTION)
 
-            pendingResponses.trySend(
+            pendingResponses.add(
                 DnsResponse(
                     srcIp = pending.dstIp ?: InetAddress.getByName("8.8.8.8"),
                     dstIp = pending.srcIp,
@@ -578,11 +578,11 @@ class DnsInterceptor
         }
 
         /**
-         * 挂起等待待发送的 DNS 响应
-         * 由 VpnController 的投递协程调用写回 TUN 接口
+         * 获取待发送的 DNS 响应
+         * 由 VpnService 调用写回 TUN 接口
          */
-        suspend fun receiveResponse(): DnsResponse {
-            return pendingResponses.receive()
+        fun pollResponse(): DnsResponse? {
+            return pendingResponses.poll()
         }
 
         /**

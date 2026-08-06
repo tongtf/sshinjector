@@ -16,6 +16,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -305,12 +306,6 @@ class VpnController
 
             // 断开 SSH 连接
             // 停止所有隧道插件
-            try {
-                addLog("正在停止数据面转发...", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
-                packetProcessor.stop()
-            } catch (e: Exception) {
-                addLog("数据面停止错误: ${e.message}", cn.srv0.sshinjector.ui.viewmodel.LogLevel.ERROR)
-            }
             try {
                 addLog("正在断开隧道连接...", cn.srv0.sshinjector.ui.viewmodel.LogLevel.INFO)
                 tunnelManager.stopAll()
@@ -707,15 +702,15 @@ class VpnController
         /**
          * 独立 DNS 响应投递协程
          * 修复 REMOTE 模式下 DNS 死锁：DNS 响应不再依赖 processPacket 轮询，
-         * 而是由独立协程通过 Channel 通知机制持续投递到 TUN。
+         * 而是由独立协程持续投递到 TUN。
          */
         private suspend fun dnsResponseDeliveryLoop() {
             while (isRunning) {
-                try {
-                    val dnsResponse = dnsInterceptor.receiveResponse()
+                val dnsResponse = dnsInterceptor.pollResponse()
+                if (dnsResponse != null) {
                     writeDnsResponse(dnsResponse)
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    break
+                } else {
+                    delay(10)
                 }
             }
         }

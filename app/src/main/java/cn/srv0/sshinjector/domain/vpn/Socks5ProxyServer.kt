@@ -6,7 +6,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.IOException
 import java.net.InetSocketAddress
@@ -16,15 +15,12 @@ import java.nio.channels.Selector
 import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
 private val IS_DEBUG = android.util.Log.isLoggable("Socks5Proxy", android.util.Log.DEBUG)
 private const val TIMEOUT_CHECK_INTERVAL_MS = 5000L
-private const val SSH_SEND_QUEUE_CAPACITY = 32
-private const val SSH_SEND_QUEUE_LOW_WATERMARK = 8
 
 /**
  * 本地 SOCKS5 代理服务器 (RFC 1928)
@@ -38,7 +34,6 @@ class Socks5ProxyServer
     constructor(
         private val sshChannelFactory: SshChannelFactory,
         private val dnsInterceptor: DnsInterceptor,
-        private val sshIoDispatcher: SshIoDispatcher,
     ) {
         private var serverChannel: ServerSocketChannel? = null
         private var selector: Selector? = null
@@ -203,7 +198,6 @@ class Socks5ProxyServer
                     id = connectionId,
                     channel = clientChannel,
                     sshChannelFactory = sshChannelFactory,
-                    sshIoDispatcher = sshIoDispatcher,
                     onDataSent = { bytes -> totalBytesUp.value = totalBytesUp.value + bytes },
                     onDataReceived = { bytes -> totalBytesDown.value = totalBytesDown.value + bytes },
                     onClosed = {
@@ -271,7 +265,6 @@ private class Socks5Connection(
     val id: Long,
     val channel: SocketChannel,
     private val sshChannelFactory: SshChannelFactory?,
-    private val sshIoDispatcher: SshIoDispatcher,
     private val onDataSent: (Long) -> Unit,
     private val onDataReceived: (Long) -> Unit,
     private val onClosed: () -> Unit,
@@ -289,12 +282,6 @@ private class Socks5Connection(
     internal var tunCallbackKey: Int = 0
     internal var pendingTunCallbacksRef: java.util.concurrent.ConcurrentHashMap<Int, (ByteArray) -> Unit>? = null
 
-    // 出向(本地 SOCKS → SSH)有界发送队列: eventLoop 只入队, 独立写协程消费,
-    // 队列满时暂停本地 OP_READ 实现背压, 避免阻塞写卡死事件循环
-    private val pendingToSsh = BoundedBackpressureQueue(SSH_SEND_QUEUE_CAPACITY)
-
-    @Volatile private var pendingToSshFull = false
-
     // 超时配置
     private var lastActivity = System.currentTimeMillis()
     private val connectionTimeoutMs = 10000L // 连接建立超时 10s
@@ -303,7 +290,7 @@ private class Socks5Connection(
 
     private val scope =
         kotlinx.coroutines.CoroutineScope(
-            sshIoDispatcher.dispatcher + kotlinx.coroutines.SupervisorJob(),
+            kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob(),
         )
 
     private enum class SocksState {
@@ -347,7 +334,7 @@ private class Socks5Connection(
                     SocksState.Request -> processRequest()
                     SocksState.Connecting -> keepProcessing = false
                     SocksState.Relaying -> {
-                        enqueueToSsh()
+                        relayToTarget()
                         keepProcessing = false
                     }
                     SocksState.Closed -> keepProcessing = false
@@ -645,15 +632,12 @@ private class Socks5Connection(
         // 启动反向中继线程: SSH Tunnel → SOCKS5 Client
         startRelayFromTarget()
 
-        // 启动出向写协程: 队列 → SSH
-        startSshWriteLoop()
-
         // 启动超时检查
         startTimeoutChecker()
 
         // 继续处理缓冲区剩余数据
         if (buffer.hasRemaining()) {
-            enqueueToSsh()
+            relayToTarget()
         }
     }
 
@@ -664,7 +648,7 @@ private class Socks5Connection(
         val tunnel = targetTunnel ?: return
         val input = tunnel.inputStream ?: return
 
-        scope.launch {
+        scope.launch(Dispatchers.IO) {
             val readBuffer = ByteBuffer.allocate(65535) // 增加到 64KB
             var resolvedCallback = onDataFromTarget
             if (resolvedCallback == null && pendingTunCallbacksRef != null) {
@@ -756,94 +740,35 @@ private class Socks5Connection(
     }
 
     /**
-     * 出向数据入队: 只拷贝到有界队列, 不阻塞写 SSH。
-     * 队列满则挂起当前数据块并暂停本地 OP_READ, 由写协程腾出空间后恢复。
+     * 转发数据到 SSH 隧道 (SOCKS5 Client → SSH Tunnel)
      */
-    private fun enqueueToSsh() {
-        if (state != SocksState.Relaying) {
-            buffer.clear()
-            return
-        }
-        if (!buffer.hasRemaining()) {
-            buffer.clear()
-            return
-        }
-        val remaining = buffer.remaining()
-        val data = ByteArray(remaining)
-        buffer.get(data)
-        buffer.clear()
-        lastActivity = System.currentTimeMillis()
-        onDataSent(remaining.toLong())
+    private fun relayToTarget() {
+        val tunnel = targetTunnel
+        if (tunnel == null || state != SocksState.Relaying) return
 
-        if (!offerToSsh(data)) {
-            pendingToSshFull = true
-            suspendLocalRead()
-        }
-    }
-
-    /**
-     * 尝试入队, 由 BoundedBackpressureQueue 保证满时挂起、有序不丢。
-     * @return true 表示当前块成功进入管线(队列或挂起槽)
-     */
-    private fun offerToSsh(block: ByteArray): Boolean = pendingToSsh.offer(block)
-
-    /**
-     * 出向写协程: 消费队列写 SSH。阻塞 IO 跑在 sshDispatcher, 不卡事件循环。
-     */
-    private fun startSshWriteLoop() {
-        val tunnel = targetTunnel ?: return
-        val output = tunnel.outputStream ?: return
-
-        scope.launch {
-            while (state != SocksState.Closed && isActive) {
-                val data = pendingToSsh.poll(1, TimeUnit.SECONDS)
-                if (data != null) {
-                    try {
-                        output.write(data)
-                        // JSch SSH channel 需要 flush 才能真正发送数据包
-                        output.flush()
-                        resumeLocalReadIfSpace()
-                    } catch (e: Exception) {
-                        if (state != SocksState.Closed) {
-                            android.util.Log.e("Socks5Proxy", "[conn=$id] ssh write error: ${e.message}", e)
-                            close()
-                        }
-                        break
-                    }
+        try {
+            val output = tunnel.outputStream
+            if (output != null) {
+                // 直接从 direct buffer 写入，避免中间字节数组分配
+                // 注意: outputStream.write(ByteBuffer) 需要 Java 9+, 这里兼容性写法
+                val remaining = buffer.remaining()
+                if (buffer.hasArray()) {
+                    output.write(buffer.array(), buffer.arrayOffset() + buffer.position(), remaining)
+                } else {
+                    // direct buffer: 落地到临时数组 (尽量复用)
+                    val bytes = ByteArray(remaining)
+                    buffer.get(bytes)
+                    output.write(bytes, 0, remaining)
                 }
+                // JSch SSH channel 需要 flush 才能真正发送数据包
+                output.flush()
+                onDataSent(remaining.toLong())
             }
-        }
-    }
-
-    /**
-     * 队列腾出空间后: 先把挂起的块入队, 再恢复本地 OP_READ。
-     */
-    private fun resumeLocalReadIfSpace() {
-        if (!pendingToSshFull) return
-        if (pendingToSsh.remainingCapacity() < SSH_SEND_QUEUE_LOW_WATERMARK) return
-
-        pendingToSsh.drainSuspended()
-        if (pendingToSsh.remainingCapacity() < SSH_SEND_QUEUE_LOW_WATERMARK) return
-        pendingToSshFull = false
-
-        val sk = selectionKey
-        if (sk == null || !sk.isValid) return
-        try {
-            sk.interestOps(sk.interestOps() or SelectionKey.OP_READ)
-            sk.selector().wakeup()
-        } catch (_: Exception) {
-        }
-    }
-
-    /**
-     * 队列已满, 暂停本地 OP_READ 以向上游背压。
-     */
-    private fun suspendLocalRead() {
-        val sk = selectionKey
-        if (sk == null || !sk.isValid) return
-        try {
-            sk.interestOps(sk.interestOps() and SelectionKey.OP_READ.inv())
-        } catch (_: Exception) {
+            buffer.clear()
+            lastActivity = System.currentTimeMillis()
+        } catch (e: Exception) {
+            android.util.Log.e("Socks5Proxy", "[conn=$id] relayToTarget error: ${e.message}", e)
+            close()
         }
     }
 

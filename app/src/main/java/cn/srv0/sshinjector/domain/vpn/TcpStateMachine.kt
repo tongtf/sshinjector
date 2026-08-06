@@ -6,8 +6,6 @@ import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelPlugin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.IOException
 import java.net.InetAddress
@@ -16,7 +14,6 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.channels.SocketChannel
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 private val IS_DEBUG = android.util.Log.isLoggable("PacketProcessor", android.util.Log.DEBUG)
@@ -35,15 +32,13 @@ class TcpStateMachine(
         private const val MAX_TCP_SEGMENT = 1460
         private const val UINT32_MASK = 0xFFFFFFFFL
         private const val TUN_CONNECT_TIMEOUT_MS = 5000
-        private const val OUTGOING_SOCKS_QUEUE_CAPACITY = 32
     }
 
-    @Volatile private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val tcpConnections = ConcurrentHashMap<Long, TcpConnection>()
     private val connectionIdCounter = AtomicLong(0)
-
-    // 回向直通回调注册目标 (socks5 插件), 连接关闭时用于移除回调
-    @Volatile private var tunCallbackPlugin: TunnelPlugin? = null
+    private val nextTcpSeq = ConcurrentHashMap<Long, Long>()
+    private val nextTcpAck = ConcurrentHashMap<Long, Long>()
 
     private var dnsInterceptor: DnsInterceptor? = null
 
@@ -61,16 +56,12 @@ class TcpStateMachine(
         var tunnelChannel: TunnelChannel? = null,
         @Volatile var state: TcpState = TcpState.SynSent,
         @Volatile var lastActivity: Long = System.currentTimeMillis(),
-        @Volatile var browserSeq: Long = 0,
-        @Volatile var serverSeq: Long = 0,
-        @Volatile var forwardedBytes: Long = 0,
+        var browserSeq: Long = 0,
+        var serverSeq: Long = 0,
+        var forwardedBytes: Long = 0,
         var pendingConnect: Boolean = false,
-        @Volatile var socksLocalPort: Int = 0,
+        var socksLocalPort: Int = 0,
     ) {
-        // 出向(浏览器→本地 SOCKS)有界背压队列: packetLoop 只入队不阻塞,
-        // 独立写协程消费; 队列满且挂起槽也满时拒绝并暂停 ACK(背压)
-        val outgoingSocks = BoundedBackpressureQueue(OUTGOING_SOCKS_QUEUE_CAPACITY)
-
         enum class TcpState {
             SynSent,
             SynReceived,
@@ -164,25 +155,19 @@ class TcpStateMachine(
                     val expectedBrowserSeq = (conn.browserSeq + 1 + conn.forwardedBytes) and UINT32_MASK
                     val receivedSeq = seqNum.toLong() and UINT32_MASK
                     if (receivedSeq == expectedBrowserSeq) {
+                        conn.forwardedBytes += payloadLen.toLong()
                         if (conn.pendingConnect) {
                             // 延迟 CONNECT: 从首个数据包提取域名，完成 CONNECT，再转发数据
-                            conn.forwardedBytes += payloadLen.toLong()
                             val firstData = ByteArray(payloadLen)
                             buffer.position(payloadStart + dataOffset)
                             buffer.get(firstData)
                             completeDeferredConnect(conn, firstData, connKey)
-                            // 立即回纯 ACK，避免浏览器因等待确认而超时重传
-                            sendAckToBrowser(conn, connKey)
                         } else {
                             buffer.position(payloadStart + dataOffset)
-                            val accepted = forwardToSocks(conn, buffer, payloadStart + dataOffset, payloadLen)
-                            // ACK 门控: 仅当数据进入出向管线才推进窗口并回 ACK。
-                            // 队列满被拒时推进 ACK → 对端 TCP 窗口收缩 → 浏览器停发, 天然背压。
-                            if (accepted) {
-                                conn.forwardedBytes += payloadLen.toLong()
-                                sendAckToBrowser(conn, connKey)
-                            }
+                            forwardToSocks(conn, buffer, payloadStart + dataOffset, payloadLen)
                         }
+                        // 立即回纯 ACK，避免浏览器因等待确认而超时重传
+                        sendAckToBrowser(conn, connKey)
                     } else if (receivedSeq < expectedBrowserSeq) {
                         // 重传段 (seq < expected): 数据已转发过, 丢弃重复, 回 ACK 推进浏览器窗口
                         if (IS_DEBUG) {
@@ -254,7 +239,7 @@ class TcpStateMachine(
      */
     private suspend fun forwardThroughLocalSocks(
         conn: TcpConnection,
-        plugin: TunnelPlugin,
+        ignoredPlugin: TunnelPlugin,
         socksPort: Int,
     ) {
         val sock = SocketChannel.open()
@@ -262,25 +247,6 @@ class TcpStateMachine(
         sock.connect(InetSocketAddress("127.0.0.1", socksPort))
 
         val connKey = IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort)
-
-        // 回向直通: 远端数据经插件回调直接写 TUN, 跳过本地 SOCKS socket 往返。
-        // 注册必须在发送 CONNECT 请求前完成——Socks5ProxyServer 收到 CONNECT 后才启动
-        // relay 协程, 因此此时注册可保证协程查询 callback 时必然命中。
-        // 回调 key 是本端本地端口, 与 Socks5ProxyServer.handleAccept 记录的 clientPort 对应。
-        val localPort = (sock.socket().localSocketAddress as? InetSocketAddress)?.port ?: 0
-        conn.socksLocalPort = localPort
-        var directRelay = false
-        if (localPort > 0) {
-            try {
-                plugin.registerTunCallback(localPort) { data ->
-                    writeTcpPayloadToTun(conn, data, connKey)
-                }
-                tunCallbackPlugin = plugin
-                directRelay = true
-            } catch (e: Exception) {
-                Log.w(TAG, "registerTunCallback failed for conn ${conn.id}, falling back to socket relay")
-            }
-        }
 
         // SOCKS5 握手: VER=5, NMETHODS=1, METHOD=0x00(无认证)
         val handshake = byteArrayOf(0x05, 0x01, 0x00)
@@ -347,10 +313,7 @@ class TcpStateMachine(
             tunWriterProvider()?.invoke(synAckPacket)
         }
 
-        if (!directRelay) {
-            startRelayFromSocks(conn, connKey)
-        }
-        startOutgoingWriteLoop(conn, connKey)
+        startRelayFromSocks(conn, connKey)
         if (IS_DEBUG) Log.d(TAG, "TCP established via SOCKS5 to ${conn.dstIp}:${conn.dstPort}")
     }
 
@@ -660,7 +623,7 @@ class TcpStateMachine(
     private fun buildTcpResponsePacket(
         conn: TcpConnection,
         payload: ByteArray,
-        ignoredConnKey: Long,
+        connKey: Long,
     ): ByteArray? {
         try {
             val srcPort = conn.dstPort
@@ -673,6 +636,8 @@ class TcpStateMachine(
             val ackNum = (conn.browserSeq + 1 + conn.forwardedBytes) and UINT32_MASK
 
             conn.serverSeq = (seqNum + payload.size) and UINT32_MASK
+            nextTcpAck[connKey] = conn.serverSeq
+            nextTcpSeq[connKey] = ackNum
 
             val tcpHeaderLen = 20
             val ipHeaderLen = if (isIPv6) 40 else 20
@@ -744,7 +709,7 @@ class TcpStateMachine(
      */
     private fun buildSynAckPacket(
         conn: TcpConnection,
-        ignoredConnKey: Long,
+        connKey: Long,
     ): ByteArray? {
         try {
             val srcPort = conn.dstPort
@@ -757,6 +722,8 @@ class TcpStateMachine(
             val ackNum = conn.browserSeq + 1
 
             conn.serverSeq = (seqNum + 1) and UINT32_MASK
+            nextTcpAck[connKey] = conn.serverSeq
+            nextTcpSeq[connKey] = ackNum
 
             val tcpHeaderLen = 20
             val ipHeaderLen = if (isIPv6) 40 else 20
@@ -967,19 +934,19 @@ class TcpStateMachine(
         buffer: ByteBuffer,
         payloadStart: Int,
         payloadLength: Int,
-    ): Boolean {
+    ) {
         if (conn.state != TcpConnection.TcpState.Established) {
             Log.w(
                 TAG,
                 "forwardToSocks: conn ${conn.id} not established (state=${conn.state}), dropping ${payloadLength}B",
             )
-            return false
+            return
         }
 
         // Try tunnel channel first, then SOCKS5 channel
         val tunnelChannel = conn.tunnelChannel
         if (tunnelChannel != null) {
-            return try {
+            try {
                 buffer.position(payloadStart)
                 buffer.limit(payloadStart + payloadLength)
                 val output = tunnelChannel.outputStream
@@ -996,7 +963,6 @@ class TcpStateMachine(
                         )
                     }
                 }
-                true
             } catch (e: IOException) {
                 Log.e(TAG, "forwardToTunnel failed", e)
                 stats.errors.value++
@@ -1004,66 +970,39 @@ class TcpStateMachine(
                     IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort),
                     conn,
                 )
-                false
             }
+            return
         }
 
         val socksChannel = conn.socksChannel
         if (socksChannel == null) {
             Log.w(TAG, "forwardToSocks: both tunnelChannel and socksChannel are null for conn ${conn.id}")
-            return false
+            return
         }
 
-        // 出向: 只拷贝入有界队列, packetLoop 不阻塞; 独立写协程消费并写本地 SOCKS channel
-        val payload = ByteArray(payloadLength)
-        buffer.position(payloadStart)
-        buffer.get(payload)
-        if (IS_DEBUG) {
-            val hexPayload = payload.joinToString("") { "%02x".format(it) }.take(40)
-            Log.d(
-                TAG,
-                "forwardToSocks: queued ${payloadLength}B for conn ${conn.id} → " +
-                    "${conn.dstIp}:${conn.dstPort} hex=$hexPayload",
-            )
-        }
-        return offerOutgoing(conn, payload)
-    }
-
-    /**
-     * 出向数据入有界背压队列。队列满且挂起槽也满时拒绝(返回 false), 由调用方暂停 ACK 背压。
-     * @return true 表示数据已进入出向管线(队列或挂起槽), 可回 ACK
-     */
-    private fun offerOutgoing(
-        conn: TcpConnection,
-        payload: ByteArray,
-    ): Boolean = conn.outgoingSocks.offer(payload)
-
-    /**
-     * 出向写协程消费队列并写本地 SOCKS channel。
-     * 本地 loopback 写偶发阻塞(上游背压时), 不占 packetLoop 与 SSH 受限池。
-     */
-    private fun startOutgoingWriteLoop(
-        conn: TcpConnection,
-        connKey: Long,
-    ) {
-        val sock = conn.socksChannel ?: return
-        scope.launch(Dispatchers.IO) {
-            while (conn.state == TcpConnection.TcpState.Established && sock.isOpen && isActive) {
-                val data = conn.outgoingSocks.poll(1, TimeUnit.SECONDS)
-                if (data != null) {
-                    try {
-                        val writeBuf = ByteBuffer.wrap(data)
-                        while (writeBuf.hasRemaining()) {
-                            sock.write(writeBuf)
-                        }
-                        conn.outgoingSocks.drainSuspended()
-                        conn.lastActivity = System.currentTimeMillis()
-                    } catch (e: IOException) {
-                        closeTcpConnection(connKey, conn)
-                        break
-                    }
-                }
+        try {
+            buffer.position(payloadStart)
+            buffer.limit(payloadStart + payloadLength)
+            while (buffer.hasRemaining()) {
+                socksChannel.write(buffer)
             }
+            if (IS_DEBUG) {
+                val hexPayload =
+                    ByteArray(payloadLength).also {
+                        val dup = buffer.duplicate()
+                        dup.position(payloadStart)
+                        dup.get(it)
+                    }.joinToString("") { "%02x".format(it) }.take(40)
+                Log.d(
+                    TAG,
+                    "forwardToSocks: wrote ${payloadLength}B for conn ${conn.id} → " +
+                        "${conn.dstIp}:${conn.dstPort} hex=$hexPayload",
+                )
+            }
+        } catch (e: IOException) {
+            Log.e(TAG, "forwardToSocks failed", e)
+            stats.errors.value++
+            closeTcpConnection(IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort), conn)
         }
     }
 
@@ -1098,20 +1037,10 @@ class TcpStateMachine(
         conn: TcpConnection,
     ) {
         tcpConnections.remove(key)
-        if (conn.socksLocalPort > 0) {
-            tunCallbackPlugin?.removeTunCallback(conn.socksLocalPort)
-            conn.socksLocalPort = 0
-        }
         try {
             conn.socksChannel?.close()
         } catch (_: Exception) {
         }
-        try {
-            conn.tunnelChannel?.disconnect()
-        } catch (_: Exception) {
-        }
-        conn.socksChannel = null
-        conn.tunnelChannel = null
     }
 
     fun cleanupStaleConnections(timeoutMs: Long) {
@@ -1127,17 +1056,5 @@ class TcpStateMachine(
                 false
             }
         }
-    }
-
-    /**
-     * 释放所有 TCP 连接并停止内部协程（VPN 断开时调用）。
-     */
-    fun stop() {
-        tcpConnections.keys.forEach { key ->
-            tcpConnections[key]?.let { closeTcpConnection(key, it) }
-        }
-        tcpConnections.clear()
-        scope.cancel()
-        scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     }
 }

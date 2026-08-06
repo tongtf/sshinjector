@@ -37,21 +37,5 @@ interface TunnelPlugin {
 
     suspend fun forwardDns(query: ByteArray): ByteArray? = null
 
-    /**
-     * 注册回向直通回调: 远端数据不再经本地 SOCKS socket 中转,
-     * 而是由插件直接回调写回 TUN, 省一次往返与一个阻塞读协程。
-     * key 为本地 SOCKS 客户端端口。
-     */
-    fun registerTunCallback(
-        clientPort: Int,
-        callback: (ByteArray) -> Unit,
-    ) {
-        // 默认无操作; 需要直通能力的插件自行实现
-    }
-
-    fun removeTunCallback(clientPort: Int) {
-        // 默认无操作
-    }
-
     val stats: StateFlow<TunnelStats>
 }
