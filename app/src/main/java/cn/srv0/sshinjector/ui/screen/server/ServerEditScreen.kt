@@ -46,7 +46,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,11 +57,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.data.local.entity.ServerEntity
-import cn.srv0.sshinjector.domain.model.ServerProvisioning
 import cn.srv0.sshinjector.ui.component.rememberClickGuard
-import kotlinx.coroutines.launch
-
-private const val MAX_PORT = 65535
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -75,7 +70,6 @@ fun ServerEditScreen(
 ) {
     val isNew = serverId == -1L
     val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
 
     var name by remember { mutableStateOf("") }
     var host by remember { mutableStateOf("") }
@@ -88,15 +82,9 @@ fun ServerEditScreen(
     var keepAlive by remember { mutableStateOf("30") }
     var setAsDefault by remember { mutableStateOf(false) }
     var socksPort by remember { mutableStateOf("1080") }
-    var autoProvision by remember { mutableStateOf(false) }
-    var loginUsername by remember { mutableStateOf("") }
-    var loginPassword by remember { mutableStateOf("") }
 
     val availableKeys by viewModel.keyAliases.collectAsState()
-    val provisioningState by viewModel.provisioningState.collectAsState()
     val guard = rememberClickGuard()
-    val wizardRequireFieldsMsg = stringResource(R.string.wizard_require_fields)
-    val wizardInvalidPortMsg = stringResource(R.string.wizard_invalid_port)
 
     LaunchedEffect(serverId) {
         viewModel.load(serverId) { entity ->
@@ -255,31 +243,6 @@ fun ServerEditScreen(
                             }
                         },
                     )
-                    if (isNew) {
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                        SwitchRow(
-                            stringResource(R.string.wizard_auto_provision),
-                            autoProvision,
-                            { autoProvision = it },
-                        )
-                        if (autoProvision) {
-                            OutlinedTextFieldRow(
-                                stringResource(R.string.wizard_login_username),
-                                stringResource(R.string.wizard_placeholder_login_username),
-                                loginUsername,
-                                { loginUsername = it },
-                                singleLine = true,
-                            )
-                            OutlinedTextFieldRow(
-                                stringResource(R.string.wizard_login_password),
-                                stringResource(R.string.wizard_placeholder_login_password),
-                                loginPassword,
-                                { loginPassword = it },
-                                singleLine = true,
-                                password = true,
-                            )
-                        }
-                    }
                 }
             }
 
@@ -358,131 +321,6 @@ fun ServerEditScreen(
                         singleLine = true,
                         numeric = true,
                     )
-                }
-            }
-
-            if (isNew && autoProvision) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors =
-                        CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                        ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text(
-                            stringResource(R.string.wizard_title),
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        when (val ps = provisioningState) {
-                            is ProvisioningUiState.Idle -> {
-                                Text(
-                                    stringResource(R.string.wizard_desc),
-                                    fontSize = 14.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                Button(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    onClick = {
-                                        guard {
-                                            val p = port.toIntOrNull()
-                                            if (name.isBlank() || host.isBlank() || loginUsername.isBlank()) {
-                                                scope.launch {
-                                                    snackbarHostState.showSnackbar(wizardRequireFieldsMsg)
-                                                }
-                                                return@guard
-                                            }
-                                            if (p == null || p !in 1..MAX_PORT) {
-                                                scope.launch {
-                                                    snackbarHostState.showSnackbar(wizardInvalidPortMsg)
-                                                }
-                                                return@guard
-                                            }
-                                            viewModel.startProvision(
-                                                host = host,
-                                                port = p,
-                                                loginUsername = loginUsername,
-                                                loginPassword = loginPassword,
-                                                onProvisioned = { account, newAlias ->
-                                                    username = account
-                                                    keyAlias = newAlias
-                                                },
-                                            )
-                                        }
-                                    },
-                                ) {
-                                    Text(stringResource(R.string.wizard_start))
-                                }
-                            }
-                            is ProvisioningUiState.Running -> {
-                                val steps = ServerProvisioning.Step.entries
-                                steps.forEach { step ->
-                                    val isActive = ps.currentStep == step
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        if (isActive) {
-                                            androidx.compose.material3.CircularProgressIndicator(
-                                                modifier = Modifier.size(18.dp),
-                                                strokeWidth = 2.dp,
-                                            )
-                                        } else {
-                                            Icon(
-                                                imageVector = Icons.Default.Check,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(18.dp),
-                                                tint = MaterialTheme.colorScheme.primary,
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(
-                                            stringResource(stepLabelRes(step)),
-                                            fontSize = 14.sp,
-                                        )
-                                    }
-                                }
-                            }
-                            is ProvisioningUiState.Success -> {
-                                Icon(
-                                    imageVector = Icons.Default.Check,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                )
-                                Text(
-                                    stringResource(R.string.wizard_success, ps.account),
-                                    fontSize = 14.sp,
-                                )
-                            }
-                            is ProvisioningUiState.LocalOnly -> {
-                                Text(
-                                    stringResource(R.string.wizard_local_only, ps.reason),
-                                    fontSize = 14.sp,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                            is ProvisioningUiState.Failed -> {
-                                Text(
-                                    stringResource(R.string.wizard_failed, ps.message),
-                                    fontSize = 14.sp,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                            is ProvisioningUiState.Tampered -> {
-                                Text(
-                                    ps.message,
-                                    fontSize = 14.sp,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                        }
-                    }
                 }
             }
 
@@ -693,17 +531,5 @@ fun KeyAliasSelector(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun stepLabelRes(step: ServerProvisioning.Step): Int {
-    return when (step) {
-        ServerProvisioning.Step.DETECT_PRIVILEGE -> R.string.wizard_step_privilege
-        ServerProvisioning.Step.UPLOAD_SCRIPT -> R.string.wizard_step_upload_script
-        ServerProvisioning.Step.UPLOAD_PUBKEY -> R.string.wizard_step_upload_pubkey
-        ServerProvisioning.Step.EXECUTE_SCRIPT -> R.string.wizard_step_execute
-        ServerProvisioning.Step.VERIFY -> R.string.wizard_step_verify
-        ServerProvisioning.Step.DONE -> R.string.wizard_step_done
     }
 }

@@ -38,7 +38,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -55,6 +57,7 @@ import cn.srv0.sshinjector.data.local.entity.ServerEntity
 @Composable
 fun ServerListScreen(
     onAddServer: () -> Unit,
+    onAddWizard: () -> Unit,
     onEditServer: (Long) -> Unit,
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -100,11 +103,33 @@ fun ServerListScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onAddServer) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = stringResource(R.string.server_add),
-                        )
+                    var showAddMenu by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { showAddMenu = true }) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = stringResource(R.string.server_add),
+                            )
+                        }
+                        androidx.compose.material3.DropdownMenu(
+                            expanded = showAddMenu,
+                            onDismissRequest = { showAddMenu = false },
+                        ) {
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text(stringResource(R.string.wizard_title)) },
+                                onClick = {
+                                    showAddMenu = false
+                                    onAddWizard()
+                                },
+                            )
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text(stringResource(R.string.server_add_manual)) },
+                                onClick = {
+                                    showAddMenu = false
+                                    onAddServer()
+                                },
+                            )
+                        }
                     }
                 },
                 colors =

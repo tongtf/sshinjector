@@ -151,8 +151,8 @@
     <string name="server_placeholder_port">22</string>
     <string name="server_placeholder_username">root</string>
     <string name="server_placeholder_socks">1080</string>
+    <string name="server_add_manual">Add manually</string>
 
-    <string name="wizard_auto_provision">Provision server (one-click)</string>
     <string name="wizard_login_username">Login username (SSH)</string>
     <string name="wizard_placeholder_login_username">root</string>
     <string name="wizard_login_password">Login password (SSH)</string>
@@ -171,6 +171,22 @@
     <string name="wizard_step_execute">Executing server config</string>
     <string name="wizard_step_verify">Verifying config</string>
     <string name="wizard_step_done">Done</string>
+    <string name="wizard_next">Next</string>
+    <string name="wizard_back">Back</string>
+    <string name="wizard_save">Save &amp; finish</string>
+    <string name="wizard_save_local">Save local config only</string>
+    <string name="wizard_retry">Retry</string>
+    <string name="wizard_step_info">Server</string>
+    <string name="wizard_step_login">Login</string>
+    <string name="wizard_step_provision">Provision</string>
+    <string name="wizard_step_result">Done</string>
+    <string name="wizard_server_info_title">Server info</string>
+    <string name="wizard_login_title">Server login credentials</string>
+    <string name="wizard_provisioning_title">Provisioning server</string>
+    <string name="wizard_require_login_username">Please enter a login username</string>
+    <string name="wizard_success_detail" formatted="false">Tunnel account %1$s configured, key %2$s generated. Save to connect.</string>
+    <string name="wizard_local_only_detail" formatted="false">Key %1$s generated. Configure the server manually later.</string>
+
 
     <!-- Key Management -->
     <string name="key_title">Key Management</string>

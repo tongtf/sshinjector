@@ -3,11 +3,13 @@ package cn.srv0.sshinjector.di
 import android.content.Context
 import cn.srv0.sshinjector.data.local.database.AppDatabase
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
+import cn.srv0.sshinjector.data.remote.config.ServerProvisioner
 import cn.srv0.sshinjector.data.remote.ssh.CredentialCrypto
 import cn.srv0.sshinjector.data.remote.ssh.JschSshClient
 import cn.srv0.sshinjector.data.remote.ssh.KnownHostsManager
 import cn.srv0.sshinjector.data.remote.ssh.RemoteCommandExecutor
 import cn.srv0.sshinjector.data.remote.ssh.SshKeyManager
+import cn.srv0.sshinjector.domain.model.ServerProvisionerContract
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
 import cn.srv0.sshinjector.domain.vpn.PacketProcessor
@@ -105,5 +107,14 @@ object AppModule {
     @Singleton
     fun provideDnsInterceptor(): DnsInterceptor {
         return DnsInterceptor()
+    }
+
+    @Provides
+    @Singleton
+    fun provideServerProvisioner(
+        @ApplicationContext context: Context,
+        commandExecutor: RemoteCommandExecutor,
+    ): ServerProvisionerContract {
+        return ServerProvisioner(context, commandExecutor)
     }
 }

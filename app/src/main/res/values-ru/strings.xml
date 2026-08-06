@@ -151,8 +151,8 @@
     <string name="server_placeholder_port">22</string>
     <string name="server_placeholder_username">root</string>
     <string name="server_placeholder_socks">1080</string>
+    <string name="server_add_manual">Добавить вручную</string>
 
-    <string name="wizard_auto_provision">Настроить сервер (в один клик)</string>
     <string name="wizard_login_username">Пользователь (SSH)</string>
     <string name="wizard_placeholder_login_username">root</string>
     <string name="wizard_login_password">Пароль (SSH)</string>
@@ -171,6 +171,22 @@
     <string name="wizard_step_execute">Выполнение конфигурации</string>
     <string name="wizard_step_verify">Проверка конфигурации</string>
     <string name="wizard_step_done">Готово</string>
+    <string name="wizard_next">Далее</string>
+    <string name="wizard_back">Назад</string>
+    <string name="wizard_save">Сохранить и завершить</string>
+    <string name="wizard_save_local">Сохранить только локальную конфигурацию</string>
+    <string name="wizard_retry">Повторить</string>
+    <string name="wizard_step_info">Сервер</string>
+    <string name="wizard_step_login">Вход</string>
+    <string name="wizard_step_provision">Настройка</string>
+    <string name="wizard_step_result">Готово</string>
+    <string name="wizard_server_info_title">Информация о сервере</string>
+    <string name="wizard_login_title">Учётные данные сервера</string>
+    <string name="wizard_provisioning_title">Настройка сервера</string>
+    <string name="wizard_require_login_username">Введите пользователя</string>
+    <string name="wizard_success_detail" formatted="false">Туннельный аккаунт %1$s настроен, ключ %2$s создан. Сохраните для подключения.</string>
+    <string name="wizard_local_only_detail" formatted="false">Ключ %1$s создан. Настройте сервер вручную позже.</string>
+
 
     <!-- Управление ключами -->
     <string name="key_title">Управление ключами</string>

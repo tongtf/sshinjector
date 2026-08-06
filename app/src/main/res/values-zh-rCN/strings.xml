@@ -151,8 +151,8 @@
     <string name="server_placeholder_port">22</string>
     <string name="server_placeholder_username">root</string>
     <string name="server_placeholder_socks">1080</string>
+    <string name="server_add_manual">手动添加</string>
 
-    <string name="wizard_auto_provision">一键配置服务器端</string>
     <string name="wizard_login_username">登录账户 (SSH)</string>
     <string name="wizard_placeholder_login_username">root</string>
     <string name="wizard_login_password">登录密码 (SSH)</string>
@@ -171,6 +171,22 @@
     <string name="wizard_step_execute">执行服务器配置</string>
     <string name="wizard_step_verify">验证配置</string>
     <string name="wizard_step_done">完成</string>
+    <string name="wizard_next">下一步</string>
+    <string name="wizard_back">上一步</string>
+    <string name="wizard_save">保存并完成</string>
+    <string name="wizard_save_local">仅保存本机配置</string>
+    <string name="wizard_retry">重试</string>
+    <string name="wizard_step_info">服务器</string>
+    <string name="wizard_step_login">登录</string>
+    <string name="wizard_step_provision">配置</string>
+    <string name="wizard_step_result">完成</string>
+    <string name="wizard_server_info_title">服务器信息</string>
+    <string name="wizard_login_title">服务器登录凭证</string>
+    <string name="wizard_provisioning_title">正在配置服务器</string>
+    <string name="wizard_require_login_username">请填写登录账户</string>
+    <string name="wizard_success_detail" formatted="false">隧道账号 %1$s 已配置，已自动生成密钥 %2$s。保存后即可连接。</string>
+    <string name="wizard_local_only_detail" formatted="false">已生成密钥 %1$s，可稍后手动配置服务器端。</string>
+
 
     <!-- 密钥管理 -->
     <string name="key_title">密钥管理</string>

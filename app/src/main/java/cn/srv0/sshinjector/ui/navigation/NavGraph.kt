@@ -10,6 +10,7 @@ import cn.srv0.sshinjector.ui.screen.keymanager.KeyAddScreen
 import cn.srv0.sshinjector.ui.screen.keymanager.KeyManagerScreen
 import cn.srv0.sshinjector.ui.screen.server.ServerEditScreen
 import cn.srv0.sshinjector.ui.screen.server.ServerListScreen
+import cn.srv0.sshinjector.ui.screen.server.ServerWizardScreen
 import cn.srv0.sshinjector.ui.screen.settings.DomainListSettingsScreen
 import cn.srv0.sshinjector.ui.screen.settings.SettingsScreen
 import cn.srv0.sshinjector.ui.screen.whitelist.WhitelistScreen
@@ -35,6 +36,7 @@ fun AppNavGraph(
         composable("servers") {
             ServerListScreen(
                 onAddServer = { navController.navigate("server/edit/-1") },
+                onAddWizard = { navController.navigate("server/wizard") },
                 onEditServer = { id -> navController.navigate("server/edit/$id") },
                 onNavigateBack = { navController.popBackStack() },
             )
@@ -44,6 +46,12 @@ fun AppNavGraph(
             ServerEditScreen(
                 serverId = serverId,
                 onSave = { navController.popBackStack() },
+                onCancel = { navController.popBackStack() },
+            )
+        }
+        composable("server/wizard") {
+            ServerWizardScreen(
+                onFinish = { navController.popBackStack() },
                 onCancel = { navController.popBackStack() },
             )
         }
