@@ -37,6 +37,7 @@ class Socks5ProxyServer
     constructor(
         private val sshChannelFactory: SshChannelFactory,
         private val dnsInterceptor: DnsInterceptor,
+        private val sshIoDispatcher: SshIoDispatcher,
     ) {
         private var serverChannel: ServerSocketChannel? = null
         private var selector: Selector? = null
@@ -201,6 +202,7 @@ class Socks5ProxyServer
                     id = connectionId,
                     channel = clientChannel,
                     sshChannelFactory = sshChannelFactory,
+                    sshIoDispatcher = sshIoDispatcher,
                     onDataSent = { bytes -> totalBytesUp.value = totalBytesUp.value + bytes },
                     onDataReceived = { bytes -> totalBytesDown.value = totalBytesDown.value + bytes },
                     onClosed = {
@@ -268,6 +270,7 @@ private class Socks5Connection(
     val id: Long,
     val channel: SocketChannel,
     private val sshChannelFactory: SshChannelFactory?,
+    private val sshIoDispatcher: SshIoDispatcher,
     private val onDataSent: (Long) -> Unit,
     private val onDataReceived: (Long) -> Unit,
     private val onClosed: () -> Unit,
@@ -302,7 +305,7 @@ private class Socks5Connection(
 
     private val scope =
         kotlinx.coroutines.CoroutineScope(
-            kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob(),
+            sshIoDispatcher.dispatcher + kotlinx.coroutines.SupervisorJob(),
         )
 
     private enum class SocksState {
