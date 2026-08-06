@@ -15,7 +15,6 @@ import java.nio.channels.SelectionKey
 import java.nio.channels.Selector
 import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
-import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -292,13 +291,9 @@ private class Socks5Connection(
 
     // 出向(本地 SOCKS → SSH)有界发送队列: eventLoop 只入队, 独立写协程消费,
     // 队列满时暂停本地 OP_READ 实现背压, 避免阻塞写卡死事件循环
-    private val pendingToSsh = ArrayBlockingQueue<ByteArray>(SSH_SEND_QUEUE_CAPACITY)
-    private val toSshLock = Any()
+    private val pendingToSsh = BoundedBackpressureQueue(SSH_SEND_QUEUE_CAPACITY)
 
     @Volatile private var pendingToSshFull = false
-
-    // 队列满时挂起的块(受 toSshLock 保护), 正常为 0-1 个, 保证数据有序不丢
-    private val suspendedToSshBlocks = java.util.ArrayDeque<ByteArray>()
 
     // 超时配置
     private var lastActivity = System.currentTimeMillis()
@@ -787,25 +782,10 @@ private class Socks5Connection(
     }
 
     /**
-     * 尝试入队, 优先排空之前满队列时挂起的块, 保证数据有序不丢。
-     * @return true 表示当前块成功入队
+     * 尝试入队, 由 BoundedBackpressureQueue 保证满时挂起、有序不丢。
+     * @return true 表示当前块成功进入管线(队列或挂起槽)
      */
-    private fun offerToSsh(block: ByteArray): Boolean {
-        synchronized(toSshLock) {
-            while (suspendedToSshBlocks.isNotEmpty()) {
-                val suspended = suspendedToSshBlocks.removeFirst()
-                if (!pendingToSsh.offer(suspended)) {
-                    suspendedToSshBlocks.addFirst(suspended)
-                    return false
-                }
-            }
-            if (!pendingToSsh.offer(block)) {
-                suspendedToSshBlocks.addLast(block)
-                return false
-            }
-            return true
-        }
-    }
+    private fun offerToSsh(block: ByteArray): Boolean = pendingToSsh.offer(block)
 
     /**
      * 出向写协程: 消费队列写 SSH。阻塞 IO 跑在 sshDispatcher, 不卡事件循环。
@@ -816,12 +796,7 @@ private class Socks5Connection(
 
         scope.launch {
             while (state != SocksState.Closed && isActive) {
-                val data =
-                    try {
-                        pendingToSsh.poll(1, TimeUnit.SECONDS)
-                    } catch (e: InterruptedException) {
-                        null
-                    }
+                val data = pendingToSsh.poll(1, TimeUnit.SECONDS)
                 if (data != null) {
                     try {
                         output.write(data)
@@ -847,20 +822,8 @@ private class Socks5Connection(
         if (!pendingToSshFull) return
         if (pendingToSsh.remainingCapacity() < SSH_SEND_QUEUE_LOW_WATERMARK) return
 
-        val hasSpace =
-            synchronized(toSshLock) {
-                var space = true
-                while (suspendedToSshBlocks.isNotEmpty()) {
-                    val suspended = suspendedToSshBlocks.removeFirst()
-                    if (!pendingToSsh.offer(suspended)) {
-                        suspendedToSshBlocks.addFirst(suspended)
-                        space = false
-                        break
-                    }
-                }
-                space
-            }
-        if (!hasSpace) return
+        pendingToSsh.drainSuspended()
+        if (pendingToSsh.remainingCapacity() < SSH_SEND_QUEUE_LOW_WATERMARK) return
         pendingToSshFull = false
 
         val sk = selectionKey

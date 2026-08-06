@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.IOException
 import java.net.InetAddress
@@ -60,17 +61,15 @@ class TcpStateMachine(
         var tunnelChannel: TunnelChannel? = null,
         @Volatile var state: TcpState = TcpState.SynSent,
         @Volatile var lastActivity: Long = System.currentTimeMillis(),
-        var browserSeq: Long = 0,
-        var serverSeq: Long = 0,
-        var forwardedBytes: Long = 0,
+        @Volatile var browserSeq: Long = 0,
+        @Volatile var serverSeq: Long = 0,
+        @Volatile var forwardedBytes: Long = 0,
         var pendingConnect: Boolean = false,
-        var socksLocalPort: Int = 0,
+        @Volatile var socksLocalPort: Int = 0,
     ) {
-        // 出向(浏览器→本地 SOCKS)有界队列: packetLoop 只入队不阻塞,
+        // 出向(浏览器→本地 SOCKS)有界背压队列: packetLoop 只入队不阻塞,
         // 独立写协程消费; 队列满且挂起槽也满时拒绝并暂停 ACK(背压)
-        val outgoingSocks = java.util.concurrent.ArrayBlockingQueue<ByteArray>(OUTGOING_SOCKS_QUEUE_CAPACITY)
-        val outgoingLock = Any()
-        val suspendedOutgoing = java.util.ArrayDeque<ByteArray>()
+        val outgoingSocks = BoundedBackpressureQueue(OUTGOING_SOCKS_QUEUE_CAPACITY)
 
         enum class TcpState {
             SynSent,
@@ -1031,28 +1030,13 @@ class TcpStateMachine(
     }
 
     /**
-     * 出向数据入有界队列。队列满且挂起槽也满时拒绝(返回 false), 由调用方暂停 ACK 背压。
+     * 出向数据入有界背压队列。队列满且挂起槽也满时拒绝(返回 false), 由调用方暂停 ACK 背压。
      * @return true 表示数据已进入出向管线(队列或挂起槽), 可回 ACK
      */
     private fun offerOutgoing(
         conn: TcpConnection,
         payload: ByteArray,
-    ): Boolean {
-        synchronized(conn.outgoingLock) {
-            while (conn.suspendedOutgoing.isNotEmpty()) {
-                val suspended = conn.suspendedOutgoing.removeFirst()
-                if (!conn.outgoingSocks.offer(suspended)) {
-                    conn.suspendedOutgoing.addFirst(suspended)
-                    return false
-                }
-            }
-            if (conn.outgoingSocks.offer(payload)) {
-                return true
-            }
-            conn.suspendedOutgoing.addLast(payload)
-            return true
-        }
-    }
+    ): Boolean = conn.outgoingSocks.offer(payload)
 
     /**
      * 出向写协程消费队列并写本地 SOCKS channel。
@@ -1064,40 +1048,20 @@ class TcpStateMachine(
     ) {
         val sock = conn.socksChannel ?: return
         scope.launch(Dispatchers.IO) {
-            while (conn.state == TcpConnection.TcpState.Established && sock.isOpen) {
-                val data =
-                    try {
-                        conn.outgoingSocks.poll(1, TimeUnit.SECONDS)
-                    } catch (e: InterruptedException) {
-                        null
-                    }
+            while (conn.state == TcpConnection.TcpState.Established && sock.isOpen && isActive) {
+                val data = conn.outgoingSocks.poll(1, TimeUnit.SECONDS)
                 if (data != null) {
                     try {
                         val writeBuf = ByteBuffer.wrap(data)
                         while (writeBuf.hasRemaining()) {
                             sock.write(writeBuf)
                         }
-                        drainSuspendedOutgoing(conn)
+                        conn.outgoingSocks.drainSuspended()
                         conn.lastActivity = System.currentTimeMillis()
                     } catch (e: IOException) {
                         closeTcpConnection(connKey, conn)
                         break
                     }
-                }
-            }
-        }
-    }
-
-    /**
-     * 队列腾出空间后把挂起块重新入队, 保证有序不丢。
-     */
-    private fun drainSuspendedOutgoing(conn: TcpConnection) {
-        synchronized(conn.outgoingLock) {
-            while (conn.suspendedOutgoing.isNotEmpty()) {
-                val suspended = conn.suspendedOutgoing.removeFirst()
-                if (!conn.outgoingSocks.offer(suspended)) {
-                    conn.suspendedOutgoing.addFirst(suspended)
-                    break
                 }
             }
         }
