@@ -100,22 +100,23 @@
 ### Требования
 
 - Android 14 (API 34) или новее
-- VPS с SSH-сервером и аутентификацией по ключам
-- Конфигурация сервера: `AllowTcpForwarding yes` (по умолчанию)
+- Сервер с **OpenSSH** (рекомендуется; для автоматической настройки нужны root или sudo)
+- sshd с `AllowTcpForwarding yes` (по умолчанию)
 
 ### Настройка сервера
 
-```bash
-# 1. Создайте пару ключей ECDSA P-256 (в приложении безопаснее)
-ssh-keygen -t ecdsa -b 256 -C "your-phone@android"
+**Вариант A: автоматическая настройка в приложении (рекомендуется)**
 
-# 2. Скопируйте открытый ключ на сервер
-ssh-copy-id -i ~/.ssh/id_ecdsa.pub user@your-vps
+В мастере «Добавить сервер» укажите учётную запись с правами **root или sudo**, и приложение сделает всё остальное:
 
-# 3. Проверьте конфигурацию SSH
-grep -E '^(AllowTcpForwarding|GatewayPorts|PermitTunnel)' /etc/ssh/sshd_config
-# Убедитесь, что AllowTcpForwarding равен yes
-```
+- Создаёт выделенный туннельный аккаунт `sshproxy`: `nologin` + заблокированный пароль, вход в shell невозможен
+- Изоляция chroot — доступна только минимальная файловая система (`ChrootDirectory`)
+- Только аутентификация по ключам (`PasswordAuthentication no`), `authorized_keys` заблокирован через `chattr +i`
+- Добавляет блок `Match User sshproxy` в sshd; делает бэкап и перезагружает конфиг только после успешного `sshd -t`
+
+**Вариант B: ручная настройка**
+
+Следуйте **[docs/server-setup.md](docs/server-setup.md)** для ручного создания аккаунта `sshproxy`, каталога chroot и усиления sshd.
 
 ### Сборка
 

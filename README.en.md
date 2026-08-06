@@ -100,22 +100,23 @@
 ### Prerequisites
 
 - Android 14 (API 34) or higher
-- A VPS running an SSH server with key auth
-- Server config: `AllowTcpForwarding yes` (default)
+- A server running **OpenSSH** (recommended; one-click setup needs root or sudo)
+- sshd with `AllowTcpForwarding yes` (default)
 
 ### Server setup
 
-```bash
-# 1. Generate an ECDSA P-256 key pair (generating in-app is more secure)
-ssh-keygen -t ecdsa -b 256 -C "your-phone@android"
+**Option A: One-click setup in-app (recommended)**
 
-# 2. Copy the public key to the server
-ssh-copy-id -i ~/.ssh/id_ecdsa.pub user@your-vps
+In the "Add server" wizard, enter an account with **root or sudo** access on your server and the app does everything:
 
-# 3. Verify SSH config
-grep -E '^(AllowTcpForwarding|GatewayPorts|PermitTunnel)' /etc/ssh/sshd_config
-# Make sure AllowTcpForwarding is yes
-```
+- Creates a dedicated tunnel account `sshproxy`: `nologin` + locked password, cannot log into a shell
+- Chroot isolation, exposing only a minimal filesystem (`ChrootDirectory`)
+- Public-key-only auth (`PasswordAuthentication no`), `authorized_keys` locked with `chattr +i`
+- Appends a `Match User sshproxy` hardening block to sshd; backs up the config and reloads only after `sshd -t` passes
+
+**Option B: Manual setup**
+
+Follow **[docs/server-setup.md](docs/server-setup.md)** to create the `sshproxy` account, chroot directory and sshd hardening yourself.
 
 ### Build
 

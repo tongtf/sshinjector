@@ -15,6 +15,7 @@ JAVA_HOME=/usr/lib/jvm/jdk-17.0.19+10 ./gradlew ...
 
 ```bash
 ./gradlew testDebugUnitTest   # unit tests (JUnit4)
+./gradlew assembleDebug       # fast compile check (surfaces Kotlin warnings)
 ./gradlew ktlintCheck         # CI runs each quality gate separately:
 ./gradlew detekt
 ./gradlew lint
@@ -23,7 +24,7 @@ JAVA_HOME=/usr/lib/jvm/jdk-17.0.19+10 ./gradlew ...
 
 **Release signing**: `buildTypes.release` wires `signingConfigs.getByName("debug")`. The `signingConfigs.create("release")` block (env-var based) is **dead config**. Release always uses `app/debug.keystore`.
 
-**CI** (`.github/workflows/ci.yml`): `dependency-check` runs `./gradlew dependencyCheckAnalyze` but **no OWASP plugin is configured — task doesn't exist**; jacoco reports uploaded but **no jacoco plugin** configured. Those CI parts are stale.
+**CI** (`.github/workflows/ci.yml`): `lint-and-test` runs ktlint/detekt/lint/test as **separate steps** (detekt+lint in one gradle invocation OOMs the runner). Then `build-debug`. Pushing a `v*` tag additionally triggers `build-release`: `assembleRelease bundleRelease` + creates a GitHub Release with the APK/AAB (job needs `permissions: contents: write`). `actions/upload-artifact@v5` / `setup-android@v3` print a harmless Node 20 deprecation warning.
 
 ## Code Style
 
@@ -61,14 +62,14 @@ Unit tests in `app/src/test/java/cn/srv0/sshinjector/`. Concurrency-critical one
 - **Outgoing queue**: use kotlinx `Channel` with connection-level single pending slot. Do **not** use `ArrayBlockingQueue`+suspended-slot (data loss under concurrency broke connectivity)
 - **SSH isolation**: use the dynamic `SshIoDispatcher`. Do **not** use `Dispatchers.IO.limitedParallelism(small)` — coroutines queue when connections exceed parallelism, breaking connectivity
 - **JSch via jitpack.io** — `settings.gradle.kts` configures jitpack (needed for mwiede/jsch)
-- **Compose Compiler mismatch**: `app/build.gradle.kts` hardcodes `1.5.11`, `gradle.properties` has `1.5.14` (stale). Update both together
-- **Version drift**: `gradle.properties` versions don't match root `build.gradle.kts` (Kotlin 1.9.23 vs 1.9.24, AGP 8.4.0 vs 8.5.2, Hilt 2.48 vs 2.51). **Use `build.gradle.kts` as source of truth**
+- **Versions live only in root `build.gradle.kts`** plugins block (AGP 8.6.0, Kotlin 2.0.21, Hilt 2.53.1, KSP 2.0.21-1.0.28). `gradle.properties` holds no versions. Compose compiler comes from `org.jetbrains.kotlin.plugin.compose` (tracks the Kotlin version — no manual pin)
 - `configurations.all` forces `androidx.tracing:tracing:1.1.0` — don't remove when bumping deps
 - `local.properties` not committed (SDK path + signing)
 - ProGuard/R8 on in Release — watch `proguard-rules.pro` for reflected code (e.g. `setChannelWindowSize` uses reflection on JSch)
 
 ## Device Testing (adb)
 
+- Debug builds get `applicationIdSuffix = ".debug"` → package is `cn.srv0.sshinjector.debug` (force-stop that, not the release id)
 - After `adb install -r`, **must `am force-stop`** the package before relaunching, or the **old process keeps running old code** (cost hours of confusing logs)
 - Repeated connect/disconnect cycles accumulate **server-side SSH sessions** → SSH connect times out (`socket is not established`); wait for server cleanup or switch network before assuming a code regression
 - Whitelist mode does NOT `addDisallowedApplication(ownPackage)`; Android sends the VPN owner's traffic into the TUN, so the SSH connect can self-loop. If SSH times out while nc/ping work, suspect this
@@ -77,3 +78,4 @@ Unit tests in `app/src/test/java/cn/srv0/sshinjector/`. Concurrency-critical one
 
 - Repo moved: `tongtf/ssh-injector.git` → **`tongtf/sshinjector.git`**
 - HTTPS push needs credentials; **use SSH** (`git@github.com:tongtf/sshinjector.git`) — local `~/.ssh/id_ed25519` is set up
+- **Release flow**: pushing a `v*` tag triggers build-release (APK/AAB + GitHub Release). To re-release after a fix: `git tag -d vX && git push origin :refs/tags/vX && git tag vX && git push origin vX`. Poll `https://api.github.com/repos/tongtf/sshinjector/actions/runs?per_page=1` for the run status

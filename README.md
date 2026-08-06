@@ -101,22 +101,23 @@
 ### 前置要求
 
 - Android 14 (API 34) 或更高
-- 一台支持 SSH 密钥认证的 VPS (OpenSSH 服务端)
-- 服务端配置：`AllowTcpForwarding yes` (默认开启)
+- 一台运行 **OpenSSH** 的服务器（推荐；一键配置需要 root 或 sudo 权限）
+- sshd 开启 `AllowTcpForwarding yes`（默认开启）
 
 ### 服务端准备
 
-```bash
-# 1. 生成 ECDSA P-256 密钥对 (在手机应用内生成更安全)
-ssh-keygen -t ecdsa -b 256 -C "your-phone@android"
+**方式 A：App 内一键配置（推荐）**
 
-# 2. 将公钥添加到服务器
-ssh-copy-id -i ~/.ssh/id_ecdsa.pub user@your-vps
+在「添加服务器」向导中，输入你服务器上具有 **root 或 sudo** 权限的账号，App 会自动完成全部配置：
 
-# 3. 验证 SSH 配置
-grep -E '^(AllowTcpForwarding|GatewayPorts|PermitTunnel)' /etc/ssh/sshd_config
-# 确保 AllowTcpForwarding yes
-```
+- 创建专用隧道账号 `sshproxy`：`nologin` + 密码锁定，无法登录 shell
+- chroot 隔离，仅暴露最小化文件系统（`ChrootDirectory`）
+- 仅公钥认证（`PasswordAuthentication no`），`authorized_keys` 加 immutable 锁（`chattr +i`）
+- sshd 追加 `Match User sshproxy` 加固块；修改前备份，`sshd -t` 通过才重载
+
+**方式 B：手动配置**
+
+按 **[docs/server-setup.md](docs/server-setup.md)** 的步骤手动创建 `sshproxy` 账号、chroot 目录与 sshd 加固配置。
 
 ### 编译安装
 
