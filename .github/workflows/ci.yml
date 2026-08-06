@@ -50,8 +50,8 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x ./gradlew
       
-      - name: Run Android Lint
-        run: ./gradlew lint
+      - name: Run Code Quality Gates
+        run: ./gradlew ktlintCheck detekt lint
       
       - name: Run Unit Tests
         run: ./gradlew testDebugUnitTest
@@ -147,19 +147,23 @@ jobs:
       - name: Grant execute permission
         run: chmod +x ./gradlew
       
-      - name: Build Release AAB
-        run: ./gradlew bundleRelease
+      - name: Build Release APK & AAB
+        run: ./gradlew assembleRelease bundleRelease
       
-      - name: Upload Release AAB
+      - name: Upload Release Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: app-release
-          path: app/build/outputs/bundle/release/app-release.aab
+          path: |
+            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/bundle/release/app-release.aab
       
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: app/build/outputs/bundle/release/app-release.aab
+          files: |
+            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/bundle/release/app-release.aab
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

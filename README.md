@@ -1,6 +1,16 @@
 # SSHInjector
 
 <div align="center">
+
+**🌐 语言 / Languages：** [中文](README.md) · [English](README.en.md) · [Русский](README.ru.md)
+
+</div>
+
+<p align="center">
+  <img src="docs/images/icon.png" width="128" height="128" alt="SSHInjector">
+</p>
+
+<div align="center">
   <img src="https://img.shields.io/badge/Android-14%2B-green.svg?style=flat-square&logo=android" alt="Android 14+">
   <img src="https://img.shields.io/badge/Kotlin-1.9.24-blue.svg?style=flat-square&logo=kotlin" alt="Kotlin 1.9.24">
   <img src="https://img.shields.io/badge/Compose-Material3-orange.svg?style=flat-square&logo=jetpackcompose" alt="Jetpack Compose">
@@ -112,8 +122,8 @@ grep -E '^(AllowTcpForwarding|GatewayPorts|PermitTunnel)' /etc/ssh/sshd_config
 
 ```bash
 # 克隆项目
-git clone https://github.com/tongtf/ssh-injector.git
-cd ssh-injector
+git clone https://github.com/tongtf/sshinjector.git
+cd sshinjector
 
 # 配置签名 (本地 properties 或环境变量)
 echo "KEYSTORE_PATH=keystore.jks
@@ -131,6 +141,8 @@ KEY_PASSWORD=your_key_pass" > local.properties
 ---
 
 ## 📖 使用指南
+
+> 完整文档见 **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)**（安装、配置、故障排查、FAQ）
 
 ### 1. 添加服务器
 
@@ -192,7 +204,7 @@ SSH 认证 → JSch Identity 接口桥接 → Keystore 签名
 SSHInjector/
 ├── app/
 │   ├── src/main/
-│   │   ├── java/com/sshinjector/
+│   │   ├── java/cn/srv0/sshinjector/
 │   │   │   ├── data/
 │   │   │   │   ├── local/          # Room + DataStore
 │   │   │   │   ├── remote/ssh/     # JSch 封装 + Keystore
@@ -306,5 +318,5 @@ SOFTWARE.
 ---
 
 <div align="center">
-  <sub>Built with ❤️ for Android 14+ | <a href="https://github.com/tongtf/ssh-injector">GitHub</a> | <a href="https://github.com/tongtf/ssh-injector/issues">Issues</a></sub>
+  <sub>Built with ❤️ for Android 14+ | <a href="https://github.com/tongtf/sshinjector">GitHub</a> | <a href="https://github.com/tongtf/sshinjector/issues">Issues</a></sub>
 </div>
