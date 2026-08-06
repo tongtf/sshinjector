@@ -227,7 +227,7 @@ class DnsInterceptor
                     return false
                 }
 
-                val questions = message.getSectionArray(Section.QUESTION)
+                val questions = message.getSection(Section.QUESTION)
                 if (questions.isEmpty()) {
                     android.util.Log.d(TAG, ">>> [DnsInterceptor] processDnsQuery: no questions, returning false")
                     return false
@@ -384,7 +384,7 @@ class DnsInterceptor
 
             try {
                 val response = Message(responseData)
-                val records = response.getSectionArray(Section.ANSWER)
+                val records = response.getSection(Section.ANSWER)
 
                 // 缓存结果
                 val cacheKey = "${pending.question.name}.${pending.question.type}"

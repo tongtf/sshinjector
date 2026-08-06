@@ -17,10 +17,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -605,7 +605,7 @@ fun KeyManagerScreen(
                 color = MaterialTheme.colorScheme.tertiary
             }
             else -> {
-                imageVector = Icons.Default.Send
+                imageVector = Icons.AutoMirrored.Filled.Send
                 color = tint
             }
         }
@@ -878,7 +878,7 @@ fun KeyKindIcon(
             color = MaterialTheme.colorScheme.tertiary
         }
         else -> {
-            imageVector = Icons.Default.Send
+            imageVector = Icons.AutoMirrored.Filled.Send
             color = tint
         }
     }

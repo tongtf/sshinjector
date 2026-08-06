@@ -72,14 +72,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-        freeCompilerArgs +=
-            listOf(
-                "-Xopt-in=kotlin.RequiresOptIn",
-            )
-    }
-
     buildFeatures {
         compose = true
         viewBinding = false
@@ -103,6 +95,13 @@ android {
         jniLibs {
             useLegacyPackaging = true
         }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        freeCompilerArgs.addAll("-opt-in=kotlin.RequiresOptIn")
     }
 }
 
@@ -178,8 +177,4 @@ detekt {
 
 ktlint {
     android.set(true)
-}
-
-tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
-    kotlinOptions.freeCompilerArgs += listOf("-Xopt-in=kotlin.RequiresOptIn")
 }

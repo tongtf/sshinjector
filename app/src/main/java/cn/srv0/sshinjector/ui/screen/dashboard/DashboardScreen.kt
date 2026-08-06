@@ -28,6 +28,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Create
@@ -35,7 +36,6 @@ import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -533,7 +533,7 @@ fun DashboardScreen(
                                             contentAlignment = Alignment.Center,
                                         ) {
                                             Icon(
-                                                imageVector = Icons.Default.Send,
+                                                imageVector = Icons.AutoMirrored.Filled.Send,
                                                 contentDescription =
                                                     stringResource(
                                                         cn.srv0.sshinjector.R.string.copy,
