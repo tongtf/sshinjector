@@ -20,7 +20,7 @@
 
 <div align="center">
   <h3>🔐 Android 14+ SSH SOCKS5 代理应用</h3>
-  <p>通过 SSH 动态端口转发 (<code>ssh -D</code>) 建立加密隧道，利用 VpnService 白名单机制，仅让选定应用流量走代理</p>
+  <p>利用 VpnService 捕获流量，应用内 SOCKS5 服务端经 SSH 直连隧道 (<code>direct-tcpip</code>) 转发，仅让选定应用流量走代理</p>
 </div>
 
 ---
@@ -29,15 +29,14 @@
 
 | 功能 | 说明 |
 |------|------|
-| **SSH 密钥认证** | ECDSA P-256 硬件加密存储，生物识别解锁，支持应用内生成/导入/导出 |
-| **SOCKS5 代理** | 完整 RFC 1928 实现：TCP CONNECT + UDP ASSOCIATE，支持 IPv4/IPv6/域名 |
+| **SSH 密钥认证** | ECDSA P-256/P-384 密钥存储于 Android Keystore，生物识别解锁，支持应用内生成/导入/复制公钥 |
+| **SOCKS5 代理** | TCP CONNECT 代理，支持 IPv4/IPv6/域名（UDP ASSOCIATE 尚未支持） |
 | **白名单模式** | `VpnService.addAllowedApplication()` - 仅选中应用走代理，其他直连 |
 | **双栈网络** | 同时支持 IPv4 和 IPv6，TUN 接口分配双栈地址 |
 | **远端 DNS 解析** | 拦截 UDP:53，通过 SSH 隧道 TCP 发送到远程 DNS (8.8.8.8/1.1.1.1)，防泄露 |
-| **HTTP/3 预留** | SOCKS5 UDP ASSOCIATE 帧处理已实现，本地 UDP 监听待完善（QUIC 暂不可用） |
-| **连接统计** | 连接状态、累计流量、连接时长（内存实时统计） |
+| **连接统计** | 连接状态、流量、连接时长（进程内实时统计） |
 | **自动重连** | 网络切换 (WiFi↔5G) 自动重连（2s 去抖）；SSH 会话级线性退避重连 |
-| **Material 3 UI** | 服务器管理、白名单选择、仪表盘、设置、密钥管理 |
+| **Material 3 UI** | 仪表盘、服务器管理、白名单、设置、密钥管理 |
 
 ---
 
@@ -48,30 +47,30 @@
 │                      Android 14+                            │
 ├─────────────────────────────────────────────────────────────┤
 │  UI Layer (Compose)                                         │
-│  ├── DashboardScreen    ← 实时流量/连接状态/快捷操作         │
-│  ├── ServerListScreen   ← 服务器增删改查/测试连接/密钥管理   │
-│  ├── WhitelistScreen    ← 应用列表搜索/分组/全选/预设模式    │
-│  ├── SettingsScreen     ← MTU/保活/DNS/IPv6/主题/生物识别   │
-│  └── KeyManagerScreen   ← ECDSA P-256 生成/导入/导出/二维码分享  │
+│  ├── DashboardScreen    ← 实时状态/连接控制/服务器快捷操作    │
+│  ├── ServerListScreen   ← 服务器增删改查/一键配置向导        │
+│  ├── WhitelistScreen    ← 应用列表搜索/全选/勾选              │
+│  ├── SettingsScreen     ← DNS 模式/语言/生物识别             │
+│  └── KeyManagerScreen   ← ECDSA P-256 生成/导入/复制公钥     │
 ├─────────────────────────────────────────────────────────────┤
 │  Domain Layer (UseCases)                                    │
 │  ├── VpnController       ← VPN 生命周期/状态机/统计聚合      │
-│  ├── ServerRepository    ← 服务器/白名单/会话/流量 CRUD      │
+│  ├── ServerRepository    ← 服务器/白名单 CRUD                │
 │  └── KeyManager          ← 密钥生成/导入/签名/公钥导出       │
 ├─────────────────────────────────────────────────────────────┤
 │  Data Layer                                                 │
-│  ├── Room Database       ← Server/Whitelist/Session/Traffic │
+│  ├── Room Database       ← Server/WhitelistApp              │
 │  ├── DataStore           ← 偏好设置/Keystore 别名映射        │
-│  ├── SshKeyManager       ← Android Keystore (硬件加密)       │
+│  ├── SshKeyManager       ← Android Keystore (密钥不可导出)   │
 │  ├── JschSshClient       ← SSH 连接/隧道/心跳/重连           │
-│  ├── SshTunnelManager    ← 本地 SOCKS5 ↔ SSH 通道桥接        │
-│  ├── Socks5ProxyServer   ← RFC 1928 服务端 (NIO Selector)    │
+│  ├── TunnelManager       ← 本地 SOCKS5 ↔ SSH 通道桥接        │
+│  ├── Socks5ProxyServer   ← SOCKS5 TCP 服务端 (NIO Selector)  │
 │  ├── PacketProcessor     ← IP/TCP/UDP 解析/五元组/转发       │
 │  └── DnsInterceptor      ← DNS 查询拦截/远端解析/缓存        │
 ├─────────────────────────────────────────────────────────────┤
 │  System Layer                                               │
 │  ├── SshVpnService       ← VpnService (TUN/白名单/数据包循环)│
-│  └── BootReceiver        ← 开机自启/网络变化监听             │
+│  └── BootReceiver        ← 开机自启                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -89,7 +88,7 @@
 | SSH 客户端 | mwiede/jsch:0.2.14 (维护活跃，支持 ECDSA P-256) |
 | DNS 解析 | dnsjava 3.6.5 |
 | 网络 I/O | Java NIO Selector + Kotlinx Coroutines |
-| 密钥存储 | Android Keystore (硬件加密) + BiometricPrompt |
+| 密钥存储 | Android Keystore + BiometricPrompt（密钥不可导出） |
 | 协程 | Kotlinx Coroutines 1.9.0 + Flow |
 | 导航 | Navigation Compose 2.8.5 |
 
@@ -127,16 +126,14 @@
 git clone https://github.com/tongtf/sshinjector.git
 cd sshinjector
 
-# 配置签名 (本地 properties 或环境变量)
-echo "KEYSTORE_PATH=keystore.jks
-KEYSTORE_PASSWORD=your_store_pass
-KEY_ALIAS=your_key_alias
-KEY_PASSWORD=your_key_pass" > local.properties
-
 # 编译 Debug APK
 ./gradlew assembleDebug
 
-# 编译 Release AAB (需配置签名)
+# 编译 Release APK (默认 debug keystore 签名)
+./gradlew assembleRelease
+
+# 编译 Release AAB (配置环境变量后使用自定义签名)
+#   KEYSTORE_PATH / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD
 ./gradlew bundleRelease
 ```
 
@@ -148,54 +145,51 @@ KEY_PASSWORD=your_key_pass" > local.properties
 
 ### 1. 添加服务器
 
-1. 点击「+」添加服务器
-2. 填写：名称、主机、端口(默认22)、用户名
-3. 点击「生成密钥」创建 ECDSA P-256 密钥对 (需生物识别授权)
-4. 复制公钥 → 粘贴到 VPS `~/.ssh/authorized_keys`
-5. 点击「测试连接」验证
+1. 点击「+」打开添加服务器向导
+2. 填写：名称、主机、端口(默认22)、用户名/密码（root 或 sudo 权限）
+3. 向导自动生成 ECDSA 密钥对并一键配置服务端（创建 `sshproxy` 专用账号 + sshd 加固）
+4. 也可选择「仅生成密钥」：复制公钥 → 粘贴到 VPS `~/.ssh/authorized_keys`
 
 ### 2. 配置白名单
 
 1. 进入「白名单」页面
 2. 搜索/浏览已安装应用
 3. 勾选需要走代理的应用 (仅勾选的应用流量会被拦截)
-4. 支持预设：仅浏览器 / 社交应用 / 自定义
 
 ### 3. 连接 VPN
 
 1. 主界面点击大按钮「连接」
 2. 首次会请求 VPN 权限，允许即可
-3. 连接成功显示：本地 IP / 远程 IP / 实时流量图
-4. 通知栏常驻显示状态，支持断开/暂停
+3. 连接成功显示：本地 IP / 远程 IP / 连接状态
+4. 通知栏常驻显示状态，可点击断开
 
-### 4. 高级设置
+### 4. 设置
 
-| 设置项 | 推荐值 | 说明 |
-|--------|--------|------|
-| MTU | 1500 | 根据网络调整，低 MTU 可解决断流 |
-| 保活间隔 | 30s | SSH 心跳，防服务端断开 |
-| DNS 模式 | 远端解析 | 防 DNS 泄露，需服务端可访问 8.8.8.8 |
-| IPv6 | 开启 | 双栈网络，访问 IPv6 站点 |
-| 生物识别 | 开启 | 保护私钥，解锁需指纹/面容 |
+| 设置项 | 说明 |
+|--------|------|
+| DNS 模式 | 远端解析（默认，防泄露）/ 本地直连 / 白名单 / 域名分流 |
+| 域名列表 | 配置域名分流规则的域名列表 |
+| 语言 | 中文 / English / Русский / 跟随系统 |
+| 生物识别 | 开启后解锁私钥需指纹/面容 |
 
 ---
 
 ## 🔒 安全模型
 
 ```
-私钥生成 → Android Keystore (TEE/StrongBox) → 硬件级隔离
+私钥生成 → Android Keystore → 系统级隔离
      ↓
-私钥签名 → BiometricPrompt (指纹/面容/密码) → 用户授权
+私钥签名 → BiometricPrompt (指纹/面容) → 用户授权
      ↓
 SSH 认证 → JSch Identity 接口桥接 → Keystore 签名
      ↓
-公钥导出 → OpenSSH 格式 → 手动部署到服务器
+公钥导出 → OpenSSH 格式 → 部署到服务器
 ```
 
 **关键点**：
 - 私钥**永不离开** Keystore，不可导出
-- 首次连接 TOFU (Trust On First Use) + Host Key 指纹缓存
-- 支持 `StrictHostKeyChecking=ask` 手动验证
+- 首次连接 TOFU (Trust On First Use) + Host Key 指纹缓存，指纹变化时拒绝连接（防中间人）
+- 仅保留安全算法：curve25519 / diffie-hellman-group14+ 密钥交换，ed25519 / ECDSA P-256+ 主机密钥
 - 通知栏/前台服务类型 `FOREGROUND_SERVICE_SPECIAL_USE`
 
 ---
@@ -209,15 +203,14 @@ SSHInjector/
 │   │   ├── java/cn/srv0/sshinjector/
 │   │   │   ├── data/
 │   │   │   │   ├── local/          # Room + DataStore
-│   │   │   │   ├── remote/ssh/     # JSch 封装 + Keystore
-│   │   │   │   └── repository/     # Repository 实现
+│   │   │   │   └── remote/         # ssh (JSch+Keystore) / tunnel / config (ServerProvisioner)
 │   │   │   ├── domain/
 │   │   │   │   ├── model/          # 领域模型
 │   │   │   │   ├── usecase/        # VpnController/Repository
-│   │   │   │   └── vpn/            # 核心 VPN 组件
-│   │   │   ├── di/                 # Hilt Modules/EntryPoints
+│   │   │   │   └── vpn/            # 核心 VPN 组件 (Socks5/TCP/UDP/DNS/隧道)
+│   │   │   ├── di/                 # Hilt Modules
 │   │   │   ├── ui/
-│   │   │   │   ├── screen/         # 5 大页面
+│   │   │   │   ├── screen/         # 页面 (dashboard/server/whitelist/settings/keymanager)
 │   │   │   │   ├── component/      # 通用组件
 │   │   │   │   └── theme/          # Material3 主题
 │   │   │   └── vpn/                # SshVpnService + BootReceiver
@@ -230,6 +223,7 @@ SSHInjector/
 │   └── diagrams/                 # 架构/流程/状态机/时序图集
 ├── .github/workflows/ci.yml       # CI/CD
 ├── detekt.yml                     # 代码规范
+├── cliff.toml                     # Release 变更日志生成配置
 ├── build.gradle.kts / settings.gradle.kts
 └── README.md
 ```
@@ -253,12 +247,10 @@ SSHInjector/
 
 ## 📦 发布清单
 
-- [ ] 签名配置 (keystore.jks + 环境变量)
 - [ ] 版本号更新 (`versionCode` / `versionName`)
-- [ ] 更新 `CHANGELOG.md`
-- [ ] 运行完整 CI 流水线
+- [ ] 运行完整 CI 流水线（lint / detekt / ktlint / test）
+- [ ] 打 tag 并推送 `v*`，CI 自动构建 Release 产物并生成分组变更日志（git-cliff）
 - [ ] 生成 Release AAB 上传 Play Console / GitHub Releases / F-Droid
-- [ ] 隐私政策链接 (Play Console 要求)
 
 ---
 
