@@ -20,7 +20,7 @@
 
 <div align="center">
   <h3>🔐 Android 14+ SSH SOCKS5 proxy app</h3>
-  <p>Encrypted tunnel over SSH dynamic port forwarding (<code>ssh -D</code>) using VpnService; only whitelisted apps are routed through the proxy.</p>
+  <p>VpnService captures traffic; an in-app SOCKS5 server forwards it over SSH direct-tcpip tunnels; only whitelisted apps are routed through the proxy.</p>
 </div>
 
 ---
@@ -29,15 +29,14 @@
 
 | Feature | Description |
 |---------|-------------|
-| **SSH key auth** | ECDSA P-256 stored in hardware-backed Android Keystore, biometric unlock, in-app generate/import/export |
-| **SOCKS5 proxy** | Full RFC 1928: TCP CONNECT + UDP ASSOCIATE, IPv4/IPv6/domain |
+| **SSH key auth** | ECDSA P-256/P-384 keys stored in Android Keystore, biometric unlock, in-app generate/import/copy public key |
+| **SOCKS5 proxy** | TCP CONNECT proxy with IPv4/IPv6/domain support (UDP ASSOCIATE not yet supported) |
 | **Whitelist mode** | `VpnService.addAllowedApplication()` — only selected apps go through the proxy |
 | **Dual-stack network** | IPv4 + IPv6 with dual-stack addresses on the TUN interface |
 | **Remote DNS** | Intercepts UDP:53 and sends it over the SSH tunnel to a remote resolver, preventing leaks |
-| **HTTP/3 (planned)** | SOCKS5 UDP ASSOCIATE frame handling implemented; local UDP listener pending (QUIC not yet usable) |
-| **Connection stats** | Connection status, cumulative traffic, session time (in-memory) |
+| **Connection stats** | Connection status, traffic, session time (in-process real-time stats) |
 | **Auto-reconnect** | Auto-reconnect on network switch (WiFi↔5G, 2s debounce); SSH session-level linear backoff |
-| **Material 3 UI** | Server management, whitelist picker, dashboard, settings, key management |
+| **Material 3 UI** | Dashboard, server management, whitelist, settings, key management |
 
 ---
 
@@ -48,29 +47,30 @@
 │                      Android 14+                            │
 ├─────────────────────────────────────────────────────────────┤
 │  UI Layer (Compose)                                         │
-│  ├── DashboardScreen    ← live traffic / status / actions   │
-│  ├── ServerListScreen   ← server CRUD / test / keys         │
-│  ├── WhitelistScreen    ← app list / groups / presets       │
-│  ├── SettingsScreen     ← MTU / keepalive / DNS / IPv6/theme│
-│  └── KeyManagerScreen   ← ECDSA P-256 gen/import/export/QR      │
+│  ├── DashboardScreen    ← live status / connect / servers    │
+│  ├── ServerListScreen   ← server CRUD / provisioning wizard │
+│  ├── WhitelistScreen    ← app list search / select all      │
+│  ├── SettingsScreen     ← DNS mode / language / biometric   │
+│  └── KeyManagerScreen   ← ECDSA P-256 gen/import/copy key   │
 ├─────────────────────────────────────────────────────────────┤
 │  Domain Layer (UseCases)                                    │
 │  ├── VpnController       ← VPN lifecycle / state machine    │
-│  ├── ServerRepository    ← server/whitelist/session CRUD    │
+│  ├── ServerRepository    ← server/whitelist CRUD            │
 │  └── KeyManager          ← key gen/import/sign/export       │
 ├─────────────────────────────────────────────────────────────┤
 │  Data Layer                                                 │
-│  ├── Room Database       ← Server/Whitelist/Session/Traffic │
+│  ├── Room Database       ← Server/WhitelistApp              │
 │  ├── DataStore           ← preferences / keystore alias map │
-│  ├── SshKeyManager       ← Android Keystore (hardware)      │
+│  ├── SshKeyManager       ← Android Keystore (non-exportable)│
 │  ├── JschSshClient       ← SSH connect/tunnel/keepalive     │
-│  ├── Socks5ProxyServer   ← RFC 1928 server (NIO Selector)   │
+│  ├── TunnelManager       ← local SOCKS5 ↔ SSH bridge        │
+│  ├── Socks5ProxyServer   ← SOCKS5 TCP server (NIO Selector) │
 │  ├── PacketProcessor     ← IP/TCP/UDP parse/forward         │
 │  └── DnsInterceptor      ← DNS intercept/remote-resolve     │
 ├─────────────────────────────────────────────────────────────┤
 │  System Layer                                               │
 │  ├── SshVpnService       ← VpnService (TUN/whitelist/loop)  │
-│  └── BootReceiver        ← boot start / network monitor     │
+│  └── BootReceiver        ← boot start                       │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -88,7 +88,7 @@
 | SSH client | mwiede/jsch:0.2.14 (active fork, ECDSA P-256 support) |
 | DNS | dnsjava 3.6.5 |
 | Network I/O | Java NIO Selector + Kotlinx Coroutines |
-| Keystore | Android Keystore (hardware) + BiometricPrompt |
+| Keystore | Android Keystore + BiometricPrompt (keys non-exportable) |
 | Coroutines | Kotlinx Coroutines 1.9.0 + Flow |
 | Navigation | Navigation Compose 2.8.5 |
 
@@ -144,54 +144,51 @@ cd sshinjector
 
 ### 1. Add a server
 
-1. Tap **+** to add a server
-2. Fill in: name, host, port (default 22), username
-3. Tap **Generate key** to create an ECDSA P-256 key pair (biometric required)
-4. Copy the public key → paste into `~/.ssh/authorized_keys` on the VPS
-5. Tap **Test connection** to verify
+1. Tap **+** to open the add-server wizard
+2. Fill in: name, host, port (default 22), username/password (root or sudo access)
+3. The wizard generates an ECDSA key pair and provisions the server automatically (dedicated `sshproxy` account + sshd hardening)
+4. Or choose **generate key only**: copy the public key → paste into `~/.ssh/authorized_keys` on the VPS
 
 ### 2. Configure the whitelist
 
 1. Open the **Whitelist** page
 2. Search/browse installed apps
 3. Check the apps to route through the proxy (only checked apps are intercepted)
-4. Presets: browser-only / social / custom
 
 ### 3. Connect
 
 1. Tap the big **Connect** button
 2. Grant the VPN permission when prompted
-3. On success: local IP / remote IP / live traffic graph
-4. Persistent status in the notification; support disconnect/pause
+3. On success: local IP / remote IP / connection status
+4. Persistent status in the notification; tap to disconnect
 
-### 4. Advanced settings
+### 4. Settings
 
-| Setting | Recommended | Description |
-|---------|-------------|-------------|
-| MTU | 1500 | Adjust for your network; lower MTU may fix stalls |
-| Keepalive | 30s | SSH heartbeat, prevents server-side disconnects |
-| DNS mode | Remote | Prevents DNS leaks; server must reach 8.8.8.8 |
-| IPv6 | On | Dual-stack, access IPv6 sites |
-| Biometric | On | Protects the private key |
+| Setting | Description |
+|---------|-------------|
+| DNS mode | Remote resolve (default, leak-prevention) / direct / whitelist / domain split |
+| Domain list | Configure domains for the domain-split rules |
+| Language | 中文 / English / Русский / system default |
+| Biometric | When enabled, unlocking the private key requires fingerprint/face |
 
 ---
 
 ## 🔒 Security Model
 
 ```
-Private key → Android Keystore (TEE/StrongBox) → hardware isolation
+Private key → Android Keystore → system-level isolation
      ↓
-Key signing → BiometricPrompt (fingerprint/face/password) → user consent
+Key signing → BiometricPrompt (fingerprint/face) → user consent
      ↓
 SSH auth   → JSch Identity bridge → Keystore signature
      ↓
-Public key → OpenSSH format → deployed manually to the server
+Public key → OpenSSH format → deployed to the server
 ```
 
 **Key points:**
 - The private key **never leaves** the Keystore and cannot be exported
-- First-connection TOFU (Trust On First Use) + host key fingerprint cache
-- Host key verification via `StrictHostKeyChecking=ask` and known_hosts
+- First-connection TOFU (Trust On First Use) + host key fingerprint cache; connections are rejected if the fingerprint changes (MITM protection)
+- Only secure algorithms enabled: curve25519 / diffie-hellman-group14+ key exchange, ed25519 / ECDSA P-256+ host keys
 - Foreground service type `FOREGROUND_SERVICE_SPECIAL_USE`
 
 ---
@@ -205,14 +202,16 @@ SSHInjector/
 │   │   ├── java/cn/srv0/sshinjector/
 │   │   │   ├── data/
 │   │   │   │   ├── local/          # Room + DataStore
-│   │   │   │   ├── remote/ssh/     # JSch wrapper + Keystore
-│   │   │   │   └── repository/     # Repository implementations
+│   │   │   │   └── remote/         # ssh (JSch+Keystore) / tunnel / config (ServerProvisioner)
 │   │   │   ├── domain/
 │   │   │   │   ├── model/          # Domain models
 │   │   │   │   ├── usecase/        # VpnController/Repository
-│   │   │   │   └── vpn/            # Core VPN components
-│   │   │   ├── di/                 # Hilt Modules/EntryPoints
-│   │   │   ├── ui/                 # Compose screens
+│   │   │   │   └── vpn/            # Core VPN components (Socks5/TCP/UDP/DNS/tunnel)
+│   │   │   ├── di/                 # Hilt Modules
+│   │   │   ├── ui/
+│   │   │   │   ├── screen/         # Screens (dashboard/server/whitelist/settings/keymanager)
+│   │   │   │   ├── component/      # Common components
+│   │   │   │   └── theme/          # Material3 theme
 │   │   │   └── vpn/                # SshVpnService + BootReceiver
 │   │   ├── res/                    # Resources
 │   │   └── AndroidManifest.xml
@@ -223,6 +222,7 @@ SSHInjector/
 │   └── diagrams/                   # Architecture/flow/state/sequence diagrams
 ├── .github/workflows/ci.yml        # CI/CD
 ├── detekt.yml                      # Code style rules
+├── cliff.toml                      # Release changelog generation config
 ├── build.gradle.kts / settings.gradle.kts
 └── README.md
 ```
@@ -244,10 +244,9 @@ SSHInjector/
 ## 📦 Release Checklist
 
 - [ ] Version bump (`versionCode` / `versionName`)
-- [ ] Update `CHANGELOG.md`
-- [ ] Run the full CI pipeline
+- [ ] Run the full CI pipeline (lint / detekt / ktlint / test)
+- [ ] Push a `v*` tag — CI builds the release artifacts and generates grouped changelog (git-cliff)
 - [ ] Publish the release APK/AAB to GitHub Releases / Play Console
-- [ ] Privacy policy link (required by Play Console)
 
 ---
 
