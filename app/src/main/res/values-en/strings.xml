@@ -29,6 +29,8 @@
     <string name="dashboard_mode">Mode</string>
     <string name="dashboard_network">Network</string>
     <string name="dashboard_cpu">CPU</string>
+    <string name="dashboard_traffic">Traffic</string>
+    <string name="dashboard_duration">Duration</string>
     <string name="dashboard_dns_remote">Remote Proxy</string>
     <string name="dashboard_dns_direct">Direct</string>
     <string name="dashboard_dns_whitelist">Whitelist</string>

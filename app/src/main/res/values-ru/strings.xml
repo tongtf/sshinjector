@@ -29,6 +29,8 @@
     <string name="dashboard_mode">Режим</string>
     <string name="dashboard_network">Сеть</string>
     <string name="dashboard_cpu">CPU</string>
+    <string name="dashboard_traffic">Трафик</string>
+    <string name="dashboard_duration">Длительность</string>
     <string name="dashboard_dns_remote">Удалённый прокси</string>
     <string name="dashboard_dns_direct">Прямой</string>
     <string name="dashboard_dns_whitelist">Белый список</string>

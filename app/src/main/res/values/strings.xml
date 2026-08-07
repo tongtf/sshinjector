@@ -29,6 +29,8 @@
     <string name="dashboard_mode">模式</string>
     <string name="dashboard_network">网络</string>
     <string name="dashboard_cpu">CPU</string>
+    <string name="dashboard_traffic">流量</string>
+    <string name="dashboard_duration">连接时长</string>
     <string name="dashboard_dns_remote">远程代理</string>
     <string name="dashboard_dns_direct">本地直连</string>
     <string name="dashboard_dns_whitelist">白名单模式</string>

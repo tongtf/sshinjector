@@ -130,6 +130,10 @@ class MainViewModel
             val cpuUsage: String = "-",
             val javaHeapUsage: String = "-",
             val nativeHeapUsage: String = "-",
+            // 会话统计 (进程生命周期累计)
+            val bytesUp: Long = 0,
+            val bytesDown: Long = 0,
+            val connectedDurationMs: Long = 0,
         )
 
         init {
@@ -139,6 +143,7 @@ class MainViewModel
             observeDnsModeChanges()
             registerNetworkCallback()
             startResourceMonitoring()
+            observeSessionStats()
         }
 
         private fun observeDnsModeChanges() {
@@ -346,6 +351,29 @@ class MainViewModel
             }
         }
 
+        private fun observeSessionStats() {
+            viewModelScope.launch {
+                vpnController.connectionStats.collect { stats ->
+                    _uiState.update {
+                        it.copy(
+                            bytesUp = stats.bytesReceived,
+                            bytesDown = stats.bytesSent,
+                        )
+                    }
+                }
+            }
+            viewModelScope.launch {
+                while (true) {
+                    kotlinx.coroutines.delay(1000)
+                    val vpn = vpnController.vpnState.value
+                    val connected =
+                        vpn.status == cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Connected
+                    val durationMs = if (connected) System.currentTimeMillis() - vpn.stats.startTime.time else 0L
+                    _uiState.update { it.copy(connectedDurationMs = durationMs) }
+                }
+            }
+        }
+
         private fun startResourceMonitoring() {
             viewModelScope.launch {
                 android.util.Log.d("MainViewModel", "startResourceMonitoring started")
@@ -421,6 +449,41 @@ class MainViewModel
                     bytes < 1024L * 1024 * 1024 ->
                         String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024))
                     else -> String.format(java.util.Locale.ROOT, "%.1f GB", bytes / (1024.0 * 1024 * 1024))
+                }
+            }
+
+            @JvmStatic
+            fun formatBytes(bytes: Long): String {
+                return when {
+                    bytes < 0 -> "-"
+                    bytes < 1024 -> String.format(java.util.Locale.ROOT, "%d B", bytes)
+                    bytes < 1024L * 1024 ->
+                        String.format(java.util.Locale.ROOT, "%.1f KB", bytes / 1024.0)
+                    bytes < 1024L * 1024 * 1024 ->
+                        String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024))
+                    else -> String.format(java.util.Locale.ROOT, "%.2f GB", bytes / (1024.0 * 1024 * 1024))
+                }
+            }
+
+            @JvmStatic
+            fun formatDuration(durationMs: Long): String {
+                if (durationMs < 0) return "-"
+                val totalSeconds = durationMs / 1000
+                val days = totalSeconds / 86400
+                val hours = (totalSeconds % 86400) / 3600
+                val minutes = (totalSeconds % 3600) / 60
+                val seconds = totalSeconds % 60
+                return if (days > 0) {
+                    String.format(
+                        java.util.Locale.ROOT,
+                        "%dd %02d:%02d:%02d",
+                        days,
+                        hours,
+                        minutes,
+                        seconds,
+                    )
+                } else {
+                    String.format(java.util.Locale.ROOT, "%02d:%02d:%02d", hours, minutes, seconds)
                 }
             }
 
