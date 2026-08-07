@@ -11,7 +11,6 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Debug
 import android.telephony.TelephonyManager
-import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cn.srv0.sshinjector.R
@@ -43,6 +42,12 @@ class MainViewModel
         private val serverRepository: ServerRepository,
         private val settingsDataStore: SettingsDataStore,
     ) : ViewModel() {
+        enum class RatioLevel {
+            OK,
+            WARNING,
+            BAD,
+        }
+
         private val _uiState = MutableStateFlow(UiState())
         val uiState = _uiState.asStateFlow()
 
@@ -407,9 +412,6 @@ class MainViewModel
             private const val CPU_PERCENT_CAP = 99.9f
             private const val RATIO_LOW = 0.5f
             private const val RATIO_HIGH = 1.0f
-            private const val COLOR_GREEN = 0xFF4CAF50
-            private const val COLOR_AMBER = 0xFFFF9800
-            private const val COLOR_RED = 0xFFF44336
             private const val NETWORK_TIMEOUT_MS = 5000
 
             @JvmStatic
@@ -423,11 +425,11 @@ class MainViewModel
             }
 
             @JvmStatic
-            fun colorForRatio(ratio: Float): Color {
+            fun ratioLevel(ratio: Float): RatioLevel {
                 return when {
-                    ratio < RATIO_LOW -> Color(COLOR_GREEN)
-                    ratio < RATIO_HIGH -> Color(COLOR_AMBER)
-                    else -> Color(COLOR_RED)
+                    ratio < RATIO_LOW -> RatioLevel.OK
+                    ratio < RATIO_HIGH -> RatioLevel.WARNING
+                    else -> RatioLevel.BAD
                 }
             }
         }

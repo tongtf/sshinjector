@@ -70,6 +70,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.srv0.sshinjector.ui.screen.keymanager.KeyKindIcon
 import cn.srv0.sshinjector.ui.screen.keymanager.KeyManagerViewModel
+import cn.srv0.sshinjector.ui.theme.extendedColors
 import cn.srv0.sshinjector.ui.viewmodel.MainViewModel
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -260,13 +261,15 @@ fun DashboardScreen(
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium,
                                 color =
-                                    MainViewModel.colorForRatio(
-                                        if (state.cpuUsage != "-") {
-                                            state.cpuUsage.replace("%", "").toFloatOrNull()
-                                                ?.div(10f) ?: 0f
-                                        } else {
-                                            0f
-                                        },
+                                    ratioLevelColor(
+                                        MainViewModel.ratioLevel(
+                                            if (state.cpuUsage != "-") {
+                                                state.cpuUsage.replace("%", "").toFloatOrNull()
+                                                    ?.div(10f) ?: 0f
+                                            } else {
+                                                0f
+                                            },
+                                        ),
                                     ),
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                                 modifier = Modifier.width(48.dp),
@@ -284,23 +287,25 @@ fun DashboardScreen(
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
                             color =
-                                MainViewModel.colorForRatio(
-                                    if (state.javaHeapUsage != "-" &&
-                                        state.javaHeapUsage.contains(" MB")
-                                    ) {
-                                        val num =
-                                            state.javaHeapUsage.replace(" MB", "")
-                                                .replace(" GB", "").toFloatOrNull() ?: 0f
-                                        val inMb =
-                                            if (state.javaHeapUsage.contains(" GB")) {
-                                                num * 1024f
-                                            } else {
-                                                num
-                                            }
-                                        inMb / 50f
-                                    } else {
-                                        0f
-                                    },
+                                ratioLevelColor(
+                                    MainViewModel.ratioLevel(
+                                        if (state.javaHeapUsage != "-" &&
+                                            state.javaHeapUsage.contains(" MB")
+                                        ) {
+                                            val num =
+                                                state.javaHeapUsage.replace(" MB", "")
+                                                    .replace(" GB", "").toFloatOrNull() ?: 0f
+                                            val inMb =
+                                                if (state.javaHeapUsage.contains(" GB")) {
+                                                    num * 1024f
+                                                } else {
+                                                    num
+                                                }
+                                            inMb / 50f
+                                        } else {
+                                            0f
+                                        },
+                                    ),
                                 ),
                             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                             maxLines = 1,
@@ -859,18 +864,24 @@ fun ContextMenuItem(
     }
 }
 
-private const val COLOR_REMOTE_PROXY = 0xFF7C4DFF
-private const val COLOR_LOCAL_DIRECT = 0xFF9E9E9E
-private const val COLOR_WHITELIST_MODE = 0xFF00BCD4
-private const val COLOR_DOMAIN_SPLIT = 0xFFFF9800
+@Composable
+private fun ratioLevelColor(level: MainViewModel.RatioLevel): Color {
+    val colors = MaterialTheme.extendedColors
+    return when (level) {
+        MainViewModel.RatioLevel.OK -> colors.statusOk
+        MainViewModel.RatioLevel.WARNING -> colors.statusWarning
+        MainViewModel.RatioLevel.BAD -> colors.statusError
+    }
+}
 
 @Composable
 private fun dnsModeColors(dnsMode: String): Pair<Color, Color> {
+    val colors = MaterialTheme.extendedColors
     return when (dnsMode) {
-        "远程代理" -> Color(COLOR_REMOTE_PROXY) to Color.White
-        "本地直连" -> Color(COLOR_LOCAL_DIRECT) to Color.White
-        "白名单模式" -> Color(COLOR_WHITELIST_MODE) to Color.White
-        "域名分流" -> Color(COLOR_DOMAIN_SPLIT) to Color.White
+        "远程代理" -> colors.dnsRemoteProxy to Color.White
+        "本地直连" -> colors.dnsLocalDirect to Color.White
+        "白名单模式" -> colors.dnsWhitelist to Color.White
+        "域名分流" -> colors.dnsDomainSplit to Color.White
         else ->
             MaterialTheme.colorScheme.surfaceVariant to
                 MaterialTheme.colorScheme.onSurface
