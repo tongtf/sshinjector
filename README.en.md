@@ -187,6 +187,8 @@ Public key → OpenSSH format → deployed to the server
 
 **Key points:**
 - The private key **never leaves** the Keystore and cannot be exported
+- Server passwords and imported private keys are stored **AES-256-GCM encrypted** (key held in the Android Keystore); ciphertext never leaves the device. Passphrase-protected imported keys keep the passphrase encrypted alongside the key
+- Server form inputs (hostname/IPv4/IPv6, ports, MTU, keep-alive interval) are validated before saving; invalid values are rejected
 - First-connection TOFU (Trust On First Use) + host key fingerprint cache; connections are rejected if the fingerprint changes (MITM protection)
 - Only secure algorithms enabled: curve25519 / diffie-hellman-group14+ key exchange, ed25519 / ECDSA P-256+ host keys
 - Foreground service type `FOREGROUND_SERVICE_SPECIAL_USE`

@@ -188,6 +188,8 @@ SSH 认证 → JSch Identity 接口桥接 → Keystore 签名
 
 **关键点**：
 - 私钥**永不离开** Keystore，不可导出
+- 服务器密码与导入的私钥均以 **AES-256-GCM 加密存储**（密钥托管于 Android Keystore），密文不离开设备；导入私钥支持口令保护，口令随密钥一并加密存储
+- 服务器表单输入（主机名/IPv4/IPv6、端口、MTU、保活间隔）在保存前统一校验，非法值直接拦截
 - 首次连接 TOFU (Trust On First Use) + Host Key 指纹缓存，指纹变化时拒绝连接（防中间人）
 - 仅保留安全算法：curve25519 / diffie-hellman-group14+ 密钥交换，ed25519 / ECDSA P-256+ 主机密钥
 - 通知栏/前台服务类型 `FOREGROUND_SERVICE_SPECIAL_USE`
