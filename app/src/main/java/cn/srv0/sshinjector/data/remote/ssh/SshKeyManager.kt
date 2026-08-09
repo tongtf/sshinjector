@@ -395,12 +395,18 @@ class SshKeyManager
                 if (loadImportedPem(fullAlias) != null) {
                     return null
                 }
-                // Ed25519 密钥存储在文件中
+                // Ed25519 密钥存储在文件中 (AES-GCM 加密, 需解密后还原 PKCS8)
                 val safeName = fullAlias.replace("/", "_")
                 val keyFile = File(generatedKeysDir, safeName)
                 if (keyFile.exists()) {
                     android.util.Log.d("SshKeyManager", "Loading Ed25519 key from file")
-                    val keyBytes = keyFile.readBytes()
+                    val data = keyFile.readBytes()
+                    val iv = data.copyOfRange(0, 12)
+                    val ciphertext = data.copyOfRange(12, data.size)
+                    val wrappingKey = getOrCreateImportWrapperKey()
+                    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                    cipher.init(Cipher.DECRYPT_MODE, wrappingKey, GCMParameterSpec(128, iv))
+                    val keyBytes = cipher.doFinal(ciphertext)
                     val kf = KeyFactory.getInstance("Ed25519")
                     return kf.generatePrivate(java.security.spec.PKCS8EncodedKeySpec(keyBytes))
                 }
