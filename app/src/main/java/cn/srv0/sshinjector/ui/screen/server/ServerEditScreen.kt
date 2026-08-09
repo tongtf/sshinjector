@@ -47,6 +47,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,6 +60,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.data.local.entity.ServerEntity
 import cn.srv0.sshinjector.ui.component.rememberClickGuard
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -86,6 +88,8 @@ fun ServerEditScreen(
 
     val availableKeys by viewModel.keyAliases.collectAsState()
     val guard = rememberClickGuard()
+    val scope = rememberCoroutineScope()
+    var saveAttempted by remember { mutableStateOf(false) }
 
     LaunchedEffect(serverId) {
         viewModel.load(serverId) { entity ->
@@ -118,6 +122,24 @@ fun ServerEditScreen(
         viewModel.refreshKeys()
     }
 
+    val nameErr = ServerFormValidator.nameError(name)
+    val hostErr = ServerFormValidator.hostError(host)
+    val portErr = ServerFormValidator.portError(port)
+    val usernameErr = ServerFormValidator.usernameError(username)
+    val socksPortErr = ServerFormValidator.socksPortError(socksPort)
+    val mtuErr = ServerFormValidator.mtuError(mtu)
+    val keepAliveErr = ServerFormValidator.keepAliveError(keepAlive)
+    val firstError =
+        listOfNotNull(nameErr, hostErr, portErr, usernameErr, socksPortErr, mtuErr, keepAliveErr).firstOrNull()
+    val firstErrorMessage = firstError?.let { stringResource(errorRes(it)) }
+    val nameErrorText = if (saveAttempted && nameErr != null) stringResource(errorRes(nameErr)) else null
+    val hostErrorText = if (saveAttempted && hostErr != null) stringResource(errorRes(hostErr)) else null
+    val portErrorText = if (saveAttempted && portErr != null) stringResource(errorRes(portErr)) else null
+    val usernameErrorText = if (saveAttempted && usernameErr != null) stringResource(errorRes(usernameErr)) else null
+    val socksPortErrorText = if (saveAttempted && socksPortErr != null) stringResource(errorRes(socksPortErr)) else null
+    val mtuErrorText = if (saveAttempted && mtuErr != null) stringResource(errorRes(mtuErr)) else null
+    val keepAliveErrorText = if (saveAttempted && keepAliveErr != null) stringResource(errorRes(keepAliveErr)) else null
+
     Scaffold(
         modifier = modifier,
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -144,6 +166,11 @@ fun ServerEditScreen(
                     androidx.compose.material3.TextButton(
                         onClick = {
                             guard {
+                                saveAttempted = true
+                                if (firstError != null) {
+                                    scope.launch { snackbarHostState.showSnackbar(firstErrorMessage.orEmpty()) }
+                                    return@guard
+                                }
                                 val entity =
                                     ServerEntity(
                                         id = if (isNew) 0 else serverId,
@@ -215,6 +242,8 @@ fun ServerEditScreen(
                         stringResource(R.string.server_placeholder_name),
                         name,
                         { name = it },
+                        isError = nameErrorText != null,
+                        supportingText = nameErrorText,
                     )
                     OutlinedTextFieldRow(
                         stringResource(R.string.server_host),
@@ -222,6 +251,8 @@ fun ServerEditScreen(
                         host,
                         { host = it },
                         singleLine = true,
+                        isError = hostErrorText != null,
+                        supportingText = hostErrorText,
                     )
                     OutlinedTextFieldRow(
                         stringResource(R.string.server_port),
@@ -230,6 +261,8 @@ fun ServerEditScreen(
                         { port = it },
                         singleLine = true,
                         numeric = true,
+                        isError = portErrorText != null,
+                        supportingText = portErrorText,
                     )
                     OutlinedTextFieldRow(
                         stringResource(R.string.server_username),
@@ -237,6 +270,8 @@ fun ServerEditScreen(
                         username,
                         { username = it },
                         singleLine = true,
+                        isError = usernameErrorText != null,
+                        supportingText = usernameErrorText,
                     )
                     KeyAliasSelector(
                         keyAlias,
@@ -303,6 +338,8 @@ fun ServerEditScreen(
                         { socksPort = it },
                         singleLine = true,
                         numeric = true,
+                        isError = socksPortErrorText != null,
+                        supportingText = socksPortErrorText,
                     )
                 }
             }
@@ -343,6 +380,8 @@ fun ServerEditScreen(
                         { mtu = it },
                         singleLine = true,
                         numeric = true,
+                        isError = mtuErrorText != null,
+                        supportingText = mtuErrorText,
                     )
                     OutlinedTextFieldRow(
                         stringResource(R.string.server_keepalive),
@@ -351,6 +390,8 @@ fun ServerEditScreen(
                         { keepAlive = it },
                         singleLine = true,
                         numeric = true,
+                        isError = keepAliveErrorText != null,
+                        supportingText = keepAliveErrorText,
                     )
                 }
             }
@@ -412,6 +453,8 @@ fun OutlinedTextFieldRow(
     singleLine: Boolean = false,
     numeric: Boolean = false,
     password: Boolean = false,
+    isError: Boolean = false,
+    supportingText: String? = null,
 ) {
     androidx.compose.material3.OutlinedTextField(
         value = value,
@@ -420,6 +463,8 @@ fun OutlinedTextFieldRow(
         label = { Text(label) },
         placeholder = { Text(placeholder) },
         singleLine = singleLine,
+        isError = isError,
+        supportingText = supportingText?.let { { Text(it) } },
         visualTransformation =
             if (password) {
                 androidx.compose.ui.text.input.PasswordVisualTransformation()
@@ -437,6 +482,20 @@ fun OutlinedTextFieldRow(
             ),
     )
 }
+
+private fun errorRes(error: ServerFormError): Int =
+    when (error) {
+        ServerFormError.NAME_REQUIRED -> R.string.server_error_name_required
+        ServerFormError.NAME_TOO_LONG -> R.string.server_error_name_too_long
+        ServerFormError.HOST_REQUIRED -> R.string.server_error_host_required
+        ServerFormError.HOST_INVALID -> R.string.server_error_host_invalid
+        ServerFormError.PORT_RANGE -> R.string.wizard_invalid_port
+        ServerFormError.SOCKS_PORT_RANGE -> R.string.server_error_socks_port_range
+        ServerFormError.MTU_RANGE -> R.string.server_error_mtu_range
+        ServerFormError.KEEPALIVE_RANGE -> R.string.server_error_keepalive_range
+        ServerFormError.USERNAME_REQUIRED -> R.string.server_error_username_required
+        ServerFormError.USERNAME_INVALID -> R.string.server_error_username_invalid
+    }
 
 @Composable
 fun SwitchRow(

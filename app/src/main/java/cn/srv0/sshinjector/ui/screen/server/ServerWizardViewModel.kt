@@ -112,27 +112,46 @@ class ServerWizardViewModel
 
         /** 校验 Step1 输入，合法则进入 Step2 */
         fun submitServerInfo(onInvalid: (Int) -> Unit): Boolean {
-            if (_serverName.value.isBlank() || _host.value.isBlank()) {
-                onInvalid(R.string.wizard_require_fields)
-                return false
+            val nameError = ServerFormValidator.nameError(_serverName.value)
+            val hostError = ServerFormValidator.hostError(_host.value)
+            val portError = ServerFormValidator.portError(_port.value)
+            return when {
+                nameError == ServerFormError.NAME_REQUIRED || hostError == ServerFormError.HOST_REQUIRED -> {
+                    onInvalid(R.string.wizard_require_fields)
+                    false
+                }
+                hostError != null -> {
+                    onInvalid(R.string.server_error_host_invalid)
+                    false
+                }
+                portError != null -> {
+                    onInvalid(R.string.wizard_invalid_port)
+                    false
+                }
+                else -> {
+                    _currentStep.value = WizardStep.LOGIN_CREDENTIALS
+                    true
+                }
             }
-            val p = _port.value.toIntOrNull()
-            if (p == null || p !in 1..MAX_PORT) {
-                onInvalid(R.string.wizard_invalid_port)
-                return false
-            }
-            _currentStep.value = WizardStep.LOGIN_CREDENTIALS
-            return true
         }
 
         /** 校验 Step2 输入，合法则启动 provisioning */
         fun submitCredentials(onInvalid: (Int) -> Unit): Boolean {
-            if (_loginUsername.value.isBlank()) {
-                onInvalid(R.string.wizard_require_login_username)
-                return false
+            val usernameError = ServerFormValidator.usernameError(_loginUsername.value)
+            return when {
+                usernameError == ServerFormError.USERNAME_REQUIRED -> {
+                    onInvalid(R.string.wizard_require_login_username)
+                    false
+                }
+                usernameError != null -> {
+                    onInvalid(R.string.server_error_username_invalid)
+                    false
+                }
+                else -> {
+                    startProvision()
+                    true
+                }
             }
-            startProvision()
-            return true
         }
 
         private fun startProvision() {
@@ -212,9 +231,5 @@ class ServerWizardViewModel
                 _saved.value = true
                 onDone()
             }
-        }
-
-        private companion object {
-            const val MAX_PORT = 65535
         }
     }

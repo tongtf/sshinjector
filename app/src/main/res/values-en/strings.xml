@@ -156,6 +156,15 @@
     <string name="server_placeholder_username">root</string>
     <string name="server_placeholder_socks">1080</string>
     <string name="server_add_manual">Add manually</string>
+    <string name="server_error_name_required">Name is required</string>
+    <string name="server_error_name_too_long">Name must be at most 64 characters</string>
+    <string name="server_error_host_required">Host is required</string>
+    <string name="server_error_host_invalid">Invalid host format (hostname, IPv4 or IPv6)</string>
+    <string name="server_error_socks_port_range">Local SOCKS port must be 1024-65535</string>
+    <string name="server_error_mtu_range">MTU must be 576-1500</string>
+    <string name="server_error_keepalive_range">Keep-alive must be 0-3600 seconds</string>
+    <string name="server_error_username_required">Username is required</string>
+    <string name="server_error_username_invalid">Username must not contain whitespace or control characters</string>
 
     <string name="wizard_login_username">Login username (SSH)</string>
     <string name="wizard_placeholder_login_username">root</string>
