@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import cn.srv0.sshinjector.data.local.dao.ServerDao
 import cn.srv0.sshinjector.data.local.entity.ServerEntity
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
+import cn.srv0.sshinjector.data.remote.ssh.CredentialCrypto
 import cn.srv0.sshinjector.data.remote.ssh.KnownHostsManager
 import cn.srv0.sshinjector.data.remote.ssh.SshKeyManager
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -24,6 +25,7 @@ class ServerEditViewModel
         private val keyManager: SshKeyManager,
         private val knownHostsManager: KnownHostsManager,
         private val settingsDataStore: SettingsDataStore,
+        private val credentialCrypto: CredentialCrypto,
     ) : ViewModel() {
         private val _saved = MutableStateFlow(false)
         val saved = _saved.asStateFlow()
@@ -95,10 +97,12 @@ class ServerEditViewModel
             viewModelScope.launch {
                 val id =
                     if (serverId == -1L) {
-                        serverDao.insert(entity.copy(isActive = false))
+                        serverDao.insert(preserveUneditableFields(null, entity).copy(isActive = false))
                     } else {
-                        val originalIsActive = serverDao.getByIdBlocking(serverId)?.isActive == true
-                        serverDao.update(entity.copy(isActive = if (setAsDefault) false else originalIsActive))
+                        val existing = serverDao.getByIdBlocking(serverId)
+                        val originalIsActive = existing?.isActive == true
+                        val merged = preserveUneditableFields(existing, entity)
+                        serverDao.update(merged.copy(isActive = if (setAsDefault) false else originalIsActive))
                         entity.id
                     }
 
@@ -109,6 +113,30 @@ class ServerEditViewModel
                 _saved.value = true
                 onDone()
             }
+        }
+
+        /**
+         * 密码写入数据库前统一经 CredentialCrypto 加密，避免明文落库；
+         * 编辑时保留表单未展示的字段（已加密密码、指纹、DNS 模式等），防止被默认值覆盖清空。
+         */
+        private fun preserveUneditableFields(
+            existing: ServerEntity?,
+            incoming: ServerEntity,
+        ): ServerEntity {
+            if (existing == null) {
+                return incoming.copy(password = credentialCrypto.encrypt(incoming.password))
+            }
+            return incoming.copy(
+                password = incoming.password?.let { credentialCrypto.encrypt(it) } ?: existing.password,
+                keyAlgorithm = existing.keyAlgorithm,
+                keyPassphrase = existing.keyPassphrase,
+                hostKeyFingerprint = existing.hostKeyFingerprint,
+                dnsMode = existing.dnsMode,
+                remoteDnsServer = existing.remoteDnsServer,
+                allowedPackages = existing.allowedPackages,
+                excludedRoutes = existing.excludedRoutes,
+                createdAt = existing.createdAt,
+            )
         }
 
         fun delete(

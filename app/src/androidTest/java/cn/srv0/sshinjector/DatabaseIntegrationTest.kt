@@ -51,7 +51,7 @@ class DatabaseIntegrationTest {
             assertTrue(id > 0)
 
             // Read
-            val loaded = serverDao.getServerById(id)
+            val loaded = serverDao.getByIdBlocking(id)
             assertNotNull(loaded)
             assertEquals("Test Server", loaded?.name)
             assertEquals("example.com", loaded?.host)
@@ -59,12 +59,12 @@ class DatabaseIntegrationTest {
             // Update
             val updated = loaded!!.copy(name = "Updated Server")
             serverDao.update(updated)
-            val loadedAfterUpdate = serverDao.getServerById(id)
+            val loadedAfterUpdate = serverDao.getByIdBlocking(id)
             assertEquals("Updated Server", loadedAfterUpdate?.name)
 
             // Delete
-            serverDao.delete(updated)
-            val loadedAfterDelete = serverDao.getServerById(id)
+            serverDao.delete(updated.id)
+            val loadedAfterDelete = serverDao.getByIdBlocking(id)
             assertNull(loadedAfterDelete)
         }
 
@@ -78,15 +78,14 @@ class DatabaseIntegrationTest {
             serverDao.insert(server2)
 
             // Get all
-            val servers = serverDao.getAllServers()
+            val servers = serverDao.getAllBlocking()
             assertEquals(2, servers.size)
 
             // Get active
-            val activeServers = serverDao.getActiveServers()
-            assertEquals(0, activeServers.size)
+            assertNull(serverDao.getActiveSync())
 
             // Cleanup
-            serverDao.delete(server1)
-            serverDao.delete(server2)
+            serverDao.delete(server1.id)
+            serverDao.delete(server2.id)
         }
 }
