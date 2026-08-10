@@ -53,9 +53,12 @@ JAVA_HOME=/usr/lib/jvm/jdk-17.0.19+10 ./gradlew ...
 ## Tests
 
 Unit tests in `app/src/test/java/cn/srv0/sshinjector/`. Concurrency-critical ones:
-- `Socks5BackpressureTest` — Channel outgoing backpressure must not lose/reorder data (previous ArrayDeque+suspended-slot queue **failed consistently**: accepted>consumed)
+- `Socks5BackpressureTest` — Channel outgoing backpressure must not lose/reorder data (previous ArrayDeque+suspended-slot queue **failed consistently**: accepted>consumed). Keep its wait loops **bounded** — an unbounded `while (pending != null) yield()` hung CI for 26min until the `lint-and-test` job's 30min timeout cancelled it; now uses a 30s deadline + explicit `fail`
 - `SshIoDispatcherTest` — dynamic pool must cover 40 concurrent blocking tasks (no queue starvation)
 - `BoundedBackpressureQueue` was **deleted** (concurrency bug); don't reintroduce it.
+
+- `app/build.gradle.kts` enables `testLogging` (started/passed/failed/skipped), so a future CI hang is attributable to the exact test case
+- **androidTest never runs in CI** (only `testDebugUnitTest` does); it only compiles when you run `connectedDebugAndroidTest` on a device — stale androidTest (e.g. `DatabaseIntegrationTest` once referenced removed DAO methods) can rot unnoticed
 
 ## Key Gotchas
 
@@ -70,12 +73,14 @@ Unit tests in `app/src/test/java/cn/srv0/sshinjector/`. Concurrency-critical one
 - ProGuard/R8 on in Release — watch `proguard-rules.pro` for reflected code (e.g. `setChannelWindowSize` uses reflection on JSch)
 - **Dead-code enums/paths**: `VpnStatus.Authenticating/EstablishingTunnel/Reconnecting` are unused; `Failed` is set only by the VpnService layer. `TcpStateMachine.pendingConnect`/`completeDeferredConnect` never executes.
 - **Passwords are encrypted at the DAO boundary**: `ServerEditViewModel.save` routes every write through `CredentialCrypto` (AES-GCM, Android Keystore) and preserves stored fields the form doesn't show (password, hostKeyFingerprint, dnsMode, allowedPackages, …) — editing a server no longer wipes them. The wizard never stores login credentials by design (provisioning-only). `ServerRepository` mapping also encrypts/decrypts — every runtime consumer (`SshVpnService`, `MainViewModel`, `JschSshClient`) reads `ServerConfig` from `ServerRepository` and gets the **decrypted** password; no path uses the raw `ServerEntity.password`. Crypto logic lives in pure-JVM `AesGcmCipher` (unit-testable); `CredentialCrypto` only wraps Keystore key management.
+- **Imported private keys & software Ed25519 keys are already AES-GCM encrypted at rest** (`SshKeyManager`, Keystore wrapping key `ssh_import_wrapper_aes`): PEM+passphrase payload with 12-byte IV prefix, legacy-plaintext fallback on read. `getPrivateKeyForAuth` decrypts software keys before parsing PKCS8 — don't "add encryption" assuming these files are plaintext.
 - **Server form validation**: shared `ServerFormValidator` (`ui/screen/server/ServerFormValidator.kt`) enforces host format (hostname/IPv4/IPv6, no whitespace/control chars), port 1-65535, socksPort 1024-65535, MTU 576-1500, keepAlive 0-3600, username charset — used by both the edit screen (inline errors, save blocked) and the wizard. Errors map to `server_error_*` / `wizard_invalid_port` string resources.
 - **DataStore global MTU/KeepAlive/IPv6 settings are decorative** — runtime uses per-server fields. `last_server_id` is never written, so BootReceiver auto-connect never actually fires.
 
 ## Device Testing (adb)
 
 - Debug builds get `applicationIdSuffix = ".debug"` → package is `cn.srv0.sshinjector.debug` (force-stop that, not the release id)
+- `adb install` needs the device **unlocked with USB install authorized**, or it fails `INSTALL_FAILED_USER_RESTRICTED` (MIUI: enable "Install via USB" in developer options; a locked screen also blocks it)
 - After `adb install -r`, **must `am force-stop`** the package before relaunching, or the **old process keeps running old code** (cost hours of confusing logs)
 - Repeated connect/disconnect cycles accumulate **server-side SSH sessions** → SSH connect times out (`socket is not established`); wait for server cleanup or switch network before assuming a code regression
 - Whitelist mode does NOT `addDisallowedApplication(ownPackage)`; Android sends the VPN owner's traffic into the TUN, so the SSH connect can self-loop. If SSH times out while nc/ping work, suspect this
@@ -84,4 +89,4 @@ Unit tests in `app/src/test/java/cn/srv0/sshinjector/`. Concurrency-critical one
 
 - Repo moved: `tongtf/ssh-injector.git` → **`tongtf/sshinjector.git`**
 - HTTPS push needs credentials; **use SSH** (`git@github.com:tongtf/sshinjector.git`) — local `~/.ssh/id_ed25519` is set up
-- **Release flow**: pushing a `v*` tag triggers build-release (APK/AAB + GitHub Release). To re-release after a fix: `git tag -d vX && git push origin :refs/tags/vX && git tag vX && git push origin vX`. Poll `https://api.github.com/repos/tongtf/sshinjector/actions/runs?per_page=1` for the run status
+- **Release flow**: bump `versionCode`/`versionName` in `app/build.gradle.kts`, commit `chore: bump version to X.Y.Z`, push main, then `git tag vX.Y.Z && git push origin vX.Y.Z` — the tag triggers build-release (APK/AAB + GitHub Release). To re-release after a fix: `git tag -d vX && git push origin :refs/tags/vX && git tag vX && git push origin vX`. Poll `https://api.github.com/repos/tongtf/sshinjector/actions/runs?per_page=1` for the run status (`gh` CLI is not installed locally — use `curl`)
