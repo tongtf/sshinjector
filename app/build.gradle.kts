@@ -178,3 +178,10 @@ detekt {
 ktlint {
     android.set(true)
 }
+
+tasks.withType<Test>().configureEach {
+    testLogging {
+        // CI 上打印每个测试的开始/结果, 定位偶发挂死发生在哪个用例
+        events("started", "passed", "failed", "skipped")
+    }
+}

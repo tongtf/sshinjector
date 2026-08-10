@@ -8,7 +8,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
@@ -57,7 +59,14 @@ class Socks5BackpressureTest {
                     // 满: 数据挂到连接级单槽(不丢, 已接受), 暂停生产直到写协程回填
                     pending.set(data)
                     i++
-                    while (pending.get() != null) yield()
+                    val refillDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+                    while (pending.get() != null) {
+                        // 有界等待: 若写协程异常终止, 30s 后转为明确失败而非永久挂起 (CI 曾 26min 超时)
+                        if (System.nanoTime() > refillDeadline) {
+                            fail("backpressure deadlock: pending slot never refilled (writer coroutine died?)")
+                        }
+                        yield()
+                    }
                 }
             }
             channel.close()
