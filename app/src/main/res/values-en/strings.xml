@@ -83,9 +83,12 @@
     <string name="settings_biometric_unlock">Biometric Unlock</string>
     <string name="settings_biometric_unlock_desc">Protect keys with fingerprint/face</string>
     <string name="settings_about">About</string>
-    <string name="settings_version">1.0.2</string>
+    <string name="settings_version">Version</string>
     <string name="settings_license">MIT License</string>
+    <string name="settings_license_desc">View full license text</string>
+    <string name="settings_license_dialog_title">MIT License</string>
     <string name="settings_github">GitHub</string>
+    <string name="settings_github_url">https://github.com/tongtf/sshinjector</string>
     <string name="settings_github_desc">View source code</string>
     <string name="settings_biometric_disable_title">Disable Biometric Unlock</string>
     <string name="settings_biometric_disable_msg">You will no longer use biometric protection for keys. Please verify your identity to confirm.</string>

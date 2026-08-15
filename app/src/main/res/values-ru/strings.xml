@@ -83,9 +83,12 @@
     <string name="settings_biometric_unlock">Биометрическая разблокировка</string>
     <string name="settings_biometric_unlock_desc">Защита ключей отпечатком/лицом</string>
     <string name="settings_about">О приложении</string>
-    <string name="settings_version">1.0.2</string>
+    <string name="settings_version">Версия</string>
     <string name="settings_license">MIT License</string>
+    <string name="settings_license_desc">Полный текст лицензии</string>
+    <string name="settings_license_dialog_title">MIT License</string>
     <string name="settings_github">GitHub</string>
+    <string name="settings_github_url">https://github.com/tongtf/sshinjector</string>
     <string name="settings_github_desc">Исходный код</string>
     <string name="settings_biometric_disable_title">Отключить биометрию</string>
     <string name="settings_biometric_disable_msg">Биометрическая защита ключей будет отключена. Подтвердите личность.</string>

@@ -83,9 +83,12 @@
     <string name="settings_biometric_unlock">生物识别解锁</string>
     <string name="settings_biometric_unlock_desc">使用指纹/面部识别保护密钥</string>
     <string name="settings_about">关于</string>
-    <string name="settings_version">1.0.2</string>
+    <string name="settings_version">版本</string>
     <string name="settings_license">MIT License</string>
+    <string name="settings_license_desc">查看完整许可协议</string>
+    <string name="settings_license_dialog_title">MIT License</string>
     <string name="settings_github">GitHub</string>
+    <string name="settings_github_url">https://github.com/tongtf/sshinjector</string>
     <string name="settings_github_desc">查看源代码</string>
     <string name="settings_biometric_disable_title">关闭生物识别解锁</string>
     <string name="settings_biometric_disable_msg">关闭后将不再使用指纹/面部识别保护密钥，请验证身份以确认。</string>

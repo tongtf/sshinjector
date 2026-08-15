@@ -64,9 +64,18 @@ fun SettingsScreen(
     var showDnsDialog by remember { mutableStateOf(false) }
     var showBiometricDialog by remember { mutableStateOf(false) }
     var showLangDialog by remember { mutableStateOf(false) }
+    var showLicenseDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val fragmentActivity = context as? androidx.fragment.app.FragmentActivity
     val biometricAuth = fragmentActivity?.let { cn.srv0.sshinjector.ui.biometric.BiometricAuth.from(it) }
+    val versionName =
+        remember {
+            try {
+                context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
+            } catch (_: Exception) {
+                "unknown"
+            }
+        }
 
     Scaffold(
         modifier = modifier,
@@ -230,11 +239,14 @@ fun SettingsScreen(
             }
 
             SettingsSection(stringResource(R.string.settings_about)) {
-                SettingsRow(stringResource(R.string.settings_version), "1.0.2", trailing = {})
-                SettingsRow(stringResource(R.string.settings_license), "MIT License", trailing = {})
                 SettingsRow(
-                    title = stringResource(R.string.settings_github),
-                    subtitle = stringResource(R.string.settings_github_desc),
+                    title = stringResource(R.string.settings_version),
+                    subtitle = versionName,
+                    trailing = {},
+                )
+                SettingsRow(
+                    title = stringResource(R.string.settings_license),
+                    subtitle = stringResource(R.string.settings_license_desc),
                     trailing = {
                         Icon(
                             Icons.Default.Info,
@@ -242,9 +254,54 @@ fun SettingsScreen(
                             tint = MaterialTheme.colorScheme.primary,
                         )
                     },
+                    onClick = { showLicenseDialog = true },
+                )
+                SettingsRow(
+                    title = stringResource(R.string.settings_github),
+                    subtitle = stringResource(R.string.settings_github_url),
+                    trailing = {
+                        Icon(
+                            Icons.Default.Info,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    onClick = {
+                        val intent =
+                            android.content.Intent(
+                                android.content.Intent.ACTION_VIEW,
+                                android.net.Uri.parse(context.getString(R.string.settings_github_url)),
+                            )
+                        try {
+                            context.startActivity(intent)
+                        } catch (_: Exception) {
+                        }
+                    },
                 )
             }
         }
+    }
+
+    if (showLicenseDialog) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showLicenseDialog = false },
+            title = { Text(stringResource(R.string.settings_license_dialog_title)) },
+            text = {
+                Text(
+                    text = stringResource(R.string.settings_license_content),
+                    fontSize = 12.sp,
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { showLicenseDialog = false }) {
+                    Text(stringResource(android.R.string.ok))
+                }
+            },
+        )
     }
 
     if (showLangDialog) {
