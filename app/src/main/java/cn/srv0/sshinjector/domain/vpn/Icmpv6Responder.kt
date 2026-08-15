@@ -61,21 +61,22 @@ class Icmpv6Responder(
         val targetAddr = ByteArray(16)
         buffer.get(targetAddr)
 
-        // 检查是否在查询我们的 VPN 网关地址
-        if (!targetAddr.contentEquals(vpnGatewayIpv6.address)) {
+        // 检查目标是否在 VPN 假 IP 段 (fd00::/8): 网关 fd00::1 与 DNS 假 IP fd00::2+ 均在此段。
+        // 仅对网段内目标回 NA, 否则 fd00::2+ 假 IP 的邻居发现失败, IPv6 over tunnel 不通
+        if ((targetAddr[0].toInt() and 0xFF) != 0xFD) {
             return false
         }
 
-        // 构造 Neighbor Advertisement 响应
+        // 构造 Neighbor Advertisement 响应 (NA 源地址 = 被解析的目标地址)
         val writer = tunWriterProvider() ?: return false
         val naPacket =
             buildNeighborAdvertisement(
-                srcIp = vpnGatewayIpv6.address,
+                srcIp = targetAddr,
                 dstIp = srcIp.address,
                 targetAddr = targetAddr,
             )
         writer(naPacket)
-        if (IS_DEBUG) Log.d(TAG, "Sent Neighbor Advertisement for $targetAddr")
+        if (IS_DEBUG) Log.d(TAG, "Sent Neighbor Advertisement for ${InetAddress.getByAddress(targetAddr).hostAddress}")
         return true
     }
 
