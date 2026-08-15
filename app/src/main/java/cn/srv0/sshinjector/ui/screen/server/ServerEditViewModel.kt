@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -39,9 +41,30 @@ class ServerEditViewModel
         private val _message = MutableSharedFlow<String>(extraBufferCapacity = 1)
         val message = _message.asSharedFlow()
 
+        /**
+         * 全局网络设置 (null 字段 = 未设置, 运行时回退 per-server)。
+         * 编辑页据此提示"全局覆盖中"。
+         */
+        private val _globalSettings = MutableStateFlow(GlobalNetworkSettings(null, null, null))
+        val globalSettings = _globalSettings.asStateFlow()
+
         init {
             refreshKeys()
+            viewModelScope.launch {
+                settingsDataStore.mtu
+                    .combine(settingsDataStore.keepAlive) { mtu, keepAlive -> mtu to keepAlive }
+                    .combine(settingsDataStore.enableIPv6) { (mtu, keepAlive), ipv6 ->
+                        GlobalNetworkSettings(mtu, keepAlive, ipv6)
+                    }
+                    .collect { _globalSettings.value = it }
+            }
         }
+
+        data class GlobalNetworkSettings(
+            val mtu: Int?,
+            val keepAlive: Int?,
+            val enableIPv6: Boolean?,
+        )
 
         fun refreshKeys() {
             _keyAliases.value = keyManager.listKeyAliases()

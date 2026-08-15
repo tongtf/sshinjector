@@ -150,7 +150,7 @@ class SshVpnService : VpnService() {
             val config: ServerConfig =
                 serverRepository.getServerById(serverId)
                     ?: throw IllegalArgumentException("Server not found")
-            currentServer = config
+            currentServer = mergeGlobalSettings(config)
 
             val dnsMode = settingsDataStore.dnsMode.first()
             val allowedPackages =
@@ -195,6 +195,21 @@ class SshVpnService : VpnService() {
                 )
             disconnect()
         }
+    }
+
+    /**
+     * 合并全局网络设置 (全局优先, 未设置回退 per-server 字段)。
+     * mtu/keepAlive 以 0/null 表示未设置, enableIPv6 以 null 表示未设置。
+     */
+    private suspend fun mergeGlobalSettings(config: ServerConfig): ServerConfig {
+        val gMtu = settingsDataStore.mtu.first()
+        val gKeepAlive = settingsDataStore.keepAlive.first()
+        val gIpv6 = settingsDataStore.enableIPv6.first()
+        return config.copy(
+            mtu = gMtu ?: config.mtu,
+            keepAliveInterval = gKeepAlive ?: config.keepAliveInterval,
+            enableIPv6 = gIpv6 ?: config.enableIPv6,
+        )
     }
 
     private fun establishVpnInterface(
@@ -286,10 +301,13 @@ class SshVpnService : VpnService() {
             Builder()
                 .setSession("SSHInjector VPN")
                 .addAddress("10.0.0.1", 24)
-                .addAddress("fd00::1", 64)
                 .addDnsServer("10.0.0.2")
                 .setMtu(config.mtu)
                 .setBlocking(true)
+
+        if (config.enableIPv6) {
+            builder.addAddress("fd00::1", 64)
+        }
 
         // 白名单模式使用 addAllowedApplication 限定允许应用, 与 addDisallowedApplication 互斥,
         // 因此该模式下不排除自身 (自身不在白名单内时自然走直连, 不进 TUN)。
@@ -302,7 +320,9 @@ class SshVpnService : VpnService() {
             0 -> {
                 // REMOTE 模式: 全部流量走 VPN 隧道
                 builder.addRoute("0.0.0.0", 0)
-                builder.addRoute("::", 0)
+                if (config.enableIPv6) {
+                    builder.addRoute("::", 0)
+                }
             }
             1 -> {
                 // SYSTEM 模式: 不添加路由，所有流量走物理网卡

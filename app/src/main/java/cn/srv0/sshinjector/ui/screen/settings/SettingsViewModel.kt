@@ -27,15 +27,17 @@ class SettingsViewModel
         val biometricUnlock: StateFlow<Boolean> =
             settingsDataStore.biometricUnlock
                 .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-        val mtu: StateFlow<Int> =
+
+        // 全局网络设置: null = 未设置 → 运行时回退 per-server 字段, UI 显示默认值
+        val mtu: StateFlow<Int?> =
             settingsDataStore.mtu
-                .stateIn(viewModelScope, SharingStarted.Eagerly, 1500)
-        val keepAlive: StateFlow<Int> =
+                .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+        val keepAlive: StateFlow<Int?> =
             settingsDataStore.keepAlive
-                .stateIn(viewModelScope, SharingStarted.Eagerly, 30)
-        val enableIPv6: StateFlow<Boolean> =
+                .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+        val enableIPv6: StateFlow<Boolean?> =
             settingsDataStore.enableIPv6
-                .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+                .stateIn(viewModelScope, SharingStarted.Eagerly, null)
         val dnsMode: StateFlow<Int> =
             settingsDataStore.dnsMode
                 .stateIn(viewModelScope, SharingStarted.Eagerly, 0)

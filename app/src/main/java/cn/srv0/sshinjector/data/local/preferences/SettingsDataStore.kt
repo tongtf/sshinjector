@@ -51,41 +51,26 @@ class SettingsDataStore
             context.dataStore.data
                 .map { it[KEY_LAST_SERVER_ID] }
 
-        val notificationEnabled: Flow<Boolean> =
-            context.dataStore.data
-                .map { it[KEY_NOTIFICATION_ENABLED] ?: true }
-
-        val theme: Flow<String> =
-            context.dataStore.data
-                .map { it[KEY_THEME] ?: "system" }
-
         val biometricUnlock: Flow<Boolean> =
             context.dataStore.data
                 .map { it[KEY_BIOMETRIC_UNLOCK] ?: true }
 
-        val mtu: Flow<Int> =
+        // 全局网络设置: null 表示未设置 → 运行时回退 per-server 字段
+        val mtu: Flow<Int?> =
             context.dataStore.data
-                .map { it[KEY_MTU] ?: 1500 }
+                .map { it[KEY_MTU] }
 
-        val keepAlive: Flow<Int> =
+        val keepAlive: Flow<Int?> =
             context.dataStore.data
-                .map { it[KEY_KEEP_ALIVE] ?: 30 }
+                .map { it[KEY_KEEP_ALIVE] }
 
-        val enableIPv6: Flow<Boolean> =
+        val enableIPv6: Flow<Boolean?> =
             context.dataStore.data
-                .map { it[KEY_ENABLE_IPV6] ?: true }
+                .map { it[KEY_ENABLE_IPV6] }
 
         val dnsMode: Flow<Int> =
             context.dataStore.data
                 .map { it[KEY_DNS_MODE] ?: 0 } // 默认远程代理模式
-
-        val logLevel: Flow<Int> =
-            context.dataStore.data
-                .map { it[KEY_LOG_LEVEL] ?: 1 } // 默认详细模式
-
-        val routeConfig: Flow<String?> =
-            context.dataStore.data
-                .map { it[KEY_ROUTE_CONFIG] }
 
         val domainListUrl: Flow<String> =
             context.dataStore.data

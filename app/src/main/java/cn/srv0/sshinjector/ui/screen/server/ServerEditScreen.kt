@@ -87,6 +87,7 @@ fun ServerEditScreen(
     var socksPort by remember { mutableStateOf("1080") }
 
     val availableKeys by viewModel.keyAliases.collectAsState()
+    val globalSettings by viewModel.globalSettings.collectAsState()
     val guard = rememberClickGuard()
     val scope = rememberCoroutineScope()
     var saveAttempted by remember { mutableStateOf(false) }
@@ -373,6 +374,9 @@ fun ServerEditScreen(
                         enableIPv6,
                         { enableIPv6 = it },
                     )
+                    if (globalSettings.enableIPv6 != null) {
+                        GlobalOverrideHint("全局设置: 启用 IPv6 = ${globalSettings.enableIPv6}")
+                    }
                     OutlinedTextFieldRow(
                         stringResource(R.string.server_mtu),
                         "1500",
@@ -381,7 +385,7 @@ fun ServerEditScreen(
                         singleLine = true,
                         numeric = true,
                         isError = mtuErrorText != null,
-                        supportingText = mtuErrorText,
+                        supportingText = mtuErrorText ?: globalSettings.mtu?.let { "全局设置: MTU = $it" },
                     )
                     OutlinedTextFieldRow(
                         stringResource(R.string.server_keepalive),
@@ -391,7 +395,7 @@ fun ServerEditScreen(
                         singleLine = true,
                         numeric = true,
                         isError = keepAliveErrorText != null,
-                        supportingText = keepAliveErrorText,
+                        supportingText = keepAliveErrorText ?: globalSettings.keepAlive?.let { "全局设置: 保活 = ${it}s" },
                     )
                 }
             }
@@ -480,6 +484,16 @@ fun OutlinedTextFieldRow(
                         else -> KeyboardType.Text
                     },
             ),
+    )
+}
+
+@Composable
+private fun GlobalOverrideHint(text: String) {
+    Text(
+        text = text,
+        fontSize = 12.sp,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.fillMaxWidth(),
     )
 }
 

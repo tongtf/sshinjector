@@ -128,12 +128,12 @@ fun SettingsScreen(
 
             SettingsSection(stringResource(R.string.settings_network)) {
                 Text(
-                    stringResource(R.string.settings_mtu, mtu),
+                    stringResource(R.string.settings_mtu, mtu ?: 1500),
                     fontSize = 14.sp,
                     modifier = Modifier.padding(start = 16.dp, top = 8.dp),
                 )
                 Slider(
-                    value = mtu.toFloat(),
+                    value = (mtu ?: 1500).toFloat(),
                     onValueChange = { viewModel.setMtu(it.toInt()) },
                     valueRange = 1280f..1500f,
                     steps = 54,
@@ -144,12 +144,12 @@ fun SettingsScreen(
                 )
 
                 Text(
-                    stringResource(R.string.settings_keepalive, keepAlive),
+                    stringResource(R.string.settings_keepalive, keepAlive ?: 30),
                     fontSize = 14.sp,
                     modifier = Modifier.padding(start = 16.dp, top = 8.dp),
                 )
                 Slider(
-                    value = keepAlive.toFloat(),
+                    value = (keepAlive ?: 30).toFloat(),
                     onValueChange = { viewModel.setKeepAlive(it.toInt()) },
                     valueRange = 10f..120f,
                     steps = 21,
@@ -164,7 +164,7 @@ fun SettingsScreen(
                     subtitle = stringResource(R.string.settings_ipv6_desc),
                     trailing = {
                         Switch(
-                            checked = enableIPv6,
+                            checked = enableIPv6 ?: true,
                             onCheckedChange = { viewModel.setEnableIPv6(it) },
                         )
                     },
