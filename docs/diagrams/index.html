@@ -65,9 +65,8 @@
       <p class="eyebrow"><span class="dot blue"></span>KNOWN DEVIATIONS</p>
       <h3>代码漂移点</h3>
       <ul>
-        <li>VpnStatus 三个枚举值为死代码</li>
-        <li>pendingResponses 实为队列非 Channel</li>
-        <li>全局 MTU/IPv6 设置无运行时消费</li>
+        <li>UDP relay 已降级: 非 DNS UDP 明确丢弃</li>
+        <li>非 A/AAAA DNS 走保护 socket 系统直查</li>
       </ul>
     </div>
   </div>
