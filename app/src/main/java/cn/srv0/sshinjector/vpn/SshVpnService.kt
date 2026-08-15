@@ -43,6 +43,8 @@ class SshVpnService : VpnService() {
 
     @Inject lateinit var settingsDataStore: SettingsDataStore
 
+    @Inject lateinit var jschSshClient: cn.srv0.sshinjector.data.remote.ssh.JschSshClient
+
     private var vpnInterface: ParcelFileDescriptor? = null
     private var tunFd: java.io.FileDescriptor? = null
     private val scope = CoroutineScope(Dispatchers.IO)
@@ -65,6 +67,7 @@ class SshVpnService : VpnService() {
         notificationManager = getSystemService(NotificationManager::class.java)
         createNotificationChannel()
         observeVpnControllerState()
+        observeJschConnectionState()
         registerNetworkCallback()
     }
 
@@ -455,6 +458,23 @@ class SshVpnService : VpnService() {
         scope.launch {
             vpnController.connectionStats.collect { stats ->
                 serviceConnectionStats.value = stats
+            }
+        }
+    }
+
+    /**
+     * SSH 会话池全部失败时联动: 置 Failed 后触发整体自动重连 (复用网络切换的 autoReconnect)。
+     * 避免 UI 停留在 Connected 而隧道实际已死。
+     */
+    private fun observeJschConnectionState() {
+        scope.launch {
+            jschSshClient.connectionState.collect { state ->
+                val poolFailed = state == cn.srv0.sshinjector.data.remote.ssh.JschSshClient.ConnectionState.Failed
+                val canReconnect = vpnController.isVpnRunning() && !isReconnecting && currentServer != null
+                if (poolFailed && canReconnect) {
+                    android.util.Log.w("SshVpnService", "SSH session pool failed, auto reconnecting")
+                    autoReconnect()
+                }
             }
         }
     }
