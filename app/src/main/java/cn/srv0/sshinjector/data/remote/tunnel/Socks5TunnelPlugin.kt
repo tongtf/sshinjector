@@ -33,7 +33,6 @@ class Socks5TunnelPlugin
         override val capabilities =
             setOf(
                 TunnelCapability.TCP,
-                TunnelCapability.UDP,
                 TunnelCapability.DNS_OVER_TUNNEL,
                 TunnelCapability.DOMAIN_RESOLVE,
                 TunnelCapability.IP_CONNECT,
@@ -136,7 +135,7 @@ class Socks5TunnelPlugin
             dstPort: Int,
             payload: ByteArray,
         ) {
-            // Reserved for future UDP ASSOCIATE support
+            throw UnsupportedOperationException("UDP not supported by $id")
         }
 
         override suspend fun forwardDns(query: ByteArray): ByteArray? = null

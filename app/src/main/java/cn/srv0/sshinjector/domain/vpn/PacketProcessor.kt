@@ -35,7 +35,7 @@ class PacketProcessor
 
         private val tcpStateMachine =
             TcpStateMachine(tunnelManager, { tunWriter }, stats, sshIoDispatcher)
-        private val udpRelay = UdpRelay({ tunWriter }, stats)
+        private val udpRelay = UdpRelay(stats)
         private val icmpv6Responder = Icmpv6Responder({ tunWriter })
 
         val packetsProcessed: StateFlow<Long> = stats.packetsProcessed
@@ -137,6 +137,5 @@ class PacketProcessor
 
         fun cleanupStaleConnections(timeoutMs: Long = DEFAULT_CONNECTION_CLEANUP_TIMEOUT_MS) {
             tcpStateMachine.cleanupStaleConnections(timeoutMs)
-            udpRelay.cleanupStaleConnections(timeoutMs)
         }
     }
