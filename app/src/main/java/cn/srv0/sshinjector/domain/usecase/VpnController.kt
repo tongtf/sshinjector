@@ -191,23 +191,10 @@ class VpnController
                 val systemDns = getSystemDnsServers()
                 dnsInterceptor.setSystemDnsServers(systemDns)
 
-                // SYSTEM/DOMAIN_SPLIT 模式: 设置 socket 保护函数，用于 DNS 查询绕过 VPN
-                if (transportMode == DnsInterceptor.DnsTransport.SYSTEM ||
-                    transportMode == DnsInterceptor.DnsTransport.DOMAIN_SPLIT
-                ) {
-                    addLog(
-                        ">>> [VpnController] 设置 DNS Interceptor 保护函数 ($transportMode)",
-                        cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG,
-                    )
-                    dnsInterceptor.setProtectFunction { socket ->
-                        addLog(
-                            ">>> [VpnController] 保护函数被调用: socket=$socket",
-                            cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG,
-                        )
-                        val result = protectDatagramChannel?.invoke(socket) ?: false
-                        addLog(">>> [VpnController] 保护函数返回: $result", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
-                        result
-                    }
+                // 设置 socket 保护函数: SYSTEM/DOMAIN_SPLIT 用于 DNS 绕过 VPN 直查;
+                // REMOTE/WHITELIST 用于非 A/AAAA 查询 (MX/TXT/PTR) 走系统 DNS 直查, 避免被吞
+                dnsInterceptor.setProtectFunction { socket ->
+                    protectDatagramChannel?.invoke(socket) ?: false
                 }
 
                 // 域名分流模式: 启动时检查并后台刷新域名列表 (24h 间隔)

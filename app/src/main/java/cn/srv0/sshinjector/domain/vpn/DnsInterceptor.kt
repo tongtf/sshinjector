@@ -414,7 +414,7 @@ class DnsInterceptor
 
                 // 放入响应队列
                 // pending.dstIp 是 DNS 服务器 IP (对于 SYSTEM 模式是物理网卡的 DNS，对于 REMOTE 是 8.8.8.8 等)
-                pendingResponses.add(
+                pendingResponses.trySend(
                     DnsResponse(
                         srcIp = pending.dstIp ?: InetAddress.getByName("8.8.8.8"),
                         dstIp = pending.srcIp,
