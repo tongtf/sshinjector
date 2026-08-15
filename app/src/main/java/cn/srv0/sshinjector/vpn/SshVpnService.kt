@@ -54,6 +54,7 @@ class SshVpnService : VpnService() {
     private var isReconnecting = false
     private var lastNetworkId: Long = -1
     private var lastEventWasLost = false
+    private val cleanupScope = CoroutineScope(Dispatchers.IO)
 
     val serviceVpnState = MutableStateFlow<DomainVpnState>(DomainVpnState())
     val serviceConnectionStats = MutableStateFlow<ConnectionStats>(ConnectionStats())
@@ -113,7 +114,24 @@ class SshVpnService : VpnService() {
 
     override fun onDestroy() {
         connectivityManager?.unregisterNetworkCallback(networkCallback)
+        whitelistObserverJob?.cancel()
+        reconnectJob?.cancel()
         scope.coroutineContext.cancelChildren()
+        // 系统销毁服务时（非用户主动断开）仍持有 VPN/SSH 会话,
+        // 用独立 scope 完成清理, 避免会话泄漏与服务重建后状态卡死
+        cleanupScope.launch {
+            try {
+                vpnController.disconnect()
+            } catch (e: Exception) {
+                android.util.Log.e("SshVpnService", "cleanup on destroy failed", e)
+            }
+            try {
+                vpnInterface?.close()
+            } catch (_: Exception) {
+            }
+            vpnInterface = null
+            tunFd = null
+        }
         super.onDestroy()
     }
 
