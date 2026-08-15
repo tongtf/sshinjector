@@ -8,6 +8,9 @@ import java.nio.ByteOrder
  * IP/TCP/UDP 包头解析，纯函数无状态。
  */
 object IpPacketParser {
+    // IPv6 扩展头部类型: Hop-by-Hop(0), Routing(43), Fragment(44), Destination Options(60), Reserved(255)
+    private val IPV6_EXTENSION_HEADERS = setOf(0, 43, 44, 60, 255)
+
     /**
      * 解析 IPv4 头，返回协议、源/目的地址与 payload 区间。
      * @param buffer 位置将停在 payload 起始处
@@ -98,24 +101,9 @@ object IpPacketParser {
         val maxPos = pos + payloadLength
         var currentNextHeader = nextHeader
 
-        // IPv6 扩展头部类型
-        val extensionHeaders =
-            setOf(
-                // Hop-by-Hop Options
-                0,
-                // Routing
-                43,
-                // Fragment
-                44,
-                // Destination Options
-                60,
-                // Reserved (实验性)
-                255,
-            )
-
         // 限制扩展头部数量防止循环
         var extHeaderCount = 0
-        while (currentNextHeader in extensionHeaders && extHeaderCount < 10) {
+        while (currentNextHeader in IPV6_EXTENSION_HEADERS && extHeaderCount < 10) {
             if (pos + 2 > maxPos) return Pair(-1, currentNextHeader)
 
             buffer.get(pos) // extType

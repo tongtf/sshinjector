@@ -202,8 +202,7 @@ class TcpStateMachine(
             }
         }
 
-        stats.packetsProcessed.value++
-        stats.bytesProcessed.value = stats.bytesProcessed.value + payloadLength.toLong()
+        stats.addPacket(payloadLength.toLong())
         return true
     }
 
@@ -232,7 +231,7 @@ class TcpStateMachine(
                 }
             } catch (e: Exception) {
                 if (IS_DEBUG) Log.e(TAG, "forwardSynToTunnel failed", e)
-                stats.errors.value++
+                stats.addError()
                 conn.state = TcpConnection.TcpState.Closed
             }
         }

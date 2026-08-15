@@ -56,6 +56,12 @@ class VpnController
         private var tunGeneration = 0L
         private val readBuffer = ByteBuffer.allocate(32768).order(ByteOrder.BIG_ENDIAN)
 
+        // 热点路径只累加原子计数, 由 statsFlushLoop 节流发布到 connectionStats
+        private val bytesSentCounter = java.util.concurrent.atomic.AtomicLong(0)
+        private val bytesReceivedCounter = java.util.concurrent.atomic.AtomicLong(0)
+        private val packetsSentCounter = java.util.concurrent.atomic.AtomicLong(0)
+        private val packetsReceivedCounter = java.util.concurrent.atomic.AtomicLong(0)
+
         // 用于 SYSTEM 模式 DNS 绕过的 socket 保护函数
         private var protectDatagramChannel: ((java.net.DatagramSocket) -> Boolean)? = null
 
@@ -92,12 +98,14 @@ class VpnController
         )
 
         companion object {
+            private const val TAG = "VpnController"
             private const val IPPROTO_TCP = 6
             private const val IPPROTO_UDP = 17
             private const val DNS_PORT = 53
             private const val SOCKET_TIMEOUT_MS = 5000
             private const val CONNECTION_CLEANUP_INTERVAL_MS = 60000L
             private const val STALE_CONNECTION_TIMEOUT_MS = 300000L
+            private const val STATS_FLUSH_INTERVAL_MS = 100L
 
             private fun parseCidr(cidr: String): CidrRoute? {
                 try {
@@ -266,6 +274,10 @@ class VpnController
                 // 6.1 启动独立 DNS 响应投递协程 (修复 DNS 死锁)
                 launch { dnsResponseDeliveryLoop() }
                 addLog("DNS 响应投递协程已启动", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
+
+                // 6.2 启动统计节流发布协程
+                launch { statsFlushLoop() }
+                addLog("统计发布协程已启动", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
 
                 updateState {
                     it.copy(
@@ -452,19 +464,13 @@ class VpnController
                     val bytesRead = inputStream!!.read(readBuffer.array())
                     if (bytesRead <= 0) continue
 
+                    bytesReceivedCounter.addAndGet(bytesRead.toLong())
+                    packetsReceivedCounter.incrementAndGet()
+
                     readBuffer.limit(bytesRead)
                     readBuffer.position(0)
 
-                    android.util.Log.d("VpnController", "packetLoop read $bytesRead bytes")
                     processPacket(readBuffer)
-
-                    // 更新统计
-                    val stats = connectionStats.value
-                    connectionStats.value =
-                        stats.copy(
-                            bytesReceived = stats.bytesReceived + bytesRead.toLong(),
-                            lastUpdate = java.util.Date(),
-                        )
 
                     readBuffer.clear()
                 } catch (e: Exception) {
@@ -482,18 +488,23 @@ class VpnController
                 // 解析 IP 版本
                 val firstByte = buffer.get(buffer.position()).toInt() and 0xFF
                 val version = firstByte shr 4
-                android.util.Log.d(
-                    "VpnController",
-                    "processPacket: firstByte=0x${"%02x".format(firstByte)} " +
-                        "version=$version remaining=${buffer.remaining()}",
-                )
+                if (Log.isLoggable(TAG, Log.DEBUG)) {
+                    android.util.Log.d(
+                        TAG,
+                        "processPacket: firstByte=0x${"%02x".format(firstByte)} " +
+                            "version=$version remaining=${buffer.remaining()}",
+                    )
 
-                // Debug: dump first 16 bytes
-                val debugBytes = ByteArray(16)
-                val origPos = buffer.position()
-                buffer.get(debugBytes)
-                buffer.position(origPos)
-                android.util.Log.d("VpnController", "raw bytes: ${debugBytes.joinToString("") { "%02x".format(it) }}")
+                    // Debug: dump first 16 bytes
+                    val debugBytes = ByteArray(16)
+                    val origPos = buffer.position()
+                    buffer.get(debugBytes)
+                    buffer.position(origPos)
+                    android.util.Log.d(
+                        TAG,
+                        "raw bytes: ${debugBytes.joinToString("") { "%02x".format(it) }}",
+                    )
+                }
 
                 val fd = vpnInterface
                 if (fd == null) {
@@ -533,8 +544,11 @@ class VpnController
                     }
                 }
 
-                // 提取目标 IP 以检查排除路由
-                val dstIp = extractDstIp(workBuffer, workVersion)
+                // 提取目标 IP 以检查排除路由 (无排除路由且非域名分流时短路, 避免每包分配)
+                val needDstIp =
+                    excludedRoutes.isNotEmpty() ||
+                        transportMode == DnsInterceptor.DnsTransport.DOMAIN_SPLIT
+                val dstIp = if (needDstIp) extractDstIp(workBuffer, workVersion) else null
                 if (dstIp != null && shouldBypassVpn(dstIp)) {
                     if (transportMode == DnsInterceptor.DnsTransport.SYSTEM) {
                         forwardDnsBypassPacket(readBuffer, dstIp, workVersion)
@@ -722,11 +736,27 @@ class VpnController
             } catch (e: Exception) {
                 android.util.Log.e("VpnController", "writeToTun FAILED: ${e.message}")
             }
-            val stats = connectionStats.value
-            connectionStats.value =
-                stats.copy(
-                    bytesSent = stats.bytesSent + data.size.toLong(),
-                )
+            bytesSentCounter.addAndGet(data.size.toLong())
+            packetsSentCounter.incrementAndGet()
+        }
+
+        /**
+         * 节流发布连接统计: 热点路径只累加原子计数, 每 100ms 汇总一次到 StateFlow,
+         * 避免每包触发 MutableStateFlow 发射与 collector 唤醒 (SshVpnService + MainViewModel)。
+         */
+        private suspend fun statsFlushLoop() {
+            while (isRunning) {
+                delay(STATS_FLUSH_INTERVAL_MS)
+                connectionStats.update {
+                    it.copy(
+                        bytesSent = bytesSentCounter.get(),
+                        bytesReceived = bytesReceivedCounter.get(),
+                        packetsSent = packetsSentCounter.get(),
+                        packetsReceived = packetsReceivedCounter.get(),
+                        lastUpdate = java.util.Date(),
+                    )
+                }
+            }
         }
 
         /**

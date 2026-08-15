@@ -95,8 +95,7 @@ class UdpRelay(
         // 转发 UDP 数据到 SOCKS5
         forwardUdpToSocks(assoc, buffer, payloadStart, length)
 
-        stats.packetsProcessed.value++
-        stats.bytesProcessed.value = stats.bytesProcessed.value + payloadLength.toLong()
+        stats.addPacket(payloadLength.toLong())
         return true
     }
 
@@ -133,12 +132,11 @@ class UdpRelay(
 
             // 委托 DnsInterceptor 处理
             interceptor.processDnsQuery(dnsBuffer, srcIp, dstIp, srcPort, dstPort)
-            stats.packetsProcessed.value++
-            stats.bytesProcessed.value = stats.bytesProcessed.value + dnsPayloadLen.toLong()
+            stats.addPacket(dnsPayloadLen.toLong())
             return true
         } catch (e: Exception) {
             android.util.Log.e(TAG, "handleDnsPacket failed", e)
-            stats.errors.value++
+            stats.addError()
             return false
         }
     }
@@ -184,7 +182,7 @@ class UdpRelay(
                 dgramChannel.send(socksUdpFrame, InetSocketAddress("127.0.0.1", SOCKS_PORT))
             } catch (e: IOException) {
                 Log.e(TAG, "forwardUdpToSocks failed", e)
-                stats.errors.value++
+                stats.addError()
             }
         }
     }
