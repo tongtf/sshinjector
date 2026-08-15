@@ -183,7 +183,25 @@ class JschSshClient
             private const val TAG = "JschSshClient"
             private const val SESSION_POOL_SIZE = 3
             private const val CHANNEL_WINDOW_SIZE = 8 * 1024 * 1024
+            private const val CHANNEL_SEND_MAX_PACKET_SIZE = 64 * 1024
             private const val CHANNEL_CONNECT_TIMEOUT_MS = 10000
+
+            /**
+             * JSch Channel 的窗口/包大小 setter 为包内可见, 只能反射调用。
+             * 每个 setter 只解析一次并缓存, 避免每连接遍历 declaredMethods。
+             */
+            private val CHANNEL_METHODS: List<java.lang.reflect.Method> by lazy {
+                com.jcraft.jsch.Channel::class.java.declaredMethods
+                    .filter {
+                        it.name == "setLocalWindowSizeMax" ||
+                            it.name == "setLocalWindowSize" ||
+                            it.name == "setSendMaxPacketSize"
+                    }
+                    .map {
+                        it.isAccessible = true
+                        it
+                    }
+            }
 
             @Volatile private var loggerSet = false
         }
@@ -301,6 +319,7 @@ class JschSshClient
                 }
                 // 先连接，获取主机密钥，然后验证
                 s.setConfig("StrictHostKeyChecking", "no") // 临时禁用，手动验证
+                s.setConfig("TCPNoDelay", "yes") // 禁用 Nagle, 降低 SSH 小包 (ACK/交互) 的 RTT
                 s.setConfig("PreferredAuthentications", "publickey,password")
                 s.setConfig("PubkeyAuthentication", "yes")
                 s.setConfig("PasswordAuthentication", "yes")
@@ -531,21 +550,20 @@ class JschSshClient
             }
         }
 
+        /**
+         * 反射设置通道窗口大小与发送包上限 (JSch 对应方法为包内可见)。
+         * Method 引用只解析一次并缓存, 避免每连接遍历 declaredMethods。
+         */
         private fun setChannelWindowSize(
             channel: com.jcraft.jsch.Channel,
             windowSize: Int,
         ) {
             try {
-                for (m in com.jcraft.jsch.Channel::class.java.declaredMethods) {
-                    when (m.name) {
-                        "setLocalWindowSizeMax" -> {
-                            m.isAccessible = true
-                            m.invoke(channel, windowSize)
-                        }
-                        "setLocalWindowSize" -> {
-                            m.isAccessible = true
-                            m.invoke(channel, windowSize)
-                        }
+                CHANNEL_METHODS.forEach { m ->
+                    if (m.name == "setSendMaxPacketSize") {
+                        m.invoke(channel, CHANNEL_SEND_MAX_PACKET_SIZE)
+                    } else {
+                        m.invoke(channel, windowSize)
                     }
                 }
             } catch (e: Exception) {
