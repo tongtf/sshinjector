@@ -40,11 +40,12 @@ interface TunnelPlugin {
     /**
      * 注册回向直通回调: 远端数据不经本地 SOCKS socket 中转,
      * 由插件直接回调写回 TUN, 省一次往返与一个阻塞读协程。
-     * key 为本地 SOCKS 客户端端口。
+     * key 为本地 SOCKS 客户端端口。数据以 (data, offset, length) 零拷贝传递,
+     * 回调返回后数组即失效, 不得持有引用。
      */
     fun registerTunCallback(
         clientPort: Int,
-        callback: (ByteArray) -> Unit,
+        callback: (ByteArray, Int, Int) -> Unit,
     ) {
         // 默认无操作; 需要直通能力的插件自行实现
     }

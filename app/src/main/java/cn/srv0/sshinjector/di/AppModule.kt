@@ -13,6 +13,7 @@ import cn.srv0.sshinjector.domain.model.ServerProvisionerContract
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
 import cn.srv0.sshinjector.domain.vpn.PacketProcessor
+import cn.srv0.sshinjector.domain.vpn.SshIoDispatcher
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import dagger.Module
 import dagger.Provides
@@ -99,8 +100,11 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun providePacketProcessor(tunnelManager: TunnelManager): PacketProcessor {
-        return PacketProcessor(tunnelManager)
+    fun providePacketProcessor(
+        tunnelManager: TunnelManager,
+        sshIoDispatcher: SshIoDispatcher,
+    ): PacketProcessor {
+        return PacketProcessor(tunnelManager, sshIoDispatcher)
     }
 
     @Provides

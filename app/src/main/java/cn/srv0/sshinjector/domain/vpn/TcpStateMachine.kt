@@ -25,6 +25,7 @@ class TcpStateMachine(
     private val tunnelManager: TunnelManager,
     private val tunWriterProvider: () -> ((ByteArray) -> Unit)?,
     private val stats: PacketStats,
+    private val sshIoDispatcher: SshIoDispatcher,
 ) {
     companion object {
         private const val TAG = "PacketProcessor"
@@ -259,8 +260,8 @@ class TcpStateMachine(
         var directRelay = false
         if (localPort > 0) {
             try {
-                plugin.registerTunCallback(localPort) { data ->
-                    writeTcpPayloadToTun(conn, data, connKey)
+                plugin.registerTunCallback(localPort) { data, offset, length ->
+                    writeTcpPayloadToTun(conn, data, offset, length, connKey)
                 }
                 tunCallbackPlugin = plugin
                 directRelay = true
@@ -379,19 +380,23 @@ class TcpStateMachine(
 
     /**
      * 将隧道/代理读到的数据按 MTU 安全切片后逐个构造 TCP 段写回 TUN。
+     * 支持 (payload, offset, length) 零拷贝视图: 切片不复制, 由 buildTcpResponsePacket
+     * 直接 put(payload, offset, length), 每段仅 1 次拷贝进包 buffer。
      */
     private fun writeTcpPayloadToTun(
         conn: TcpConnection,
         payload: ByteArray,
+        offset: Int,
+        length: Int,
         connKey: Long,
     ) {
         val writer = tunWriterProvider() ?: return
-        var offset = 0
-        while (offset < payload.size) {
-            val chunkLen = minOf(MAX_TCP_SEGMENT, payload.size - offset)
-            val chunk = payload.copyOfRange(offset, offset + chunkLen)
-            offset += chunkLen
-            val responsePacket = buildTcpResponsePacket(conn, chunk, connKey)
+        val end = offset + length
+        var pos = offset
+        while (pos < end) {
+            val chunkLen = minOf(MAX_TCP_SEGMENT, end - pos)
+            val responsePacket = buildTcpResponsePacket(conn, payload, pos, chunkLen, connKey)
+            pos += chunkLen
             if (responsePacket != null) {
                 writer(responsePacket)
             }
@@ -407,7 +412,7 @@ class TcpStateMachine(
     ) {
         val socksChannel = conn.socksChannel ?: return
 
-        scope.launch(Dispatchers.IO) {
+        scope.launch(sshIoDispatcher.dispatcher) {
             val buffer = ByteBuffer.allocateDirect(RELAY_BUFFER_SIZE)
             try {
                 while (socksChannel.isOpen && conn.state == TcpConnection.TcpState.Established) {
@@ -418,7 +423,7 @@ class TcpStateMachine(
                         buffer.flip()
                         val payload = ByteArray(read)
                         buffer.get(payload)
-                        writeTcpPayloadToTun(conn, payload, connKey)
+                        writeTcpPayloadToTun(conn, payload, 0, payload.size, connKey)
                     }
                 }
             } catch (e: IOException) {
@@ -471,15 +476,14 @@ class TcpStateMachine(
         val channel = conn.tunnelChannel ?: return
         val input = channel.inputStream ?: return
 
-        scope.launch(Dispatchers.IO) {
+        scope.launch(sshIoDispatcher.dispatcher) {
             val buffer = ByteArray(RELAY_BUFFER_SIZE)
             try {
                 while (channel.isConnected && conn.state == TcpConnection.TcpState.Established) {
                     val read = input.read(buffer)
                     if (read == -1) break
                     if (read > 0) {
-                        val data = buffer.copyOf(read)
-                        writeTcpPayloadToTun(conn, data, connKey)
+                        writeTcpPayloadToTun(conn, buffer, 0, read, connKey)
                     }
                 }
             } catch (e: IOException) {

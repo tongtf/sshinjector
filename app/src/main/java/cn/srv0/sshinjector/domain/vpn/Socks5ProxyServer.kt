@@ -162,14 +162,14 @@ class Socks5ProxyServer
         }
 
         // TUN 写回回调: connectionId → callback(data)
-        private val pendingTunCallbacks = ConcurrentHashMap<Int, (ByteArray) -> Unit>()
+        private val pendingTunCallbacks = ConcurrentHashMap<Int, (ByteArray, Int, Int) -> Unit>()
 
         /**
          * 注册 TUN 写回回调，由 PacketProcessor.forwardSynToSocks 调用
          */
         fun registerTunCallback(
             connectionId: Int,
-            callback: (ByteArray) -> Unit,
+            callback: (ByteArray, Int, Int) -> Unit,
         ) {
             pendingTunCallbacks[connectionId] = callback
         }
@@ -178,7 +178,7 @@ class Socks5ProxyServer
             pendingTunCallbacks.remove(connectionId)
         }
 
-        fun getTunCallback(connectionId: Int): ((ByteArray) -> Unit)? {
+        fun getTunCallback(connectionId: Int): ((ByteArray, Int, Int) -> Unit)? {
             return pendingTunCallbacks.remove(connectionId)
         }
 
@@ -274,7 +274,7 @@ private class Socks5Connection(
     private val onDataSent: (Long) -> Unit,
     private val onDataReceived: (Long) -> Unit,
     private val onClosed: () -> Unit,
-    var onDataFromTarget: ((ByteArray) -> Unit)? = null,
+    var onDataFromTarget: ((ByteArray, Int, Int) -> Unit)? = null,
     private val ipToDomainLookup: ((String) -> String?)? = null,
 ) {
     private val buffer = ByteBuffer.allocateDirect(32768)
@@ -286,7 +286,7 @@ private class Socks5Connection(
     private val pendingWrites = java.util.concurrent.ConcurrentLinkedDeque<ByteBuffer>()
     internal var selectionKey: SelectionKey? = null
     internal var tunCallbackKey: Int = 0
-    internal var pendingTunCallbacksRef: java.util.concurrent.ConcurrentHashMap<Int, (ByteArray) -> Unit>? = null
+    internal var pendingTunCallbacksRef: ConcurrentHashMap<Int, (ByteArray, Int, Int) -> Unit>? = null
 
     // 出向(本地 SOCKS → SSH)有界 Channel: eventLoop trySend 入队, 写协程挂起接收。
     // 满时挂到连接级单槽 pendingToSshBlock(不丢), 暂停 OP_READ 背压; 写协程腾出空间后回填。
@@ -660,13 +660,15 @@ private class Socks5Connection(
     }
 
     /**
-     * 启动反向中继: 从 SSH 隧道读取数据写回 SOCKS5 客户端
+     * 启动反向中继: 从 SSH 隧道读取数据写回 SOCKS5 客户端。
+     * 跑在 sshIoDispatcher (动态池), 每个活跃连接占 1 个专用线程而非共享 Dispatchers.IO;
+     * 连接级 64KB buffer 全程复用, 回调以 (data, offset, len) 零拷贝传递。
      */
     private fun startRelayFromTarget() {
         val tunnel = targetTunnel ?: return
         val input = tunnel.inputStream ?: return
 
-        scope.launch(Dispatchers.IO) {
+        scope.launch(sshIoDispatcher.dispatcher) {
             val readBuffer = ByteBuffer.allocate(65535) // 增加到 64KB
             var resolvedCallback = onDataFromTarget
             if (resolvedCallback == null && pendingTunCallbacksRef != null) {
@@ -692,8 +694,6 @@ private class Socks5Connection(
                         break
                     }
                     if (read > 0) {
-                        // 只在必须传给 callback 时拷贝; sendReply 路径可直接用 array + offset/len
-                        val data = readBuffer.array().copyOf(read)
                         if (IS_DEBUG) {
                             android.util.Log.d(
                                 "Socks5Proxy",
@@ -701,10 +701,10 @@ private class Socks5Connection(
                                     "callback=${callback != null}",
                             )
                         }
-                        callback?.invoke(data)
+                        callback?.invoke(readBuffer.array(), 0, read)
                         onDataReceived(read.toLong())
                         if (callback == null) {
-                            sendReply(data)
+                            sendReply(readBuffer.array(), 0, read)
                         }
                     }
                 }
@@ -739,10 +739,18 @@ private class Socks5Connection(
     }
 
     private fun sendReply(reply: ByteArray) {
+        sendReply(reply, 0, reply.size)
+    }
+
+    private fun sendReply(
+        data: ByteArray,
+        offset: Int,
+        length: Int,
+    ) {
         try {
             if (selectionKey != null && selectionKey!!.isValid) {
                 // Queue the reply for writing
-                pendingWrites.add(ByteBuffer.wrap(reply))
+                pendingWrites.add(ByteBuffer.wrap(data, offset, length))
                 selectionKey!!.interestOps(selectionKey!!.interestOps() or SelectionKey.OP_WRITE)
                 // 唤醒阻塞中的 selector, 避免跨线程 interestOps 修改后写入延迟
                 try {
@@ -750,7 +758,7 @@ private class Socks5Connection(
                 } catch (_: Exception) {
                 }
             } else {
-                channel.write(ByteBuffer.wrap(reply))
+                channel.write(ByteBuffer.wrap(data, offset, length))
             }
         } catch (e: Exception) {
             close()

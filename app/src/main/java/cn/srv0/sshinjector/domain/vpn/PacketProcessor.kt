@@ -1,7 +1,13 @@
 package cn.srv0.sshinjector.domain.vpn
 
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -14,23 +20,37 @@ class PacketProcessor
     @Inject
     constructor(
         private val tunnelManager: TunnelManager,
+        private val sshIoDispatcher: SshIoDispatcher,
     ) {
         companion object {
             const val DEFAULT_CONNECTION_CLEANUP_TIMEOUT_MS = 300000L // 5 分钟默认值
+            private const val STATS_FLUSH_INTERVAL_MS = 100L
         }
 
         private val stats = PacketStats()
+        private val statsScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
         @Volatile private var tunWriter: ((ByteArray) -> Unit)? = null
         private var dnsInterceptor: DnsInterceptor? = null
 
-        private val tcpStateMachine = TcpStateMachine(tunnelManager, { tunWriter }, stats)
+        private val tcpStateMachine =
+            TcpStateMachine(tunnelManager, { tunWriter }, stats, sshIoDispatcher)
         private val udpRelay = UdpRelay({ tunWriter }, stats)
         private val icmpv6Responder = Icmpv6Responder({ tunWriter })
 
         val packetsProcessed: StateFlow<Long> = stats.packetsProcessed
         val bytesProcessed: StateFlow<Long> = stats.bytesProcessed
         val errors: StateFlow<Long> = stats.errors
+
+        init {
+            // 节流发布统计: 热点路径只累加 AtomicLong, 避免每包 StateFlow 发射
+            statsScope.launch {
+                while (isActive) {
+                    delay(STATS_FLUSH_INTERVAL_MS)
+                    stats.syncToFlows()
+                }
+            }
+        }
 
         fun setTunWriter(writer: (ByteArray) -> Unit) {
             tunWriter = writer

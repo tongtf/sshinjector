@@ -143,7 +143,7 @@ class Socks5TunnelPlugin
 
         override fun registerTunCallback(
             clientPort: Int,
-            callback: (ByteArray) -> Unit,
+            callback: (ByteArray, Int, Int) -> Unit,
         ) {
             socksServer?.registerTunCallback(clientPort, callback)
         }
