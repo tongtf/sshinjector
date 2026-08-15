@@ -31,6 +31,11 @@ object ChecksumCalculator {
         return (sum.inv().toShort())
     }
 
+    /**
+     * TCP 校验和: 伪头 (src/dst IP + 长度/协议) + TCP 段 的 16-bit 和取反。
+     * 直接在 packet 数组上流式计算, 不构造伪头临时 buffer (每段省 1 分配 + 1 整段拷贝)。
+     * 调用方保证 TCP 头的 checksum 字段为 0 (计算时视为 0)。
+     */
     fun tcpChecksum(
         srcIp: ByteArray,
         dstIp: ByteArray,
@@ -39,36 +44,31 @@ object ChecksumCalculator {
         tcpLen: Int,
     ): Short {
         val isIPv6 = srcIp.size == 16
-        val paddedLen = tcpLen + (tcpLen and 1)
-        val pseudoHeader =
-            if (isIPv6) {
-                ByteBuffer.allocate(40 + paddedLen).apply {
-                    order(ByteOrder.BIG_ENDIAN)
-                    put(srcIp)
-                    put(dstIp)
-                    putInt(tcpLen)
-                    put(ByteArray(3))
-                    put(6)
-                    put(packet, ipOffset, tcpLen)
-                    if (paddedLen != tcpLen) put(0)
-                }
-            } else {
-                ByteBuffer.allocate(12 + paddedLen).apply {
-                    order(ByteOrder.BIG_ENDIAN)
-                    put(srcIp)
-                    put(dstIp)
-                    put(0)
-                    put(6)
-                    putShort(tcpLen.toShort())
-                    put(packet, ipOffset, tcpLen)
-                    if (paddedLen != tcpLen) put(0)
-                }
-            }
-
         var sum = 0L
-        pseudoHeader.position(0)
-        while (pseudoHeader.remaining() >= 2) {
-            sum += (pseudoHeader.getShort().toInt() and 0xFFFF)
+        // 伪头: srcIp + dstIp
+        for (i in srcIp.indices step 2) {
+            sum += (((srcIp[i].toInt() and 0xFF) shl 8) or (srcIp[i + 1].toInt() and 0xFF))
+        }
+        for (i in dstIp.indices step 2) {
+            sum += (((dstIp[i].toInt() and 0xFF) shl 8) or (dstIp[i + 1].toInt() and 0xFF))
+        }
+        // 伪头: 协议 + TCP 长度 (IPv6 用 32-bit 长度字段, IPv4 用 16-bit)
+        if (isIPv6) {
+            sum += 6
+            sum += (tcpLen ushr 16) and 0xFFFF
+        } else {
+            sum += 6
+        }
+        sum += tcpLen and 0xFFFF
+        // TCP 段 (头 + payload)
+        val end = ipOffset + tcpLen
+        var pos = ipOffset
+        while (pos + 1 < end) {
+            sum += (((packet[pos].toInt() and 0xFF) shl 8) or (packet[pos + 1].toInt() and 0xFF))
+            pos += 2
+        }
+        if (pos < end) {
+            sum += (packet[pos].toInt() and 0xFF) shl 8
         }
         while (sum shr 16 != 0L) {
             sum = (sum and 0xFFFF) + (sum shr 16)

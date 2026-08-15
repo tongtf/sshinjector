@@ -666,11 +666,14 @@ class TcpStateMachine(
     }
 
     /**
-     * 构建反向 IP/TCP 响应包: src ↔ dst 互换 (支持 IPv4/IPv6)
+     * 构建反向 IP/TCP 响应包: src ↔ dst 互换 (支持 IPv4/IPv6)。
+     * 每段 1 分配 (ByteBuffer) + 1 拷贝 (payload), 返回的数组即 buffer 本身, 无二次拷贝。
      */
     private fun buildTcpResponsePacket(
         conn: TcpConnection,
         payload: ByteArray,
+        payloadOffset: Int,
+        payloadLength: Int,
         connKey: Long,
     ): ByteArray? {
         try {
@@ -683,19 +686,19 @@ class TcpStateMachine(
             val seqNum = conn.serverSeq
             val ackNum = (conn.browserSeq + 1 + conn.forwardedBytes) and UINT32_MASK
 
-            conn.serverSeq = (seqNum + payload.size) and UINT32_MASK
+            conn.serverSeq = (seqNum + payloadLength) and UINT32_MASK
             nextTcpAck[connKey] = conn.serverSeq
             nextTcpSeq[connKey] = ackNum
 
             val tcpHeaderLen = 20
             val ipHeaderLen = if (isIPv6) 40 else 20
-            val totalLen = ipHeaderLen + tcpHeaderLen + payload.size
+            val totalLen = ipHeaderLen + tcpHeaderLen + payloadLength
 
             val packet = ByteBuffer.allocate(totalLen).order(ByteOrder.BIG_ENDIAN)
 
             if (isIPv6) {
                 packet.putInt(0x60000000.toInt())
-                packet.putShort((tcpHeaderLen + payload.size).toShort())
+                packet.putShort((tcpHeaderLen + payloadLength).toShort())
                 packet.put(6.toByte())
                 packet.put(64.toByte())
                 packet.put(srcIp)
@@ -722,7 +725,7 @@ class TcpStateMachine(
             packet.putShort(0)
             packet.putShort(0)
 
-            packet.put(payload)
+            packet.put(payload, payloadOffset, payloadLength)
 
             if (!isIPv6) {
                 packet.position(0)
@@ -732,7 +735,7 @@ class TcpStateMachine(
             }
 
             val tcpChecksum =
-                ChecksumCalculator.tcpChecksum(srcIp, dstIp, packet.array(), ipHeaderLen, payload.size + tcpHeaderLen)
+                ChecksumCalculator.tcpChecksum(srcIp, dstIp, packet.array(), ipHeaderLen, payloadLength + tcpHeaderLen)
             packet.position(ipHeaderLen + 16)
             packet.putShort(tcpChecksum)
 
@@ -740,12 +743,12 @@ class TcpStateMachine(
                 if (IS_DEBUG) Log.d(TAG, "TCP resp (${totalLen}B) conn=${conn.id}")
             }
 
-            return packet.array().copyOfRange(0, totalLen)
+            return packet.array()
         } catch (e: Exception) {
             Log.e(
                 TAG,
                 "buildTcpResponsePacket failed: ${e::class.simpleName}: conn.srcIp.size=${conn.srcIp.address.size} " +
-                    "payload.size=${payload.size}",
+                    "payload.size=$payloadLength",
                 e,
             )
             return null
@@ -827,7 +830,7 @@ class TcpStateMachine(
                 }
             }
 
-            return packet.array().copyOfRange(0, totalLen)
+            return packet.array()
         } catch (e: Exception) {
             Log.e(TAG, "buildSynAckPacket failed: ${e::class.simpleName}: ${e.message}", e)
             return null
@@ -898,7 +901,7 @@ class TcpStateMachine(
             packet.putShort(tcpChecksum)
 
             if (IS_DEBUG) Log.d(TAG, "ACK packet (${totalLen}B) conn=${conn.id} ack=$ackNum")
-            return packet.array().copyOfRange(0, totalLen)
+            return packet.array()
         } catch (e: Exception) {
             Log.e(TAG, "buildAckPacket failed: ${e::class.simpleName}: ${e.message}", e)
             return null
@@ -967,7 +970,7 @@ class TcpStateMachine(
             if (IS_DEBUG) {
                 Log.d(TAG, "RST packet ${totalLen}B for conn ${conn.id} ${conn.srcIp.hostAddress}:${conn.srcPort}")
             }
-            return packet.array().copyOfRange(0, totalLen)
+            return packet.array()
         } catch (e: Exception) {
             Log.e(TAG, "buildRstPacket failed: ${e::class.simpleName}: ${e.message}", e)
             return null
@@ -975,21 +978,24 @@ class TcpStateMachine(
     }
 
     /**
-     * 将 TCP 数据转发到 SOCKS5/隧道通道
+     * 将 TCP 数据转发到 SOCKS5/隧道通道。
+     * @return true 表示完整写出; false 表示背压丢弃 (调用方不应推进 seq / 回 ACK)
      */
     private fun forwardToSocks(
         conn: TcpConnection,
         buffer: ByteBuffer,
         payloadStart: Int,
         payloadLength: Int,
-    ) {
-        if (conn.state != TcpConnection.TcpState.Established) {
+    ): Boolean {
+        if (conn.state != TcpConnection.TcpState.Established || conn.socksChannel == null) {
             Log.w(
                 TAG,
-                "forwardToSocks: conn ${conn.id} not established (state=${conn.state}), dropping ${payloadLength}B",
+                "forwardToSocks: conn ${conn.id} not established or no channel (state=${conn.state}), " +
+                    "dropping ${payloadLength}B",
             )
-            return
+            return false
         }
+        val socksChannel = conn.socksChannel!!
 
         // Try tunnel channel first, then SOCKS5 channel
         val tunnelChannel = conn.tunnelChannel
