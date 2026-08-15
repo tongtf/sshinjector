@@ -182,6 +182,8 @@ class SshVpnService : VpnService() {
 
             serviceVpnState.value = DomainVpnState(status = DomainVpnState.VpnStatus.Connected, server = config)
             serverRepository.setActiveServer(serverId)
+            // 记录最后连接的服务器, 供开机自启 (BootReceiver) 使用
+            settingsDataStore.setLastServerId(serverId)
             updateNotification(config)
             startWhitelistObserver()
         } catch (e: Exception) {
@@ -311,13 +313,17 @@ class SshVpnService : VpnService() {
                 // 因此只有白名单非空时才添加全量路由。
                 if (allowedPackages.isNotEmpty()) {
                     builder.addRoute("0.0.0.0", 0)
-                    builder.addRoute("::", 0)
+                    if (config.enableIPv6) {
+                        builder.addRoute("::", 0)
+                    }
                 }
             }
             3 -> {
                 // DOMAIN_SPLIT 模式: 只捕获假 IP 段与 DNS, 真实 IP 流量直接走物理网卡, 避免 TUN 循环
                 builder.addRoute("198.18.0.0", 15)
-                builder.addRoute("fd00::", 8)
+                if (config.enableIPv6) {
+                    builder.addRoute("fd00::", 8)
+                }
                 builder.addRoute("10.0.0.2", 32)
             }
         }
@@ -416,6 +422,8 @@ class SshVpnService : VpnService() {
 
         // 0. 清除所有服务器的激活状态
         serverRepository.deactivateAllServers()
+        // 用户主动断开: 清除最后连接记录, 开机自启不再触发
+        settingsDataStore.setLastServerId(0)
 
         // 1. 断开 VPN 控制器 (如果正在运行)
         if (vpnController.isVpnRunning()) {
