@@ -56,7 +56,7 @@
       <h3>核心事实</h3>
       <ul>
         <li>回向直通跳过本地 SOCKS 往返</li>
-        <li>出向 kotlinx Channel 背压</li>
+        <li>出向背压: Channel(256) + 非阻塞丢弃/重传兜底</li>
         <li>SSH 会话池 ×3 + 线性退避重连</li>
         <li>UDP 中继当前不工作</li>
       </ul>

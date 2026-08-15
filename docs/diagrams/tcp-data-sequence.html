@@ -98,17 +98,17 @@
     <line x1="360" y1="496" x2="596" y2="496" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
     <text x="428" y="490" class="msg">forwardToSocks · 写 socket</text>
     <line x1="600" y1="536" x2="816" y2="536" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
-    <text x="660" y="530" class="msg">enqueueToSsh → Channel(32)</text>
+    <text x="660" y="530" class="msg">enqueueToSsh → Channel(256)</text>
     <line x1="820" y1="576" x2="996" y2="576" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow)"/>
     <text x="852" y="570" class="msg">write + flush</text>
 
     <!-- return path -->
     <line x1="1000" y1="616" x2="824" y2="616" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow)"/>
-    <text x="880" y="610" class="msg">input.read（阻塞）</text>
+    <text x="880" y="610" class="msg">input.read（阻塞 · ssh-io）</text>
     <line x1="820" y1="656" x2="604" y2="656" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
     <text x="660" y="650" class="msg">relayFromTarget 读回向</text>
     <line x1="600" y1="696" x2="364" y2="696" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
-    <text x="424" y="690" class="msg">callback(data) · 回向直通</text>
+    <text x="424" y="690" class="msg">callback(data, off, len) · 零拷贝</text>
     <line x1="360" y1="736" x2="124" y2="736" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
     <text x="164" y="730" class="msg">buildTcpResponsePacket → TUN</text>
 
@@ -123,7 +123,9 @@
     <text x="400" y="777" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">回向直通</text>
   </svg>
   </div>
-  <p class="foot">SSHInjector · 出向背压：Channel 满 → 单槽 pendingToSshBlock → 暂停 OP_READ；回向回调注册在 CONNECT 请求前（TcpStateMachine:255-262）</p>
+  <p class="foot">SSHInjector · 出向背压：Channel(256) 满 → 单槽 pendingToSshBlock → 暂停 OP_READ → loopback 满 →
+    forwardToSocks 非阻塞写失败丢弃段 + 不回 ACK（浏览器 TCP 重传兜底, 不阻塞 packetLoop）；
+    回向 relay 跑 SshIoDispatcher, 回调 (data, off, len) 零拷贝, 组包每段 1 分配 1 拷贝</p>
 </div>
 </body>
 </html>
