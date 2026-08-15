@@ -23,7 +23,7 @@ import javax.inject.Singleton
 
 private val IS_DEBUG = android.util.Log.isLoggable("Socks5Proxy", android.util.Log.DEBUG)
 private const val TIMEOUT_CHECK_INTERVAL_MS = 5000L
-private const val SSH_SEND_QUEUE_CAPACITY = 32
+private const val SSH_SEND_QUEUE_CAPACITY = 256
 
 /**
  * 本地 SOCKS5 代理服务器 (RFC 1928)

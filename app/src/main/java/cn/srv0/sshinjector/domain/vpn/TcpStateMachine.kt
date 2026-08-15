@@ -159,7 +159,6 @@ class TcpStateMachine(
                     val expectedBrowserSeq = (conn.browserSeq + 1 + conn.forwardedBytes) and UINT32_MASK
                     val receivedSeq = seqNum.toLong() and UINT32_MASK
                     if (receivedSeq == expectedBrowserSeq) {
-                        conn.forwardedBytes += payloadLen.toLong()
                         if (conn.pendingConnect) {
                             // 延迟 CONNECT: 从首个数据包提取域名，完成 CONNECT，再转发数据
                             val firstData = ByteArray(payloadLen)
@@ -168,10 +167,14 @@ class TcpStateMachine(
                             completeDeferredConnect(conn, firstData, connKey)
                         } else {
                             buffer.position(payloadStart + dataOffset)
-                            forwardToSocks(conn, buffer, payloadStart + dataOffset, payloadLen)
+                            if (forwardToSocks(conn, buffer, payloadStart + dataOffset, payloadLen)) {
+                                conn.forwardedBytes += payloadLen.toLong()
+                                // 立即回纯 ACK，避免浏览器因等待确认而超时重传
+                                sendAckToBrowser(conn, connKey)
+                            }
+                            // 转发失败 (SSH 背压): 不推进 forwardedBytes、不回 ACK,
+                            // 浏览器超时重传该段, 数据不丢失; 背压停留在本连接, 不阻塞 packetLoop
                         }
-                        // 立即回纯 ACK，避免浏览器因等待确认而超时重传
-                        sendAckToBrowser(conn, connKey)
                     } else if (receivedSeq < expectedBrowserSeq) {
                         // 重传段 (seq < expected): 数据已转发过, 丢弃重复, 回 ACK 推进浏览器窗口
                         if (IS_DEBUG) {
@@ -328,6 +331,13 @@ class TcpStateMachine(
 
         conn.socksChannel = sock
         conn.state = TcpConnection.TcpState.Established
+        try {
+            // 握手完成后切非阻塞: 转发失败时丢弃段 + 不回 ACK, 由浏览器 TCP 重传兜底,
+            // 避免慢连接阻塞 packetLoop 全局数据通路
+            sock.configureBlocking(false)
+        } catch (e: IOException) {
+            Log.w(TAG, "configureBlocking(false) failed for conn ${conn.id}: ${e.message}")
+        }
 
         val synAckPacket = buildSynAckPacket(conn, connKey)
         if (synAckPacket != null) {
@@ -1003,44 +1013,38 @@ class TcpStateMachine(
                 }
             } catch (e: IOException) {
                 Log.e(TAG, "forwardToTunnel failed", e)
-                stats.errors.value++
+                stats.addError()
                 closeTcpConnection(
                     IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort),
                     conn,
                 )
+                return false
             }
-            return
-        }
-
-        val socksChannel = conn.socksChannel
-        if (socksChannel == null) {
-            Log.w(TAG, "forwardToSocks: both tunnelChannel and socksChannel are null for conn ${conn.id}")
-            return
+            return true
         }
 
         try {
             buffer.position(payloadStart)
             buffer.limit(payloadStart + payloadLength)
+            // 非阻塞写: loopback 缓冲满 (SSH 背压) 时放弃本段返回 false,
+            // 调用方不回 ACK, 浏览器 TCP 重传兜底 —— packetLoop 不再被单连接拖死
             while (buffer.hasRemaining()) {
-                socksChannel.write(buffer)
+                if (socksChannel.write(buffer) == 0) {
+                    if (IS_DEBUG) {
+                        Log.d(
+                            TAG,
+                            "forwardToSocks: backpressure, dropping ${buffer.remaining()}B for conn ${conn.id}",
+                        )
+                    }
+                    return false
+                }
             }
-            if (IS_DEBUG) {
-                val hexPayload =
-                    ByteArray(payloadLength).also {
-                        val dup = buffer.duplicate()
-                        dup.position(payloadStart)
-                        dup.get(it)
-                    }.joinToString("") { "%02x".format(it) }.take(40)
-                Log.d(
-                    TAG,
-                    "forwardToSocks: wrote ${payloadLength}B for conn ${conn.id} → " +
-                        "${conn.dstIp}:${conn.dstPort} hex=$hexPayload",
-                )
-            }
+            return true
         } catch (e: IOException) {
             Log.e(TAG, "forwardToSocks failed", e)
-            stats.errors.value++
+            stats.addError()
             closeTcpConnection(IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort), conn)
+            return false
         }
     }
 
