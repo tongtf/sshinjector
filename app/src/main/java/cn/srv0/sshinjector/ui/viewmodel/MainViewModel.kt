@@ -338,7 +338,7 @@ class MainViewModel
                                 currentServerHost = state.server?.host ?: "",
                                 currentServerUser = state.server?.username ?: "",
                                 connectionStatus = status,
-                                proxyAddress = if (isConnected) "127.0.0.1:1080" else "-",
+                                proxyAddress = if (isConnected) "127.0.0.1:${state.server?.socksPort ?: 1080}" else "-",
                                 serverConnectionStatus = newServerStatus,
                             )
                         }
@@ -750,7 +750,7 @@ class MainViewModel
                         currentServerHost = state.server?.host ?: "",
                         currentServerUser = state.server?.username ?: "",
                         connectionStatus = status,
-                        proxyAddress = if (isConnected) "127.0.0.1:1080" else "-",
+                        proxyAddress = if (isConnected) "127.0.0.1:${state.server?.socksPort ?: 1080}" else "-",
                         serverConnectionStatus = newServerStatus,
                     )
                 }

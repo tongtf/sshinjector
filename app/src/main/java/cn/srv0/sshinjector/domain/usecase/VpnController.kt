@@ -425,7 +425,14 @@ class VpnController
          * 关闭旧 TUN 流, 替换为新的 fd, 并重启数据包循环。SSH 隧道不受影响。
          */
         fun rebuildTunInterface(fd: FileDescriptor) {
-            if (!isRunning) return
+            if (!isRunning) {
+                // 未运行时不换流, 关闭传入 fd 防止泄漏
+                try {
+                    java.io.FileInputStream(fd).close()
+                } catch (_: Exception) {
+                }
+                return
+            }
             val generation = ++tunGeneration
             try {
                 inputStream?.close()

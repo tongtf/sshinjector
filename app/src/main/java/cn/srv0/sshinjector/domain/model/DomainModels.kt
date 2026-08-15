@@ -53,16 +53,12 @@ data class VpnState(
     val server: ServerConfig? = null,
     val stats: ConnectionStats = ConnectionStats(),
     val error: String? = null,
-    val isReconnecting: Boolean = false,
 ) {
     enum class VpnStatus {
         Disconnected,
         Connecting,
-        Authenticating,
-        EstablishingTunnel,
         Connected,
         Disconnecting,
-        Reconnecting,
         Failed,
     }
 }

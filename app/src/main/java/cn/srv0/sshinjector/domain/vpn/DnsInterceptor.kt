@@ -11,7 +11,6 @@ import org.xbill.DNS.Section
 import java.net.InetAddress
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
@@ -87,7 +86,8 @@ class DnsInterceptor
             }
         }
 
-        private val pendingResponses = ConcurrentLinkedQueue<DnsResponse>()
+        private val pendingResponses =
+            kotlinx.coroutines.channels.Channel<DnsResponse>(kotlinx.coroutines.channels.Channel.UNLIMITED)
         private val queryIdCounter = AtomicInteger(0)
 
         // 当前传输模式
@@ -133,8 +133,34 @@ class DnsInterceptor
                         iter.remove()
                         removed++
                     }
+                    // 驱逐后把假 IP 计数器重置到剩余映射的最大值, 防止长期运行池耗尽
+                    resetFakeIpCounters()
                 }
             }, 30, 30, java.util.concurrent.TimeUnit.SECONDS)
+        }
+
+        /**
+         * 把假 IP 计数器重置到剩余映射中的最大值 (按序分配, 未分配区间可复用)。
+         */
+        private fun resetFakeIpCounters() {
+            var max4 = 0L
+            var max6 = 0L
+            for (ip in domainToIp.values) {
+                val v4 = ip.split(".").mapNotNull { it.toIntOrNull() }
+                if (v4.size == 4) {
+                    val n =
+                        (v4[0].toLong() shl 24) or
+                            (v4[1].toLong() shl 16) or
+                            (v4[2].toLong() shl 8) or
+                            v4[3].toLong()
+                    if (n > max4) max4 = n
+                } else {
+                    val hex = ip.substringAfterLast(':').toIntOrNull(16)
+                    if (hex != null && hex > max6) max6 = hex.toLong()
+                }
+            }
+            fakeIpCounter.set(max4.toInt())
+            fakeIpv6Counter.set(max6.toInt())
         }
 
         data class DnsPendingQuery(
@@ -447,10 +473,30 @@ class DnsInterceptor
             val qname = question.name.toString(true)
             val qtype = question.type
 
-            // 只处理 A 和 AAAA 查询
+            // 非 A/AAAA 查询 (MX/TXT/PTR/ANY...): 走受保护 socket 直查系统 DNS 并回填,
+            // 否则该查询会被吞掉导致解析必然失败
             if (qtype != org.xbill.DNS.Type.A && qtype != org.xbill.DNS.Type.AAAA) {
-                Log.w(TAG, "REMOTE 假IP: 不支持的查询类型 $qtype, 跳过")
-                return false
+                if (protectSocket == null || systemDnsServers.isEmpty()) {
+                    Log.w(TAG, "REMOTE 假IP: 不支持类型 $qtype 且无系统 DNS 可用, 跳过")
+                    return false
+                }
+                Log.d(TAG, "REMOTE 假IP: 非 A/AAAA 类型 $qtype, 改走系统 DNS 直查")
+                val queryId = queryIdCounter.incrementAndGet()
+                pendingQueries[queryId] =
+                    DnsPendingQuery(
+                        queryId = queryId,
+                        originalQueryId = originalQueryId,
+                        srcIp = srcIp,
+                        srcPort = srcPort,
+                        dstIp = null,
+                        dstPort = 53,
+                        question = question,
+                    )
+                val msg = Message(originalQueryId)
+                msg.addRecord(question, Section.QUESTION)
+                msg.header.setID(queryId)
+                sendDnsOverProtectedSocket(msg.toWire(), queryId)
+                return true
             }
 
             // 同一域名+类型返回相同假IP (key 包含类型, A 和 AAAA 独立分配)
@@ -517,7 +563,7 @@ class DnsInterceptor
             )
 
             // 发送响应 (DNS 服务器 IP 用假 IP 作为 srcIp, 不影响)
-            pendingResponses.add(
+            pendingResponses.trySend(
                 DnsResponse(
                     srcIp = fakeInetAddress,
                     dstIp = srcIp,
@@ -546,7 +592,7 @@ class DnsInterceptor
             records.forEach { response.addRecord(it, Section.ANSWER) }
 
             // 缓存响应没有特定的源 DNS IP，使用默认
-            pendingResponses.add(
+            pendingResponses.trySend(
                 DnsResponse(
                     srcIp = InetAddress.getByName("8.8.8.8"),
                     dstIp = srcIp,
@@ -567,7 +613,7 @@ class DnsInterceptor
             response.header.setRcode(rcode)
             response.addRecord(pending.question, Section.QUESTION)
 
-            pendingResponses.add(
+            pendingResponses.trySend(
                 DnsResponse(
                     srcIp = pending.dstIp ?: InetAddress.getByName("8.8.8.8"),
                     dstIp = pending.srcIp,
@@ -581,8 +627,8 @@ class DnsInterceptor
          * 获取待发送的 DNS 响应
          * 由 VpnService 调用写回 TUN 接口
          */
-        fun pollResponse(): DnsResponse? {
-            return pendingResponses.poll()
+        suspend fun pollResponse(): DnsResponse? {
+            return pendingResponses.receiveCatching().getOrNull()
         }
 
         /**

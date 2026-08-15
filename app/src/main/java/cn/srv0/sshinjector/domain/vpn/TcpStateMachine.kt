@@ -63,7 +63,6 @@ class TcpStateMachine(
         var browserSeq: Long = 0,
         var serverSeq: Long = 0,
         var forwardedBytes: Long = 0,
-        var pendingConnect: Boolean = false,
         var socksLocalPort: Int = 0,
     ) {
         enum class TcpState {
@@ -159,22 +158,14 @@ class TcpStateMachine(
                     val expectedBrowserSeq = (conn.browserSeq + 1 + conn.forwardedBytes) and UINT32_MASK
                     val receivedSeq = seqNum.toLong() and UINT32_MASK
                     if (receivedSeq == expectedBrowserSeq) {
-                        if (conn.pendingConnect) {
-                            // 延迟 CONNECT: 从首个数据包提取域名，完成 CONNECT，再转发数据
-                            val firstData = ByteArray(payloadLen)
-                            buffer.position(payloadStart + dataOffset)
-                            buffer.get(firstData)
-                            completeDeferredConnect(conn, firstData, connKey)
-                        } else {
-                            buffer.position(payloadStart + dataOffset)
-                            if (forwardToSocks(conn, buffer, payloadStart + dataOffset, payloadLen)) {
-                                conn.forwardedBytes += payloadLen.toLong()
-                                // 立即回纯 ACK，避免浏览器因等待确认而超时重传
-                                sendAckToBrowser(conn, connKey)
-                            }
-                            // 转发失败 (SSH 背压): 不推进 forwardedBytes、不回 ACK,
-                            // 浏览器超时重传该段, 数据不丢失; 背压停留在本连接, 不阻塞 packetLoop
+                        buffer.position(payloadStart + dataOffset)
+                        if (forwardToSocks(conn, buffer, payloadStart + dataOffset, payloadLen)) {
+                            conn.forwardedBytes += payloadLen.toLong()
+                            // 立即回纯 ACK，避免浏览器因等待确认而超时重传
+                            sendAckToBrowser(conn, connKey)
                         }
+                        // 转发失败 (SSH 背压): 不推进 forwardedBytes、不回 ACK,
+                        // 浏览器超时重传该段, 数据不丢失; 背压停留在本连接, 不阻塞 packetLoop
                     } else if (receivedSeq < expectedBrowserSeq) {
                         // 重传段 (seq < expected): 数据已转发过, 丢弃重复, 回 ACK 推进浏览器窗口
                         if (IS_DEBUG) {
@@ -508,161 +499,6 @@ class TcpStateMachine(
      */
     private fun forwardSynToSocks(conn: TcpConnection) {
         forwardSynToTunnel(conn)
-    }
-
-    /**
-     * 完成延迟的连接: 从首个数据包提取域名，通过隧道插件转发
-     */
-    private fun completeDeferredConnect(
-        conn: TcpConnection,
-        firstData: ByteArray,
-        connKey: Long,
-    ) {
-        try {
-            val domain = extractSniFromTls(firstData) ?: extractHostFromHttp(firstData)
-            if (domain != null) {
-                dnsInterceptor?.ipToDomain?.put(
-                    conn.dstIp.hostAddress!!,
-                    domain,
-                )
-                if (IS_DEBUG) {
-                    Log.d(
-                        TAG,
-                        "Extracted domain: $domain for IP ${conn.dstIp.hostAddress!!} (conn ${conn.id})",
-                    )
-                }
-            }
-
-            val plugin = tunnelManager.getActiveOrFallback()
-            val channel =
-                plugin.openTcpChannel(
-                    conn.dstIp.hostAddress!!,
-                    conn.dstPort,
-                )
-            if (channel != null && channel.connect(TUN_CONNECT_TIMEOUT_MS)) {
-                conn.tunnelChannel = channel
-                conn.pendingConnect = false
-                conn.state = TcpConnection.TcpState.Established
-
-                val synAckPacket = buildSynAckPacket(conn, connKey)
-                if (synAckPacket != null) tunWriterProvider()?.invoke(synAckPacket)
-
-                startRelayFromTunnel(conn, connKey)
-
-                val output = channel.outputStream
-                if (output != null) {
-                    output.write(firstData)
-                    output.flush()
-                }
-            } else {
-                Log.e(TAG, "Deferred tunnel connect failed for conn ${conn.id}")
-                closeTcpConnection(connKey, conn)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "completeDeferredConnect failed for conn ${conn.id}", e)
-            closeTcpConnection(connKey, conn)
-        }
-    }
-
-    /**
-     * 从 TLS ClientHello 中提取 SNI 域名
-     */
-    private fun extractSniFromTls(data: ByteArray): String? {
-        if (data.size < 6) return null
-        // TLS Record: ContentType(1) Version(2) Length(2) = 5 bytes header
-        if (data[0] != 0x16.toByte()) return null // Not TLS Handshake
-        // HandshakeType
-        val hsType = data[5].toInt() and 0xFF
-        if (hsType != 0x01) return null // Not ClientHello
-
-        var offset = 6
-        // Handshake length (3 bytes)
-        if (data.size < offset + 3) return null
-        offset += 3
-        // ClientVersion (2 bytes)
-        offset += 2
-        // Random (32 bytes)
-        offset += 32
-        if (data.size < offset) return null
-        // SessionID
-        if (data.size < offset + 1) return null
-        val sessionIdLen = data[offset].toInt() and 0xFF
-        offset += 1 + sessionIdLen
-        // Cipher Suites
-        if (data.size < offset + 2) return null
-        val csLen = ((data[offset].toInt() and 0xFF) shl 8) or (data[offset + 1].toInt() and 0xFF)
-        offset += 2 + csLen
-        // Compression Methods
-        if (data.size < offset + 1) return null
-        val compLen = data[offset].toInt() and 0xFF
-        offset += 1 + compLen
-        // Extensions
-        if (data.size < offset + 2) return null
-        val extLen = ((data[offset].toInt() and 0xFF) shl 8) or (data[offset + 1].toInt() and 0xFF)
-        offset += 2
-        val extEnd = offset + extLen
-
-        while (offset + 4 <= extEnd && offset + 4 <= data.size) {
-            val extType = ((data[offset].toInt() and 0xFF) shl 8) or (data[offset + 1].toInt() and 0xFF)
-            val extDataLen = ((data[offset + 2].toInt() and 0xFF) shl 8) or (data[offset + 3].toInt() and 0xFF)
-            offset += 4
-            if (extType == 0x0000) { // SNI
-                if (data.size < offset + 5) return null
-                offset += 2 // server name list length
-                val nameType = data[offset].toInt() and 0xFF
-                if (nameType != 0) {
-                    offset += extDataLen - 2
-                    continue
-                }
-                offset += 1
-                val nameLen = ((data[offset].toInt() and 0xFF) shl 8) or (data[offset + 1].toInt() and 0xFF)
-                offset += 2
-                if (data.size < offset + nameLen) return null
-                return String(data, offset, nameLen, Charsets.US_ASCII)
-            }
-            offset += extDataLen
-        }
-        return null
-    }
-
-    /**
-     * 从 HTTP 请求中提取 Host 头
-     */
-    private fun extractHostFromHttp(data: ByteArray): String? {
-        if (data.size < 10) return null
-        // 检查是否以 HTTP 方法开头
-        val methods = arrayOf("GET ", "POST ", "PUT ", "DELETE ", "HEAD ", "OPTIONS ", "PATCH ", "CONNECT ")
-        var isHttp = false
-        for (method in methods) {
-            if (data.size >= method.length) {
-                val prefix = String(data, 0, method.length, Charsets.US_ASCII)
-                if (prefix == method) {
-                    isHttp = true
-                    break
-                }
-            }
-        }
-        if (!isHttp) return null
-
-        val text = String(data, 0, minOf(data.size, 2048), Charsets.US_ASCII)
-        val hostIdx = text.indexOf("\r\nHost:", 0, true)
-        if (hostIdx == -1) return null
-        val start = hostIdx + 7
-        val end = text.indexOf("\r\n", start)
-        if (end == -1) return null
-        val host = text.substring(start, end).trim()
-        if (host.isEmpty()) return null
-        // 去除端口号
-        if (host.startsWith("[")) {
-            val bracketEnd = host.indexOf(']')
-            if (bracketEnd != -1) return host.substring(1, bracketEnd)
-        }
-        val lastColon = host.lastIndexOf(':')
-        if (lastColon > 0) {
-            val port = host.substring(lastColon + 1).toIntOrNull()
-            if (port != null) return host.substring(0, lastColon)
-        }
-        return host
     }
 
     /**

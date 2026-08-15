@@ -26,15 +26,11 @@ class SettingsDataStore
         companion object {
             private val KEY_AUTO_CONNECT = booleanPreferencesKey("auto_connect")
             private val KEY_LAST_SERVER_ID = longPreferencesKey("last_server_id")
-            private val KEY_NOTIFICATION_ENABLED = booleanPreferencesKey("notification_enabled")
-            private val KEY_THEME = stringPreferencesKey("theme")
             private val KEY_BIOMETRIC_UNLOCK = booleanPreferencesKey("biometric_unlock")
             private val KEY_MTU = intPreferencesKey("mtu")
             private val KEY_KEEP_ALIVE = intPreferencesKey("keep_alive")
             private val KEY_ENABLE_IPV6 = booleanPreferencesKey("enable_ipv6")
             private val KEY_DNS_MODE = intPreferencesKey("dns_mode")
-            private val KEY_LOG_LEVEL = intPreferencesKey("log_level") // 0=简洁 1=详细
-            private val KEY_ROUTE_CONFIG = stringPreferencesKey("route_config")
             private val KEY_DOMAIN_LIST_URL = stringPreferencesKey("domain_list_url")
             private val KEY_DOMAIN_LIST_LAST_UPDATE = longPreferencesKey("domain_list_last_update")
             private val KEY_LANGUAGE = stringPreferencesKey("language")
@@ -80,24 +76,12 @@ class SettingsDataStore
             context.dataStore.data
                 .map { it[KEY_DOMAIN_LIST_LAST_UPDATE] }
 
-        suspend fun setRouteConfig(json: String) {
-            context.dataStore.edit { it[KEY_ROUTE_CONFIG] = json }
-        }
-
         suspend fun setAutoConnect(enabled: Boolean) {
             context.dataStore.edit { it[KEY_AUTO_CONNECT] = enabled }
         }
 
         suspend fun setLastServerId(id: Long) {
             context.dataStore.edit { it[KEY_LAST_SERVER_ID] = id }
-        }
-
-        suspend fun setNotificationEnabled(enabled: Boolean) {
-            context.dataStore.edit { it[KEY_NOTIFICATION_ENABLED] = enabled }
-        }
-
-        suspend fun setTheme(theme: String) {
-            context.dataStore.edit { it[KEY_THEME] = theme }
         }
 
         suspend fun setBiometricUnlock(enabled: Boolean) {
@@ -140,10 +124,6 @@ class SettingsDataStore
             context.dataStore.edit { it[KEY_LANGUAGE] = code }
             context.getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE)
                 .edit().putString("language", code).apply()
-        }
-
-        suspend fun setLogLevel(level: Int) {
-            context.dataStore.edit { it[KEY_LOG_LEVEL] = level }
         }
 
         suspend fun setKeyAlias(
