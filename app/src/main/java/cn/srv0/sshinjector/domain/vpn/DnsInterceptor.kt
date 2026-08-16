@@ -159,8 +159,11 @@ class DnsInterceptor
                     if (hex != null && hex > max6) max6 = hex.toLong()
                 }
             }
-            fakeIpCounter.set(max4.toInt())
-            fakeIpv6Counter.set(max6.toInt())
+            // 重置到剩余映射的最大值, 但不下探到分配基线以下:
+            // IPv4 不低于 198.18.0.0 (段外会破坏 isFakeIp/路由判定),
+            // IPv6 不低于 fd00::2 (fd00::1 是 VPN 网关)
+            fakeIpCounter.set(maxOf(max4, FAKE_IP_BASE.toLong()).toInt())
+            fakeIpv6Counter.set(maxOf(max6, 2L).toInt())
         }
 
         data class DnsPendingQuery(

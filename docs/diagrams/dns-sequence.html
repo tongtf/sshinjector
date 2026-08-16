@@ -72,7 +72,7 @@
     <path d="M 444,136 H 436" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
     <text x="456" y="140" class="msg">缓存 miss · 分配假 IP 198.18.x / fd00::x</text>
     <line x1="440" y1="176" x2="696" y2="176" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
-    <text x="516" y="170" class="msg">pendingResponses.add</text>
+    <text x="516" y="170" class="msg">pendingResponses.trySend</text>
     <line x1="700" y1="216" x2="144" y2="216" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
     <text x="216" y="210" class="msg">假响应写 TUN（TTL 300s）</text>
 
@@ -86,7 +86,7 @@
     <path d="M 444,392 H 436" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
     <text x="456" y="396" class="msg">恢复查询 ID · 缓存 · 建 ipToDomain</text>
     <line x1="440" y1="432" x2="696" y2="432" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
-    <text x="516" y="426" class="msg">pendingResponses.add</text>
+    <text x="516" y="426" class="msg">pendingResponses.trySend</text>
     <line x1="700" y1="472" x2="144" y2="472" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
     <text x="216" y="466" class="msg">真实响应写 TUN</text>
 
@@ -101,7 +101,7 @@
     <text x="400" y="545" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">TUN 交付</text>
   </svg>
   </div>
-  <p class="foot">SSHInjector · DOMAIN_SPLIT：命中列表走 REMOTE 假 IP，未命中走 SYSTEM；deliveryLoop 每 10ms 轮询</p>
+  <p class="foot">SSHInjector · DOMAIN_SPLIT：命中列表走 REMOTE 假 IP，未命中走 SYSTEM；deliveryLoop 挂起于 Channel receiveCatching</p>
 </div>
 </body>
 </html>
