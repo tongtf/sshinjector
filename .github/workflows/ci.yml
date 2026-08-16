@@ -161,7 +161,7 @@ jobs:
         with:
           name: app-release
           path: |
-            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/apk/release/*.apk
             app/build/outputs/bundle/release/app-release.aab
       
       - name: Generate release notes
@@ -177,7 +177,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/apk/release/*.apk
             app/build/outputs/bundle/release/app-release.aab
           body_path: RELEASE_NOTES.md
         env:

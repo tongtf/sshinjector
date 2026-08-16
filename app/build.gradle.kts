@@ -67,6 +67,30 @@ android {
         }
     }
 
+    // APK 输出命名: sshinjector-<versionName>-<abi>.apk (如 sshinjector-1.0.5-arm64-v8a.apk)
+    applicationVariants.all {
+        outputs.all {
+            val outputImpl = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            val abi = outputImpl.getFilter(com.android.build.OutputFile.ABI)
+            outputImpl.outputFileName =
+                if (abi != null) {
+                    "sshinjector-${versionName}-${abi}.apk"
+                } else {
+                    "sshinjector-${versionName}.apk"
+                }
+        }
+    }
+
+    // 按平台 (ABI) 拆分 APK, 减小安装包体积; x86 已无 Android 14+ 设备, 不打包
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = false
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
