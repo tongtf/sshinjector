@@ -114,7 +114,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: app-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: app/build/outputs/apk/debug/*.apk
 
   build-release:
     name: Build Release AAB
