@@ -58,6 +58,9 @@
         <li>回向直通跳过本地 SOCKS 往返</li>
         <li>出向背压: Channel(256) + 非阻塞丢弃/重传兜底</li>
         <li>SSH 会话池 ×3 + 线性退避重连</li>
+        <li>SSH 池全失败 → VPN 整体自动重连（observeJschConnectionState）</li>
+        <li>全局设置运行时生效（mtu/keepAlive/IPv6，全局优先 + per-server 回退）</li>
+        <li>lastServerId 持久化 → 开机自启</li>
         <li>UDP 中继当前不工作</li>
       </ul>
     </div>

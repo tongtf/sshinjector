@@ -24,7 +24,7 @@
 <div class="wrap">
   <p class="eyebrow">FLOWCHART · DNS</p>
   <h1>DNS 拦截流程</h1>
-  <p class="sub">DnsInterceptor 三种模式决策 · 假 IP 伪造 / 系统真实解析（DnsInterceptor.kt:204-424）</p>
+  <p class="sub">DnsInterceptor 三种模式决策 · 假 IP 伪造 / 系统真实解析 / 非 A-AAAA 直查（DnsInterceptor.kt:233-326）</p>
   <div class="fig">
   <svg viewBox="0 0 1000 760" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
     <defs>
@@ -78,7 +78,8 @@
 
     <path d="M 390,360 L 490,320 L 590,360 L 490,400 Z" fill="#f8f9ff" stroke="#191c20" stroke-width="1"/>
     <text x="490" y="356" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">走系统 DNS？</text>
-    <text x="490" y="370" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">useSystemDns</text>
+    <text x="490" y="370" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">SYSTEM / SPLIT 未命中</text>
+    <text x="490" y="384" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">或 REMOTE 非 A-AAAA 直查</text>
 
     <rect x="100" y="440" width="220" height="56" rx="6" fill="#f8f9ff"/>
     <rect x="100" y="440" width="220" height="56" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
@@ -95,7 +96,7 @@
     <rect x="380" y="560" width="220" height="48" rx="6" fill="#f8f9ff"/>
     <rect x="380" y="560" width="220" height="48" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
     <text x="490" y="587" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">pendingResponses</text>
-    <text x="490" y="601" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">ConcurrentLinkedQueue</text>
+    <text x="490" y="601" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">Channel(UNLIMITED)</text>
 
     <rect x="380" y="640" width="220" height="48" rx="6" fill="#f8f9ff"/>
     <rect x="380" y="640" width="220" height="48" rx="6" fill="rgba(21,101,192,0.08)" stroke="#1565c0" stroke-width="1"/>

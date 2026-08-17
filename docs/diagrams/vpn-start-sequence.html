@@ -105,22 +105,23 @@
 
     <!-- note -->
     <text x="60" y="560" fill="#73777f" font-size="11" font-family="'Geist Mono',monospace">
-失败路径：connect() catch → lastError + serviceVpnState=Failed + disconnect()（SshVpnService:166-174）
+失败路径：connect() catch → lastError + serviceVpnState=Failed + disconnect()（SshVpnService:189-193）
 断开路径：ACTION_DISCONNECT → disconnect() → 停隧道 · 关 TUN · stopSelf
+全局设置：connect() 内 mergeGlobalSettings（SshVpnService:204）合并 mtu/keepAlive/IPv6
     </text>
 
     <!-- legend -->
-    <line x1="24" y1="590" x2="1076" y2="590" stroke="rgba(25,28,32,0.10)" stroke-width="0.8"/>
-    <text x="24" y="602" fill="#535f70" font-size="8" font-family="'Geist Mono',monospace" letter-spacing="0.14em">LEGEND</text>
-    <line x1="120" y1="596" x2="160" y2="596" stroke="#535f70" stroke-width="1.2"/>
-    <text x="168" y="599" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">调用</text>
-    <line x1="236" y1="596" x2="276" y2="596" stroke="#2e5aa8" stroke-width="1.2"/>
-    <text x="284" y="599" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">网络</text>
-    <line x1="352" y1="596" x2="392" y2="596" stroke="#1565c0" stroke-width="1.2"/>
-    <text x="400" y="599" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">状态回传</text>
+    <line x1="24" y1="606" x2="1076" y2="606" stroke="rgba(25,28,32,0.10)" stroke-width="0.8"/>
+    <text x="24" y="618" fill="#535f70" font-size="8" font-family="'Geist Mono',monospace" letter-spacing="0.14em">LEGEND</text>
+    <line x1="120" y1="612" x2="160" y2="612" stroke="#535f70" stroke-width="1.2"/>
+    <text x="168" y="615" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">调用</text>
+    <line x1="236" y1="612" x2="276" y2="612" stroke="#2e5aa8" stroke-width="1.2"/>
+    <text x="284" y="615" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">网络</text>
+    <line x1="352" y1="612" x2="392" y2="612" stroke="#1565c0" stroke-width="1.2"/>
+    <text x="400" y="615" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">状态回传</text>
   </svg>
   </div>
-  <p class="foot">SSHInjector · 参与者在代码中的真实调用链（DashboardScreen → MainViewModel:579 → SshVpnService:120 → VpnController:143）</p>
+  <p class="foot">SSHInjector · 参与者在代码中的真实调用链（DashboardScreen → MainViewModel:644 → SshVpnService:141 → VpnController:151）</p>
 </div>
 </body>
 </html>

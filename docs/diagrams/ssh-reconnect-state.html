@@ -24,9 +24,9 @@
 <div class="wrap">
   <p class="eyebrow">STATE MACHINE · SSH SESSION</p>
   <h1>SSH 会话池重连状态机</h1>
-  <p class="sub">JschSshClient — 3 会话池 · keepAlive 每 30s · 线性退避重连 ≤5 次（JschSshClient.kt:343-429）</p>
+  <p class="sub">JschSshClient — 3 会话池 · keepAlive 每 30s · 线性退避重连 ≤5 次（JschSshClient.kt:414-470）</p>
   <div class="fig">
-  <svg viewBox="0 0 940 480" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
+  <svg viewBox="0 0 940 500" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
     <defs>
       <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
         <polygon points="0 0, 8 3, 0 6" fill="#535f70"/>
@@ -73,20 +73,21 @@
     <text x="490" y="384" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">All SSH sessions lost</text>
 
     <!-- note -->
-    <text x="80" y="440" fill="#73777f" font-size="11" font-family="'Geist Mono',monospace">
-成功重连后原子替换池成员（pool.remove/add，JschSshClient:405-406），keepAlive 重启。
+    <text x="80" y="424" fill="#73777f" font-size="11" font-family="'Geist Mono',monospace">
+成功重连后原子替换池成员（pool.remove/add，JschSshClient:445-446），keepAlive 重启。
 池级判定：任一 session 健康即视为整体可用；全部丢失才进入 Failed。
+Pool Failed → SshVpnService.observeJschConnectionState（:501）触发整体 autoReconnect（:590）。
     </text>
 
     <!-- legend -->
-    <line x1="24" y1="452" x2="916" y2="452" stroke="rgba(25,28,32,0.10)" stroke-width="0.8"/>
-    <text x="24" y="464" fill="#535f70" font-size="8" font-family="'Geist Mono',monospace" letter-spacing="0.14em">LEGEND</text>
-    <line x1="120" y1="458" x2="160" y2="458" stroke="#535f70" stroke-width="1.2"/>
-    <text x="168" y="461" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">常规转移</text>
-    <line x1="244" y1="458" x2="284" y2="458" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3"/>
-    <text x="292" y="461" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">周期动作</text>
-    <line x1="368" y1="458" x2="408" y2="458" stroke="#1565c0" stroke-width="1.2"/>
-    <text x="416" y="461" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">成功路径</text>
+    <line x1="24" y1="472" x2="916" y2="472" stroke="rgba(25,28,32,0.10)" stroke-width="0.8"/>
+    <text x="24" y="484" fill="#535f70" font-size="8" font-family="'Geist Mono',monospace" letter-spacing="0.14em">LEGEND</text>
+    <line x1="120" y1="478" x2="160" y2="478" stroke="#535f70" stroke-width="1.2"/>
+    <text x="168" y="481" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">常规转移</text>
+    <line x1="244" y1="478" x2="284" y2="478" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3"/>
+    <text x="292" y="481" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">周期动作</text>
+    <line x1="368" y1="478" x2="408" y2="478" stroke="#1565c0" stroke-width="1.2"/>
+    <text x="416" y="481" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">成功路径</text>
   </svg>
   </div>
   <p class="foot">SSHInjector · SESSION_POOL_SIZE=3 · CHANNEL_WINDOW_SIZE=8MB · 独立于 VPN 网络切换重连</p>

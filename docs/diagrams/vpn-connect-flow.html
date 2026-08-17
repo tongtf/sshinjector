@@ -24,7 +24,7 @@
 <div class="wrap">
   <p class="eyebrow">FLOWCHART · VPN CONNECT</p>
   <h1>VPN 启动连接流程</h1>
-  <p class="sub">Dashboard → MainViewModel → SshVpnService → VpnController → 隧道（MainViewModel.kt:579 · SshVpnService.kt:120-176）</p>
+  <p class="sub">Dashboard → MainViewModel → SshVpnService → VpnController → 隧道（MainViewModel.kt:644 · SshVpnService.kt:141-198）</p>
   <div class="fig">
   <svg viewBox="0 0 960 800" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
     <defs>
@@ -48,7 +48,7 @@
     <path d="M 360,320 V 360" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
     <path d="M 740,288 V 316 H 440 V 360" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
     <path d="M 360,408 V 440" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
-    <path d="M 360,488 V 520" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 360,496 V 520" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
     <path d="M 360,568 V 600" fill="none" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
     <path d="M 470,544 H 640" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
 
@@ -94,10 +94,11 @@
     <text x="360" y="387" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">startForegroundService</text>
     <text x="360" y="401" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">ACTION_CONNECT → startForeground</text>
 
-    <rect x="250" y="440" width="220" height="48" rx="6" fill="#f8f9ff"/>
-    <rect x="250" y="440" width="220" height="48" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
+    <rect x="250" y="440" width="220" height="56" rx="6" fill="#f8f9ff"/>
+    <rect x="250" y="440" width="220" height="56" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
     <text x="360" y="467" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">建立 TUN 接口</text>
-    <text x="360" y="481" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">buildVpnBuilder → establish</text>
+    <text x="360" y="481" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">mergeGlobalSettings 全局优先</text>
+    <text x="360" y="491" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">→ buildVpnBuilder → establish</text>
 
     <rect x="250" y="520" width="220" height="48" rx="6" fill="#f8f9ff"/>
     <rect x="250" y="520" width="220" height="48" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
@@ -107,7 +108,7 @@
     <rect x="250" y="600" width="220" height="56" rx="6" fill="#f8f9ff"/>
     <rect x="250" y="600" width="220" height="56" rx="6" fill="rgba(21,101,192,0.08)" stroke="#1565c0" stroke-width="1"/>
     <text x="360" y="625" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">Connected · packetLoop</text>
-    <text x="360" y="639" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">DNI 配置 · 保护路由解析</text>
+    <text x="360" y="639" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">DNS 配置 · 保护路由解析</text>
     <text x="360" y="651" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">白名单观察者启动</text>
 
     <rect x="640" y="520" width="200" height="48" rx="6" fill="#f8f9ff"/>
