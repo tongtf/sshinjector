@@ -38,7 +38,8 @@ export JAVA_HOME=/path/to/jdk-17
 
 git clone https://github.com/tongtf/sshinjector.git
 cd sshinjector
-./gradlew assembleDebug   # Debug APK
+./gradlew assembleDebug   # Debug APK（按平台 ABI 拆分，产物在 app/build/outputs/apk/debug/）
+./gradlew assembleRelease # Release APK（debug keystore 签名，按 ABI 拆分: arm64-v8a/armeabi-v7a/x86_64）
 ```
 
 ---

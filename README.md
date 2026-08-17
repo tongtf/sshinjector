@@ -126,11 +126,17 @@
 git clone https://github.com/tongtf/sshinjector.git
 cd sshinjector
 
-# 编译 Debug APK
-./gradlew assembleDebug
+# 需要 JDK 17（默认 JDK 25 构建失败）
+export JAVA_HOME=/path/to/jdk-17
 
-# 编译 Release APK (默认 debug keystore 签名)
+# 编译 Debug APK（按平台 ABI 拆分）
+./gradlew assembleDebug
+#   app/build/outputs/apk/debug/sshinjector-<版本>-debug-<abi>.apk
+
+# 编译 Release APK（默认 debug keystore 签名，按平台 ABI 拆分）
 ./gradlew assembleRelease
+#   app/build/outputs/apk/release/sshinjector-<版本>-<abi>.apk
+#   ABI: arm64-v8a / armeabi-v7a / x86_64
 
 # 编译 Release AAB (配置环境变量后使用自定义签名)
 #   KEYSTORE_PATH / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD

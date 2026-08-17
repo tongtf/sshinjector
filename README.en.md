@@ -129,8 +129,14 @@ export JAVA_HOME=/path/to/jdk-17
 git clone https://github.com/tongtf/sshinjector.git
 cd sshinjector
 
-# Debug APK
+# Debug APK (split per ABI)
 ./gradlew assembleDebug
+#   app/build/outputs/apk/debug/sshinjector-<version>-debug-<abi>.apk
+
+# Release APK (debug keystore signed, split per ABI)
+./gradlew assembleRelease
+#   app/build/outputs/apk/release/sshinjector-<version>-<abi>.apk
+#   ABI: arm64-v8a / armeabi-v7a / x86_64
 
 # Release AAB
 ./gradlew bundleRelease
