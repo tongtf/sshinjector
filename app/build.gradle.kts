@@ -74,9 +74,9 @@ android {
             val abi = outputImpl.getFilter(com.android.build.OutputFile.ABI)
             outputImpl.outputFileName =
                 if (abi != null) {
-                    "sshinjector-${versionName}-${abi}.apk"
+                    "sshinjector-$versionName-$abi.apk"
                 } else {
-                    "sshinjector-${versionName}.apk"
+                    "sshinjector-$versionName.apk"
                 }
         }
     }
