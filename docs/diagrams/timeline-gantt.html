@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>优化与发版时间线 · 甘特图</title>
+<title>开发任务甘特图 · 并行/串行</title>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Roboto:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root { --paper:#f8f9ff; --ink:#191c20; --muted:#535f70; --soft:#73777f;
           --accent:#1565c0; --accent-tint:rgba(21,101,192,0.08); --rule:rgba(25,28,32,0.12); }
   body { margin:0; background:var(--paper); color:var(--ink); font-family:'Roboto',sans-serif; }
-  .wrap { max-width:1100px; margin:0 auto; padding:40px 32px 24px; }
+  .wrap { max-width:1240px; margin:0 auto; padding:40px 32px 24px; }
   .eyebrow { font-family:'Geist Mono',monospace; font-size:12px; font-weight:500;
              letter-spacing:0.18em; text-transform:uppercase; color:var(--muted); margin:0; }
   h1 { font-family:'Instrument Serif',serif; font-weight:400; font-size:44px; margin:8px 0 4px; }
@@ -22,85 +22,131 @@
 </head>
 <body>
 <div class="wrap">
-  <p class="eyebrow">GANTT · TIMELINE</p>
-  <h1>优化与发版时间线</h1>
-  <p class="sub">2026-08 性能重写 → 功能/清理 → 审计 → 打包 → 发版（按实际 commit 历史）</p>
+  <p class="eyebrow">GANTT · DEV TASKS</p>
+  <h1>开发任务并行度</h1>
+  <p class="sub">4 条并行泳道 · 泳道内独立任务可并行 · 虚线箭头为串行依赖 / 批次门禁</p>
   <div class="fig">
-  <svg viewBox="0 0 1080 560" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
+  <svg viewBox="0 0 1200 760" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
     <defs>
       <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
         <polygon points="0 0, 8 3, 0 6" fill="#535f70"/>
       </marker>
+      <marker id="arrow-dash" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#73777f"/>
+      </marker>
     </defs>
 
-    <!-- gridlines / today marker -->
-    <line x1="300" y1="60" x2="300" y2="470" stroke="rgba(25,28,32,0.08)" stroke-width="1"/>
-    <line x1="520" y1="60" x2="520" y2="470" stroke="rgba(25,28,32,0.08)" stroke-width="1"/>
-    <line x1="740" y1="60" x2="740" y2="470" stroke="rgba(25,28,32,0.08)" stroke-width="1"/>
-    <line x1="960" y1="60" x2="960" y2="470" stroke="rgba(25,28,32,0.08)" stroke-width="1"/>
-    <text x="300" y="46" fill="#7a8399" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.08em">08-16</text>
-    <text x="520" y="46" fill="#7a8399" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.08em">08-17</text>
-    <text x="740" y="46" fill="#7a8399" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.08em">08-18</text>
-    <text x="960" y="46" fill="#7a8399" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.08em">08-19</text>
+    <!-- time axis -->
+    <line x1="180" y1="70" x2="1180" y2="70" stroke="rgba(25,28,32,0.25)" stroke-width="1"/>
+    <text x="200" y="42" fill="#7a8399" font-size="10" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.1em">08-16 批1</text>
+    <text x="600" y="42" fill="#7a8399" font-size="10" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.1em">08-17 批2+3</text>
+    <text x="900" y="42" fill="#7a8399" font-size="10" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.1em">08-18 收尾</text>
+    <line x1="600" y1="70" x2="600" y2="720" stroke="rgba(25,28,32,0.08)" stroke-width="1"/>
+    <line x1="900" y1="70" x2="900" y2="720" stroke="rgba(25,28,32,0.08)" stroke-width="1"/>
 
-    <!-- axis -->
-    <line x1="120" y1="470" x2="1040" y2="470" stroke="rgba(25,28,32,0.20)" stroke-width="1"/>
+    <!-- lane backgrounds -->
+    <rect x="160" y="90" width="1020" height="180" rx="6" fill="rgba(21,101,192,0.05)"/>
+    <rect x="160" y="290" width="1020" height="180" rx="6" fill="rgba(0,137,123,0.05)"/>
+    <rect x="160" y="490" width="1020" height="90" rx="6" fill="rgba(46,125,50,0.05)"/>
+    <rect x="160" y="600" width="1020" height="110" rx="6" fill="rgba(230,81,0,0.05)"/>
 
-    <!-- rows -->
-    <!-- 批1 性能重写 -->
-    <text x="120" y="112" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">批1</text>
-    <text x="120" y="126" fill="#73777f" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle">性能</text>
-    <rect x="300" y="96" width="268" height="26" rx="6" fill="#1565c0"/>
-    <text x="434" y="113" fill="#ffffff" font-size="11" font-weight="500" text-anchor="middle">8 commit · 项1-6</text>
+    <!-- lane labels -->
+    <text x="170" y="120" fill="#191c20" font-size="12" font-weight="600">① 性能</text>
+    <text x="170" y="134" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">可并行 ×4</text>
+    <text x="170" y="320" fill="#191c20" font-size="12" font-weight="600">② 功能</text>
+    <text x="170" y="334" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">可并行 ×6</text>
+    <text x="170" y="520" fill="#191c20" font-size="12" font-weight="600">③ UI/清理</text>
+    <text x="170" y="534" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">依赖门禁</text>
+    <text x="170" y="630" fill="#191c20" font-size="12" font-weight="600">④ 验证/发布</text>
+    <text x="170" y="644" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">全程串行</text>
 
-    <!-- 批2 功能/清理 -->
-    <text x="120" y="176" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">批2</text>
-    <text x="120" y="190" fill="#73777f" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle">功能+清理</text>
-    <rect x="300" y="160" width="268" height="26" rx="6" fill="#1565c0"/>
-    <text x="434" y="177" fill="#ffffff" font-size="11" font-weight="500" text-anchor="middle">7 commit · 项7-13</text>
+    <!-- ── lane ① performance ── -->
+    <!-- sub-row A: independent parallel -->
+    <rect x="200" y="105" width="70" height="24" rx="6" fill="#1565c0"/>
+    <text x="235" y="121" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">onDestroy</text>
+    <rect x="280" y="105" width="70" height="24" rx="6" fill="#1565c0"/>
+    <text x="315" y="121" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">JSch 调优</text>
+    <rect x="360" y="105" width="70" height="24" rx="6" fill="#1565c0"/>
+    <text x="395" y="121" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">背压</text>
+    <rect x="440" y="105" width="80" height="24" rx="6" fill="#1565c0"/>
+    <text x="480" y="121" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">日志节流</text>
+    <text x="520" y="122" fill="#7a8399" font-size="9" font-family="'Geist Mono',monospace">∥ 4 项并行</text>
 
-    <!-- 批3 关于页 -->
-    <text x="120" y="240" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">批3</text>
-    <text x="120" y="254" fill="#73777f" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle">UI</text>
-    <rect x="300" y="224" width="268" height="26" rx="6" fill="#1565c0"/>
-    <text x="434" y="241" fill="#ffffff" font-size="11" font-weight="500" text-anchor="middle">1 commit · 关于区</text>
+    <!-- sub-row B: serial return-path chain -->
+    <rect x="200" y="220" width="110" height="24" rx="6" fill="#1976d2"/>
+    <text x="255" y="236" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">SshIoDispatcher</text>
+    <rect x="330" y="220" width="110" height="24" rx="6" fill="#1976d2"/>
+    <text x="385" y="236" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">零拷贝回调</text>
+    <rect x="460" y="220" width="110" height="24" rx="6" fill="#1976d2"/>
+    <text x="515" y="236" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">流式校验和</text>
+    <text x="300" y="182" fill="#7a8399" font-size="9" font-family="'Geist Mono',monospace">回向路径链 · 串行</text>
+    <path d="M 310,232 H 326" fill="none" stroke="#73777f" stroke-width="1" marker-end="url(#arrow-dash)"/>
+    <path d="M 440,232 H 456" fill="none" stroke="#73777f" stroke-width="1" marker-end="url(#arrow-dash)"/>
 
-    <!-- v1.0.4 发布 -->
-    <text x="120" y="304" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">v1.0.4</text>
-    <text x="120" y="318" fill="#73777f" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle">发布</text>
-    <rect x="300" y="288" width="52" height="26" rx="6" fill="#2e5aa8"/>
-    <text x="326" y="305" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">tag</text>
+    <!-- batch-1 gate -->
+    <rect x="520" y="105" width="170" height="54" rx="8" fill="rgba(21,101,192,0.10)" stroke="#1565c0" stroke-width="1" stroke-dasharray="4,3"/>
+    <text x="605" y="128" fill="#1565c0" font-size="10" font-weight="600" text-anchor="middle">批1 门禁</text>
+    <text x="605" y="145" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">单测+ktlint/detekt/lint</text>
+    <path d="M 605,159 V 290" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
 
-    <!-- 审计修复 -->
-    <text x="120" y="368" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">审计</text>
-    <text x="120" y="382" fill="#73777f" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle">修复</text>
-    <rect x="520" y="352" width="80" height="26" rx="6" fill="#e65100"/>
-    <text x="560" y="369" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">假IP clamp</text>
+    <!-- ── lane ② features ── -->
+    <rect x="610" y="310" width="80" height="24" rx="6" fill="#00897b"/>
+    <text x="650" y="326" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">SSH 联动</text>
+    <rect x="700" y="310" width="90" height="24" rx="6" fill="#00897b"/>
+    <text x="745" y="326" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">全局设置</text>
+    <rect x="800" y="310" width="90" height="24" rx="6" fill="#00897b"/>
+    <text x="845" y="326" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">非A-AAAA直查</text>
+    <text x="890" y="326" fill="#7a8399" font-size="9" font-family="'Geist Mono',monospace">∥ 并行</text>
 
-    <!-- ABI 拆分 -->
-    <text x="120" y="432" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">打包</text>
-    <text x="120" y="446" fill="#73777f" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle">ABI</text>
-    <rect x="520" y="416" width="80" height="26" rx="6" fill="#e65100"/>
-    <text x="560" y="433" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">按平台拆分</text>
+    <rect x="610" y="420" width="70" height="24" rx="6" fill="#00a08f"/>
+    <text x="645" y="436" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">UDP降级</text>
+    <rect x="690" y="420" width="80" height="24" rx="6" fill="#00a08f"/>
+    <text x="730" y="436" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">开机自启</text>
+    <rect x="780" y="420" width="80" height="24" rx="6" fill="#00a08f"/>
+    <text x="820" y="436" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">IPv6 ND</text>
+    <text x="870" y="436" fill="#7a8399" font-size="9" font-family="'Geist Mono',monospace">∥ 并行</text>
+    <text x="300" y="380" fill="#7a8399" font-size="9" font-family="'Geist Mono',monospace">泳道② 内部 6 项均相互独立 · 可并行</text>
 
-    <!-- v1.0.5 发布 -->
-    <text x="120" y="496" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">v1.0.5</text>
-    <text x="120" y="510" fill="#73777f" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle">发布</text>
-    <rect x="520" y="480" width="52" height="26" rx="6" fill="#2e5aa8"/>
-    <text x="546" y="497" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">tag</text>
+    <!-- ── lane ③ UI/cleanup ── -->
+    <rect x="610" y="510" width="80" height="24" rx="6" fill="#2e7d32"/>
+    <text x="650" y="526" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">关于页</text>
+    <text x="700" y="526" fill="#7a8399" font-size="9" font-family="'Geist Mono',monospace">∥ 与泳道② 并行</text>
+    <rect x="840" y="510" width="100" height="24" rx="6" fill="#388e3c"/>
+    <text x="890" y="526" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">死代码清理</text>
+    <text x="920" y="566" fill="#7a8399" font-size="9" font-family="'Geist Mono',monospace">依赖 UDP 降级完成</text>
+    <path d="M 760,444 V 528 H 836" fill="none" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
 
+    <!-- ── lane ④ verify/release ── -->
+    <rect x="200" y="620" width="70" height="24" rx="6" fill="#e65100"/>
+    <text x="235" y="636" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">单测</text>
+    <rect x="280" y="620" width="90" height="24" rx="6" fill="#e65100"/>
+    <text x="325" y="636" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">质量门×3</text>
+    <rect x="610" y="620" width="70" height="24" rx="6" fill="#e65100"/>
+    <text x="645" y="636" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">审计</text>
+    <rect x="900" y="620" width="90" height="24" rx="6" fill="#e65100"/>
+    <text x="945" y="636" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">ABI 打包</text>
+    <rect x="1000" y="620" width="80" height="24" rx="6" fill="#e65100"/>
+    <text x="1040" y="636" fill="#ffffff" font-size="10" font-weight="500" text-anchor="middle">发版</text>
+    <text x="220" y="596" fill="#7a8399" font-size="9" font-family="'Geist Mono',monospace">质量门全程串行跑（detekt+lint 分步防 OOM）</text>
+
+    <!-- cross-lane gates -->
     <!-- legend -->
-    <line x1="24" y1="536" x2="1056" y2="536" stroke="rgba(25,28,32,0.10)" stroke-width="0.8"/>
-    <text x="24" y="548" fill="#535f70" font-size="8" font-family="'Geist Mono',monospace" letter-spacing="0.14em">LEGEND</text>
-    <rect x="120" y="536" width="14" height="10" rx="2" fill="#1565c0"/>
-    <text x="142" y="545" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">代码批次</text>
-    <rect x="220" y="536" width="14" height="10" rx="2" fill="#e65100"/>
-    <text x="242" y="545" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">审计/打包</text>
-    <rect x="320" y="536" width="14" height="10" rx="2" fill="#2e5aa8"/>
-    <text x="342" y="545" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">发布 tag</text>
+    <line x1="24" y1="736" x2="1176" y2="736" stroke="rgba(25,28,32,0.10)" stroke-width="0.8"/>
+    <text x="24" y="748" fill="#535f70" font-size="8" font-family="'Geist Mono',monospace" letter-spacing="0.14em">LEGEND</text>
+    <rect x="120" y="736" width="14" height="10" rx="2" fill="#1565c0"/>
+    <text x="142" y="745" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">批1 性能</text>
+    <rect x="220" y="736" width="14" height="10" rx="2" fill="#00897b"/>
+    <text x="242" y="745" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">批2 功能</text>
+    <rect x="320" y="736" width="14" height="10" rx="2" fill="#2e7d32"/>
+    <text x="342" y="745" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">UI/清理</text>
+    <rect x="420" y="736" width="14" height="10" rx="2" fill="#e65100"/>
+    <text x="442" y="745" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">验证/发布</text>
+    <line x1="530" y1="740" x2="560" y2="740" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3"/>
+    <text x="568" y="745" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">串行依赖 / 门禁</text>
+    <text x="700" y="745" fill="#7a8399" font-size="9" font-family="'Geist Mono',monospace">∥ = 并行任务</text>
   </svg>
   </div>
-  <p class="foot">SSHInjector · 依据实际 git 历史（2026-08-16 ~ 08-17）· 批次细节见 docs/optimization-todo.md</p>
+  <p class="foot">SSHInjector · 泳道①回向链、泳道③死代码清理为串行；其余任务相互独立可并行 · 依据 docs/optimization-todo.md 批次依赖</p>
 </div>
 </body>
 </html>
