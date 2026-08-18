@@ -126,7 +126,7 @@ class ServerEditViewModel
                         val originalIsActive = existing?.isActive == true
                         val merged = preserveUneditableFields(existing, entity)
                         serverDao.update(merged.copy(isActive = if (setAsDefault) false else originalIsActive))
-                        entity.id
+                        serverId
                     }
 
                 if (setAsDefault) {

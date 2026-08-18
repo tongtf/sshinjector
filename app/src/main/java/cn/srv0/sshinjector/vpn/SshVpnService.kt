@@ -22,7 +22,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -53,9 +53,15 @@ class SshVpnService : VpnService() {
     private var whitelistObserverJob: kotlinx.coroutines.Job? = null
     private var connectivityManager: ConnectivityManager? = null
     private var reconnectJob: Job? = null
-    private var isReconnecting = false
-    private var lastNetworkId: Long = -1
-    private var lastEventWasLost = false
+
+    @Volatile private var isReconnecting = false
+
+    @Volatile private var lastNetworkId: Long = -1
+
+    @Volatile private var lastEventWasLost = false
+
+    @Volatile private var lastPoolFailReconnectAt = 0L
+
     private val cleanupScope = CoroutineScope(Dispatchers.IO)
 
     val serviceVpnState = MutableStateFlow<DomainVpnState>(DomainVpnState())
@@ -119,7 +125,7 @@ class SshVpnService : VpnService() {
         connectivityManager?.unregisterNetworkCallback(networkCallback)
         whitelistObserverJob?.cancel()
         reconnectJob?.cancel()
-        scope.coroutineContext.cancelChildren()
+        scope.cancel()
         // 系统销毁服务时（非用户主动断开）仍持有 VPN/SSH 会话,
         // 用独立 scope 完成清理, 避免会话泄漏与服务重建后状态卡死
         cleanupScope.launch {
@@ -134,6 +140,7 @@ class SshVpnService : VpnService() {
             }
             vpnInterface = null
             tunFd = null
+            cleanupScope.cancel()
         }
         super.onDestroy()
     }
@@ -499,7 +506,11 @@ class SshVpnService : VpnService() {
             jschSshClient.connectionState.collect { state ->
                 val poolFailed = state == cn.srv0.sshinjector.data.remote.ssh.JschSshClient.ConnectionState.Failed
                 val canReconnect = vpnController.isVpnRunning() && !isReconnecting && currentServer != null
-                if (poolFailed && canReconnect) {
+                val now = System.currentTimeMillis()
+                // SSH 池失败重连带退避窗口: 服务器持续不可达时避免无限快速重连风暴
+                val backoffElapsed = now - lastPoolFailReconnectAt >= POOL_FAIL_RECONNECT_BACKOFF_MS
+                if (poolFailed && canReconnect && backoffElapsed) {
+                    lastPoolFailReconnectAt = now
                     android.util.Log.w("SshVpnService", "SSH session pool failed, auto reconnecting")
                     autoReconnect()
                 }
@@ -648,5 +659,6 @@ class SshVpnService : VpnService() {
         private const val CHANNEL_ID = "vpn_service_channel"
         private const val NOTIFICATION_ID = 1
         private const val NETWORK_RECONNECT_DEBOUNCE_MS = 2000L
+        private const val POOL_FAIL_RECONNECT_BACKOFF_MS = 10_000L
     }
 }

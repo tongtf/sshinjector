@@ -56,7 +56,7 @@ class DnsInterceptor
         }
 
         // 域名分流模式使用的列表管理器
-        private var domainListManager: DomainListManager? = null
+        @Volatile private var domainListManager: DomainListManager? = null
 
         fun setDomainListManager(manager: DomainListManager) {
             domainListManager = manager
@@ -91,10 +91,10 @@ class DnsInterceptor
         private val queryIdCounter = AtomicInteger(0)
 
         // 当前传输模式
-        private var transportMode = DnsTransport.REMOTE
+        @Volatile private var transportMode = DnsTransport.REMOTE
 
         // SYSTEM 模式使用的系统真实 DNS 服务器列表
-        private var systemDnsServers: List<String> = emptyList()
+        @Volatile private var systemDnsServers: List<String> = emptyList()
 
         val queriesIntercepted = java.util.concurrent.atomic.AtomicLong(0)
         val queriesResolved = java.util.concurrent.atomic.AtomicLong(0)
@@ -114,14 +114,16 @@ class DnsInterceptor
                 // 清理过期缓存
                 dnsCache.entries.removeIf { it.value.expireAt < now }
                 // 防止映射表无限增长：超过限制时清空一半（简单驱逐策略）
+                // 驱逐时同步清理反向映射, 避免 ipToDomain/domainToIp 双向不一致
                 if (ipToDomain.size > MAX_IP_DOMAIN_MAP_SIZE) {
                     val half = ipToDomain.size / 2
                     val iter = ipToDomain.keys.iterator()
                     var removed = 0
                     while (iter.hasNext() && removed < half) {
-                        iter.next()
+                        val fakeIp = iter.next()
                         iter.remove()
                         removed++
+                        domainToIp.entries.removeIf { it.value == fakeIp }
                     }
                 }
                 if (domainToIp.size > MAX_DOMAIN_IP_MAP_SIZE) {
@@ -129,9 +131,13 @@ class DnsInterceptor
                     val iter = domainToIp.keys.iterator()
                     var removed = 0
                     while (iter.hasNext() && removed < half) {
-                        iter.next()
+                        val key = iter.next()
+                        val fakeIp = domainToIp[key]
                         iter.remove()
                         removed++
+                        if (fakeIp != null) {
+                            ipToDomain.remove(fakeIp)
+                        }
                     }
                     // 驱逐后把假 IP 计数器重置到剩余映射的最大值, 防止长期运行池耗尽
                     resetFakeIpCounters()
@@ -162,8 +168,10 @@ class DnsInterceptor
             // 重置到剩余映射的最大值, 但不下探到分配基线以下:
             // IPv4 不低于 198.18.0.0 (段外会破坏 isFakeIp/路由判定),
             // IPv6 不低于 fd00::2 (fd00::1 是 VPN 网关)
-            fakeIpCounter.set(maxOf(max4, FAKE_IP_BASE.toLong()).toInt())
-            fakeIpv6Counter.set(maxOf(max6, 2L).toInt())
+            // 用 updateAndGet 取当前值与目标值较大者, 避免与数据包线程的
+            // incrementAndGet 竞态导致计数器回拨、假 IP 重用。
+            fakeIpCounter.updateAndGet { cur -> maxOf(cur.toLong(), max4, FAKE_IP_BASE.toLong()).toInt() }
+            fakeIpv6Counter.updateAndGet { cur -> maxOf(cur.toLong(), max6, 2L).toInt() }
         }
 
         data class DnsPendingQuery(
@@ -632,6 +640,17 @@ class DnsInterceptor
          */
         suspend fun pollResponse(): DnsResponse? {
             return pendingResponses.receiveCatching().getOrNull()
+        }
+
+        /**
+         * 排空待发送 DNS 响应队列。
+         * VPN 断开时调用: 避免旧会话残留响应在新会话的 dnsResponseDeliveryLoop 中被拾取,
+         * 携带过期客户端地址写入新 TUN 接口。
+         */
+        fun clearPendingResponses() {
+            while (pendingResponses.tryReceive().isSuccess) {
+                // 丢弃残留响应
+            }
         }
 
         /**

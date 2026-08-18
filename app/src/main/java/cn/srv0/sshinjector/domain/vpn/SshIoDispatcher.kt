@@ -24,10 +24,19 @@ import javax.inject.Singleton
 class SshIoDispatcher
     @Inject
     constructor() {
-        val dispatcher: CoroutineDispatcher = createDispatcher()
+        private val executor: ThreadPoolExecutor = createExecutor()
 
-        private fun createDispatcher(): CoroutineDispatcher {
-            val executor =
+        val dispatcher: CoroutineDispatcher = executor.asCoroutineDispatcher()
+
+        /**
+         * 线程池是否已饱和 (活跃线程数达到上限)。
+         * 调用方 (如 SOCKS5 eventLoop) 在派发阻塞任务前检查, 避免 CallerRunsPolicy
+         * 把阻塞 SSH 操作回执到 eventLoop 线程冻结整个代理。
+         */
+        fun isSaturated(): Boolean = executor.activeCount >= MAX_THREADS
+
+        private fun createExecutor(): ThreadPoolExecutor {
+            val e =
                 ThreadPoolExecutor(
                     CORE_THREADS,
                     MAX_THREADS,
@@ -38,8 +47,8 @@ class SshIoDispatcher
                     ThreadPoolExecutor.CallerRunsPolicy(),
                 )
             // core 线程空闲同样回收, 完全空闲时回到 0 线程
-            executor.allowCoreThreadTimeOut(true)
-            return executor.asCoroutineDispatcher()
+            e.allowCoreThreadTimeOut(true)
+            return e
         }
 
         companion object {

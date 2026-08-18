@@ -446,8 +446,9 @@ class JschSshClient
                     pool.add(newPooled)
 
                     android.util.Log.d(TAG, "Session pool-$index: reconnected successfully")
-                    // 更新 keepAlive 引用
+                    // 取消旧 session 的 keepAlive 及其 scope (避免 CoroutineScope 泄漏)
                     pooled.keepAliveJob?.cancel()
+                    pooled.scope.cancel()
                     startSessionKeepAlive(newPooled, config.keepAliveInterval.toLong(), index)
                     return
                 } catch (e: Exception) {

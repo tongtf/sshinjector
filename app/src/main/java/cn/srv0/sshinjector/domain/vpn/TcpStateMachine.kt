@@ -60,9 +60,9 @@ class TcpStateMachine(
         var tunnelChannel: TunnelChannel? = null,
         @Volatile var state: TcpState = TcpState.SynSent,
         @Volatile var lastActivity: Long = System.currentTimeMillis(),
-        var browserSeq: Long = 0,
-        var serverSeq: Long = 0,
-        var forwardedBytes: Long = 0,
+        @Volatile var browserSeq: Long = 0,
+        @Volatile var serverSeq: Long = 0,
+        @Volatile var forwardedBytes: Long = 0,
         var socksLocalPort: Int = 0,
     ) {
         enum class TcpState {
@@ -823,7 +823,9 @@ class TcpStateMachine(
         payloadStart: Int,
         payloadLength: Int,
     ): Boolean {
-        if (conn.state != TcpConnection.TcpState.Established || conn.socksChannel == null) {
+        if (conn.state != TcpConnection.TcpState.Established ||
+            (conn.socksChannel == null && conn.tunnelChannel == null)
+        ) {
             Log.w(
                 TAG,
                 "forwardToSocks: conn ${conn.id} not established or no channel (state=${conn.state}), " +
@@ -927,6 +929,10 @@ class TcpStateMachine(
         }
         try {
             conn.socksChannel?.close()
+        } catch (_: Exception) {
+        }
+        try {
+            conn.tunnelChannel?.disconnect()
         } catch (_: Exception) {
         }
     }

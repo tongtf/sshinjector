@@ -14,7 +14,7 @@ data class ServerEntity(
     @ColumnInfo(name = "username") val username: String,
     @ColumnInfo(name = "keyAlias") val keyAlias: String, // Android Keystore 别名
     @ColumnInfo(name = "keyAlgorithm") val keyAlgorithm: String = "Ed25519",
-    @ColumnInfo(name = "keyPassphrase") val keyPassphrase: String? = null, // 加密存储在 DataStore
+    @ColumnInfo(name = "keyPassphrase") val keyPassphrase: String? = null, // 遗留字段, 私钥 passphrase 由 SshKeyManager 独立管理
     @ColumnInfo(name = "password") val password: String? = null,
     @ColumnInfo(name = "isActive") val isActive: Boolean = false,
     @ColumnInfo(name = "mtu") val mtu: Int = 1500,

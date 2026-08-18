@@ -49,9 +49,11 @@ class VpnController
         private val domainListManager: DomainListManager,
         @ApplicationContext private val context: Context,
     ) : CoroutineScope by CoroutineScope(Dispatchers.IO + Job()) {
-        private var vpnInterface: FileDescriptor? = null
-        private var inputStream: FileInputStream? = null
-        private var outputStream: FileOutputStream? = null
+        @Volatile private var vpnInterface: FileDescriptor? = null
+
+        @Volatile private var inputStream: FileInputStream? = null
+
+        @Volatile private var outputStream: FileOutputStream? = null
         private var packetLoopJob: Job? = null
         private var tunGeneration = 0L
         private val readBuffer = ByteBuffer.allocate(32768).order(ByteOrder.BIG_ENDIAN)
@@ -73,7 +75,8 @@ class VpnController
         val logFlow: SharedFlow<Pair<String, cn.srv0.sshinjector.ui.viewmodel.LogLevel>> = _logFlow.asSharedFlow()
 
         private var currentServer: ServerConfig? = null
-        private var isRunning = false
+
+        @Volatile private var isRunning = false
         private var excludedRoutes: List<CidrRoute> = emptyList()
         private var transportMode: DnsInterceptor.DnsTransport = DnsInterceptor.DnsTransport.REMOTE
 
@@ -302,6 +305,9 @@ class VpnController
             packetLoopJob?.cancel()
             packetLoopJob = null
             addLog("已取消所有子任务", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
+
+            // 排空 DNS 残留响应, 避免旧会话数据泄漏到下一次连接
+            dnsInterceptor.clearPendingResponses()
 
             // 断开 SSH 连接
             // 停止所有隧道插件
@@ -766,14 +772,15 @@ class VpnController
             buffer.duplicate().get(packetData)
 
             executor.submit {
+                var socket: java.net.DatagramSocket? = null
                 try {
                     addLog(
                         ">>> [VpnController] forwardDnsBypassPacket: dstIp=$dstIp, version=$version, " +
                             "packetSize=${packetData.size}",
                         cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG,
                     )
-                    val socket = java.net.DatagramSocket()
-                    val protected = protectDatagramChannel?.invoke(socket) ?: false
+                    socket = java.net.DatagramSocket()
+                    val protected = protectDatagramChannel?.invoke(socket!!) ?: false
                     addLog(
                         ">>> [VpnController] VpnService.protect()=$protected",
                         cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG,
@@ -781,7 +788,7 @@ class VpnController
                     if (!protected) {
                         addLog("SYSTEM DNS: VpnService.protect() 失败", cn.srv0.sshinjector.ui.viewmodel.LogLevel.WARNING)
                     }
-                    socket.soTimeout = SOCKET_TIMEOUT_MS
+                    socket!!.soTimeout = SOCKET_TIMEOUT_MS
 
                     // 提取 IP 载荷 (UDP 数据) - 从复制的数据中解析
                     val ipHeaderLen =
@@ -815,13 +822,13 @@ class VpnController
                         ">>> [VpnController] 发送 DNS 查询到 $dnsServer:53, payload=${payload.size} bytes",
                         cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG,
                     )
-                    socket.send(packet)
+                    socket!!.send(packet)
                     addLog(">>> [VpnController] 已发送，等待响应...", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
 
                     // 接收响应
                     val responseBuf = ByteArray(512)
                     val responsePacket = java.net.DatagramPacket(responseBuf, responseBuf.size)
-                    socket.receive(responsePacket)
+                    socket!!.receive(responsePacket)
                     val responseData = responseBuf.copyOfRange(0, responsePacket.length)
                     addLog(
                         "<<< [VpnController] 收到 DNS 响应来自 ${responsePacket.address}:" +
@@ -870,7 +877,6 @@ class VpnController
                     )
                     writeToTun(responsePkt)
                     addLog(">>> [VpnController] 已写回 TUN", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
-                    socket.close()
                 } catch (e: java.net.SocketTimeoutException) {
                     addLog(
                         ">>> [VpnController] DNS 响应超时 (SocketTimeoutException)",
@@ -882,6 +888,11 @@ class VpnController
                         cn.srv0.sshinjector.ui.viewmodel.LogLevel.ERROR,
                     )
                     android.util.Log.e("VpnController", "forwardDnsBypassPacket exception", e)
+                } finally {
+                    try {
+                        socket?.close()
+                    } catch (_: Exception) {
+                    }
                 }
             }
         }

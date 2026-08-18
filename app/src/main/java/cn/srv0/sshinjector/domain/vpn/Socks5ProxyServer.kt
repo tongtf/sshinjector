@@ -8,6 +8,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.IOException
 import java.net.InetSocketAddress
@@ -203,8 +204,8 @@ class Socks5ProxyServer
                     channel = clientChannel,
                     sshChannelFactory = sshChannelFactory,
                     sshIoDispatcher = sshIoDispatcher,
-                    onDataSent = { bytes -> totalBytesUp.value = totalBytesUp.value + bytes },
-                    onDataReceived = { bytes -> totalBytesDown.value = totalBytesDown.value + bytes },
+                    onDataSent = { bytes -> totalBytesUp.update { it + bytes } },
+                    onDataReceived = { bytes -> totalBytesDown.update { it + bytes } },
                     onClosed = {
                         connections.remove(connectionId.toInt())
                         removeTunCallback(clientPort)
@@ -297,8 +298,15 @@ private class Socks5Connection(
 
     @Volatile private var pendingToSshFull = false
 
+    // CONNECT 请求后剩余于 buffer 的预读数据: eventLoop 在 connectToTarget 时提取,
+    // onTargetConnected (sshIoDispatcher) 只读此字段, 避免 buffer 跨线程并发访问。
+    @Volatile private var pendingConnectData: ByteArray? = null
+
+    // 背压状态锁: 保护 pendingToSshBlock/pendingToSshFull/OP_READ 切换的原子性
+    private val backpressureLock = Any()
+
     // 超时配置
-    private var lastActivity = System.currentTimeMillis()
+    @Volatile private var lastActivity = System.currentTimeMillis()
     private val connectionTimeoutMs = 10000L // 连接建立超时 10s
     private val idleTimeoutMs = 300000L // 空闲超时 5 分钟
     private var timeoutCheckJob: kotlinx.coroutines.Job? = null
@@ -394,7 +402,10 @@ private class Socks5Connection(
         if (pendingWrites.isEmpty()) {
             try {
                 if (key.isValid) {
-                    key.interestOps(key.interestOps() and SelectionKey.OP_WRITE.inv())
+                    // 与 sendReply (sshIoDispatcher) 并发修改 interestOps, 加锁避免 RMW 丢失位
+                    synchronized(backpressureLock) {
+                        key.interestOps(key.interestOps() and SelectionKey.OP_WRITE.inv())
+                    }
                 }
             } catch (e: java.nio.channels.CancelledKeyException) {
                 close()
@@ -586,6 +597,15 @@ private class Socks5Connection(
             return
         }
 
+        // 线程池满载时直接拒绝: 避免 CallerRunsPolicy 将阻塞的 SSH 连接操作
+        // 回执到 eventLoop 线程, 冻结整个 SOCKS5 代理 (128+ 并发时可能触发)
+        if (sshIoDispatcher.isSaturated()) {
+            android.util.Log.w("Socks5Proxy", "connectToTarget rejected: ssh-io pool saturated ($host:$port)")
+            sendErrorReply(0x05)
+            close()
+            return
+        }
+
         // 解析假 IP 为真实域名 (198.18.x.x 或 fd00::/64 范围)
         val resolvedHost =
             if (host.startsWith("198.18.")) {
@@ -598,6 +618,16 @@ private class Socks5Connection(
 
         if (resolvedHost != host && IS_DEBUG) {
             android.util.Log.d("Socks5Proxy", "Resolved fake IP $host to domain $resolvedHost")
+        }
+
+        // 提取 CONNECT 请求后预读的剩余数据 (当前在 eventLoop 线程, buffer 独占)。
+        // onTargetConnected 在 sshIoDispatcher 线程只读此字段, 避免共享 buffer 跨线程并发。
+        if (buffer.hasRemaining()) {
+            val remaining = buffer.remaining()
+            val data = ByteArray(remaining)
+            buffer.get(data)
+            buffer.clear()
+            pendingConnectData = data
         }
 
         scope.launch {
@@ -653,9 +683,12 @@ private class Socks5Connection(
         // 启动超时检查
         startTimeoutChecker()
 
-        // 继续处理缓冲区剩余数据
-        if (buffer.hasRemaining()) {
-            enqueueToSsh()
+        // 继续处理 CONNECT 请求后预读的剩余数据 (来自 eventLoop 提取的 pendingConnectData,
+        // 不直接访问共享 buffer, 避免与 handleRead 并发)
+        val pending = pendingConnectData
+        if (pending != null) {
+            pendingConnectData = null
+            enqueuePreconnectedData(pending)
         }
     }
 
@@ -751,7 +784,10 @@ private class Socks5Connection(
             if (selectionKey != null && selectionKey!!.isValid) {
                 // Queue the reply for writing
                 pendingWrites.add(ByteBuffer.wrap(data, offset, length))
-                selectionKey!!.interestOps(selectionKey!!.interestOps() or SelectionKey.OP_WRITE)
+                // 与 handleWrite (eventLoop) 并发修改 interestOps, 加锁避免 RMW 丢失位
+                synchronized(backpressureLock) {
+                    selectionKey!!.interestOps(selectionKey!!.interestOps() or SelectionKey.OP_WRITE)
+                }
                 // 唤醒阻塞中的 selector, 避免跨线程 interestOps 修改后写入延迟
                 try {
                     selectionKey!!.selector().wakeup()
@@ -767,6 +803,7 @@ private class Socks5Connection(
 
     /**
      * 转发数据到 SSH 隧道 (SOCKS5 Client → SSH Tunnel)
+     * 仅在 eventLoop 线程调用 (handleRead 的 Relaying 分支)。
      */
     private fun enqueueToSsh() {
         if (state != SocksState.Relaying) {
@@ -781,16 +818,35 @@ private class Socks5Connection(
         val data = ByteArray(remaining)
         buffer.get(data)
         buffer.clear()
-        lastActivity = System.currentTimeMillis()
-        onDataSent(remaining.toLong())
+        enqueueData(data)
+    }
 
+    /**
+     * 将预读数据写入出向 Channel, 不触碰共享 buffer。
+     * 仅在 sshIoDispatcher 线程调用 (onTargetConnected)。
+     */
+    private fun enqueuePreconnectedData(data: ByteArray) {
+        if (state != SocksState.Relaying) return
+        enqueueData(data)
+    }
+
+    /**
+     * 出向入队统一入口: 双检 trySend, 失败时在锁内挂单槽 + 暂停 OP_READ。
+     * 锁保证 pendingToSshBlock 单槽不被并发覆盖, 且 full 标志与 OP_READ
+     * 状态切换原子, 消除 eventLoop 与 sshIoDispatcher 之间的背压竞态。
+     */
+    private fun enqueueData(data: ByteArray) {
         if (!toSshChannel.trySend(data).isSuccess) {
-            // Channel 满: 数据挂到连接级单槽(不丢), 暂停 OP_READ 背压。
-            // 挂起后读已暂停, 不会再次 enqueue, 单槽不会被覆盖。
-            pendingToSshBlock = data
-            pendingToSshFull = true
-            suspendLocalRead()
+            synchronized(backpressureLock) {
+                if (!toSshChannel.trySend(data).isSuccess) {
+                    pendingToSshBlock = data
+                    pendingToSshFull = true
+                    suspendLocalRead()
+                }
+            }
         }
+        lastActivity = System.currentTimeMillis()
+        onDataSent(data.size.toLong())
     }
 
     /**
@@ -823,25 +879,28 @@ private class Socks5Connection(
      * 写协程腾出空间后: 回填挂起块, 再恢复本地 OP_READ。
      */
     private fun resumeLocalReadIfSpace() {
-        if (!pendingToSshFull) return
-        val pending = pendingToSshBlock
-        if (pending != null) {
-            if (!toSshChannel.trySend(pending).isSuccess) return
-            pendingToSshBlock = null
-        }
-        pendingToSshFull = false
+        synchronized(backpressureLock) {
+            if (!pendingToSshFull) return
+            val pending = pendingToSshBlock
+            if (pending != null) {
+                if (!toSshChannel.trySend(pending).isSuccess) return
+                pendingToSshBlock = null
+            }
+            pendingToSshFull = false
 
-        val sk = selectionKey
-        if (sk == null || !sk.isValid) return
-        try {
-            sk.interestOps(sk.interestOps() or SelectionKey.OP_READ)
-            sk.selector().wakeup()
-        } catch (_: Exception) {
+            val sk = selectionKey
+            if (sk == null || !sk.isValid) return
+            try {
+                sk.interestOps(sk.interestOps() or SelectionKey.OP_READ)
+                sk.selector().wakeup()
+            } catch (_: Exception) {
+            }
         }
     }
 
     /**
      * Channel 已满, 暂停本地 OP_READ 以向上游背压。
+     * 必须在持有 backpressureLock 时调用。
      */
     private fun suspendLocalRead() {
         val sk = selectionKey
@@ -877,6 +936,8 @@ private class Socks5Connection(
      * 启动超时检查定时任务
      */
     fun startTimeoutChecker() {
+        // 幂等: handleAccept 与 onTargetConnected 各调用一次, 避免孤儿协程
+        if (timeoutCheckJob != null) return
         timeoutCheckJob =
             scope.launch {
                 while (state != SocksState.Closed) {
@@ -890,6 +951,7 @@ private class Socks5Connection(
             }
     }
 
+    @Synchronized
     fun close() {
         if (state == SocksState.Closed) return
         state = SocksState.Closed

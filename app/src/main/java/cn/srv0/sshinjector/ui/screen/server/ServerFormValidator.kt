@@ -33,7 +33,6 @@ object ServerFormValidator {
     private val HOSTNAME_REGEX =
         Regex("^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$")
     private val IPV4_REGEX = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
-    private val IPV6_REGEX = Regex("^[0-9a-fA-F:.%]+$")
     private val ILLEGAL_CHARS = Regex("[\\s\\p{Cntrl}]")
 
     fun nameError(name: String): ServerFormError? {
@@ -48,11 +47,25 @@ object ServerFormValidator {
         if (h.length > MAX_HOST_LENGTH || ILLEGAL_CHARS.containsMatchIn(h)) return ServerFormError.HOST_INVALID
         val valid =
             when {
-                h.contains(':') -> IPV6_REGEX.matches(h)
+                h.contains(':') -> isValidIpv6(h)
                 IPV4_REGEX.matches(h) -> h.split('.').all { it.toInt() in 0..255 }
                 else -> HOSTNAME_REGEX.matches(h)
             }
         return if (valid) null else ServerFormError.HOST_INVALID
+    }
+
+    /**
+     * 用 InetAddress 严格解析 IPv6 (含 zone id), 仅接受纯 IPv6 字面量。
+     * 比宽松正则更能拦截超段数/非法字符等畸形地址。
+     */
+    private fun isValidIpv6(candidate: String): Boolean {
+        val zoneFree = candidate.substringBefore('%')
+        return try {
+            val addr = java.net.InetAddress.getByName(zoneFree)
+            addr is java.net.Inet6Address
+        } catch (_: Exception) {
+            false
+        }
     }
 
     fun portError(text: String): ServerFormError? {

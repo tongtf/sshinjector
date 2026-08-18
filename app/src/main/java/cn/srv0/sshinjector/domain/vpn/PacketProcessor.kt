@@ -31,7 +31,8 @@ class PacketProcessor
         private val statsScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
         @Volatile private var tunWriter: ((ByteArray) -> Unit)? = null
-        private var dnsInterceptor: DnsInterceptor? = null
+
+        @Volatile private var dnsInterceptor: DnsInterceptor? = null
 
         private val tcpStateMachine =
             TcpStateMachine(tunnelManager, { tunWriter }, stats, sshIoDispatcher)
