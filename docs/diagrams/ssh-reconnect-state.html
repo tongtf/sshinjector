@@ -74,9 +74,9 @@
 
     <!-- note -->
     <text x="80" y="424" fill="#73777f" font-size="11" font-family="'Geist Mono',monospace">
-成功重连后原子替换池成员（pool.remove/add，JschSshClient:445-446），keepAlive 重启。
+成功重连后原子替换池成员（pool.remove/add，JschSshClient:445-446），旧 session scope 一并取消（:451），keepAlive 重启。
 池级判定：任一 session 健康即视为整体可用；全部丢失才进入 Failed。
-Pool Failed → SshVpnService.observeJschConnectionState（:501）触发整体 autoReconnect（:590）。
+Pool Failed → SshVpnService.observeJschConnectionState（:501）触发整体 autoReconnect（:590），带 10s 退避窗（POOL_FAIL_RECONNECT_BACKOFF_MS）防重连风暴。
     </text>
 
     <!-- legend -->

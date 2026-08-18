@@ -101,7 +101,7 @@
     <text x="400" y="545" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">TUN 交付</text>
   </svg>
   </div>
-  <p class="foot">SSHInjector · DOMAIN_SPLIT：命中列表走 REMOTE 假 IP，未命中走 SYSTEM；deliveryLoop 挂起于 Channel receiveCatching</p>
+  <p class="foot">SSHInjector · DOMAIN_SPLIT：命中列表走 REMOTE 假 IP，未命中走 SYSTEM；deliveryLoop 挂起于 Channel receiveCatching；断开时 clearPendingResponses 排空残留响应（防跨会话投递）</p>
 </div>
 </body>
 </html>

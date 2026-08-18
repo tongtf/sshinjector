@@ -66,3 +66,19 @@
 - [x] 无幽灵参与者（均能在代码中找到对应类）
 
 **审查通过**，未发现致命逻辑缺陷。
+
+## 追加复核（2026-08-18 · dev-workflow audit → 修复）
+
+代码层面本次审计修复涉及多图描述的流程，逐图回读确认无漂移：
+
+- `tcp-data-sequence.html` / `tcp-flow.html`
+  - [x] 出向背压新增 `backpressureLock`（单槽/full 标志/OP_READ 切换原子化）与 `pendingConnectData`（buffer 不跨线程）——图脚注已同步
+- `socks5-state.html`
+  - [x] Connecting 阶段新增「池饱和拒绝」路径（`SshIoDispatcher.isSaturated()` → sendErrorReply+close）——节点副文本已同步
+- `ssh-reconnect-state.html`
+  - [x] 整体 autoReconnect 增加 10s 退避窗（`POOL_FAIL_RECONNECT_BACKOFF_MS`）；重连成功后旧 scope 取消——图注已同步
+- `dns-flow.html` / `dns-sequence.html`
+  - [x] 断开时 `clearPendingResponses()` 排空残留响应；假 IP 计数器 `updateAndGet` 永不回拨；`ipToDomain/domainToIp` 双向驱逐——脚注已同步
+- `index.html` KEY FACTS 已更新（背压锁、池饱和拒绝、开机自启 goAsync、重连退避）
+
+**结论**：图与代码事实一致，无遗留漂移。

@@ -123,7 +123,7 @@
     <text x="400" y="777" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">回向直通</text>
   </svg>
   </div>
-  <p class="foot">SSHInjector · 出向背压：Channel(256) 满 → 单槽 pendingToSshBlock → 暂停 OP_READ → loopback 满 →
+  <p class="foot">SSHInjector · 出向背压：Channel(256) 满 → 单槽 pendingToSshBlock + 暂停 OP_READ（backpressureLock 保护单槽/标志/OP_READ 切换原子性；预读数据经 pendingConnectData 传递, buffer 不跨线程）→ loopback 满 →
     forwardToSocks 非阻塞写失败丢弃段 + 不回 ACK（浏览器 TCP 重传兜底, 不阻塞 packetLoop）；
     回向 relay 跑 SshIoDispatcher, 回调 (data, off, len) 零拷贝, 组包每段 1 分配 1 拷贝</p>
 </div>

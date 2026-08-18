@@ -56,11 +56,11 @@
       <h3>核心事实</h3>
       <ul>
         <li>回向直通跳过本地 SOCKS 往返</li>
-        <li>出向背压: Channel(256) + 非阻塞丢弃/重传兜底</li>
-        <li>SSH 会话池 ×3 + 线性退避重连</li>
-        <li>SSH 池全失败 → VPN 整体自动重连（observeJschConnectionState）</li>
+        <li>出向背压: Channel(256) + 单槽 + OP_READ 暂停（backpressureLock 保护）+ 非阻塞丢弃/重传兜底</li>
+        <li>SSH 会话池 ×3 + 线性退避重连；池饱和时 connectToTarget 提前拒绝</li>
+        <li>SSH 池全失败 → VPN 整体自动重连（10s 退避窗）</li>
         <li>全局设置运行时生效（mtu/keepAlive/IPv6，全局优先 + per-server 回退）</li>
-        <li>lastServerId 持久化 → 开机自启</li>
+        <li>lastServerId 持久化 → 开机自启（goAsync 保护）</li>
         <li>UDP 中继当前不工作</li>
       </ul>
     </div>
@@ -164,7 +164,7 @@
     </a>
   </div>
 
-  <p class="foot">SSHInjector · docs/diagrams/ · 生成于 2026-08-06 功能逻辑梳理工作流（dev-workflow explore → design）</p>
+  <p class="foot">SSHInjector · docs/diagrams/ · 2026-08-06 功能逻辑梳理工作流（dev-workflow explore → design）；2026-08-18 审计修复同步（背压锁、DNS 会话清理、重连退避）</p>
 </div>
 </body>
 </html>
