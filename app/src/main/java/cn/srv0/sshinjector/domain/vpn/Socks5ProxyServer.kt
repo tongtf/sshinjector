@@ -179,7 +179,8 @@ class Socks5ProxyServer
             pendingTunCallbacks.remove(connectionId)
         }
 
-        fun getTunCallback(connectionId: Int): ((ByteArray, Int, Int) -> Unit)? = pendingTunCallbacks.remove(connectionId)
+        fun getTunCallback(connectionId: Int): ((ByteArray, Int, Int) -> Unit)? =
+            pendingTunCallbacks.remove(connectionId)
 
         private fun handleAccept(key: SelectionKey) {
             val serverChannel = key.channel() as ServerSocketChannel
