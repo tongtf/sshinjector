@@ -25,6 +25,7 @@ import javax.inject.Singleton
 private val IS_DEBUG = android.util.Log.isLoggable("Socks5Proxy", android.util.Log.DEBUG)
 private const val TIMEOUT_CHECK_INTERVAL_MS = 5000L
 private const val SSH_SEND_QUEUE_CAPACITY = 256
+private typealias TunCallback = (ByteArray, Int, Int) -> Unit
 
 /**
  * 本地 SOCKS5 代理服务器 (RFC 1928)
@@ -179,8 +180,7 @@ class Socks5ProxyServer
             pendingTunCallbacks.remove(connectionId)
         }
 
-        fun getTunCallback(connectionId: Int): ((ByteArray, Int, Int) -> Unit)? =
-            pendingTunCallbacks.remove(connectionId)
+        fun getTunCallback(connectionId: Int): TunCallback? = pendingTunCallbacks.remove(connectionId)
 
         private fun handleAccept(key: SelectionKey) {
             val serverChannel = key.channel() as ServerSocketChannel
