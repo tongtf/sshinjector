@@ -1,5 +1,6 @@
 package cn.srv0.sshinjector.ui.screen.settings
 
+import android.annotation.SuppressLint
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -46,6 +47,7 @@ import cn.srv0.sshinjector.ui.locale.LocaleManager
 import cn.srv0.sshinjector.ui.viewmodel.dnsModeLabel
 
 @OptIn(ExperimentalMaterial3Api::class)
+@SuppressLint("LocalContextGetResourceValueCall")
 @Composable
 fun SettingsScreen(
     modifier: Modifier = Modifier,

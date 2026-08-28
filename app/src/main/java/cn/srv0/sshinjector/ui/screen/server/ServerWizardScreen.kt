@@ -1,5 +1,6 @@
 package cn.srv0.sshinjector.ui.screen.server
 
+import android.annotation.SuppressLint
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,6 +52,7 @@ import cn.srv0.sshinjector.domain.model.ServerProvisioning
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
+@SuppressLint("LocalContextGetResourceValueCall")
 @Composable
 fun ServerWizardScreen(
     onFinish: () -> Unit,

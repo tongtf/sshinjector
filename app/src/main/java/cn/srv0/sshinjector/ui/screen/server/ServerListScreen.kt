@@ -1,5 +1,6 @@
 package cn.srv0.sshinjector.ui.screen.server
 
+import android.annotation.SuppressLint
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -54,6 +55,7 @@ import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.data.local.entity.ServerEntity
 
 @OptIn(ExperimentalMaterial3Api::class)
+@SuppressLint("LocalContextGetResourceValueCall")
 @Composable
 fun ServerListScreen(
     onAddServer: () -> Unit,
@@ -73,6 +75,10 @@ fun ServerListScreen(
             cn.srv0.sshinjector.ui.biometric.BiometricAuth
                 .from(it)
         }
+    val disconnectingText = stringResource(R.string.dashboard_disconnecting)
+    val connectingToText = stringResource(R.string.dashboard_connecting_to)
+    val serverDefaultUnsetText = stringResource(R.string.server_default_unset)
+    val serverDefaultSetText = stringResource(R.string.server_default_set)
 
     LaunchedEffect(servers, connectingServerId) {
         if (connectingServerId != null) {
@@ -182,7 +188,7 @@ fun ServerListScreen(
                                 android.widget.Toast
                                     .makeText(
                                         context,
-                                        context.getString(R.string.dashboard_disconnecting),
+                                        disconnectingText,
                                         android.widget.Toast.LENGTH_SHORT,
                                     ).show()
                             } else {
@@ -191,12 +197,9 @@ fun ServerListScreen(
                                     android.widget.Toast
                                         .makeText(
                                             context,
-                                            context
-                                                .getString(
-                                                    R.string.dashboard_connecting_to,
-                                                ).format(
-                                                    server.name,
-                                                ),
+                                            connectingToText.format(
+                                                server.name,
+                                            ),
                                             android.widget.Toast.LENGTH_SHORT,
                                         ).show()
                                 }
@@ -217,9 +220,9 @@ fun ServerListScreen(
                                 .makeText(
                                     context,
                                     if (server.isActive) {
-                                        context.getString(R.string.server_default_unset)
+                                        serverDefaultUnsetText
                                     } else {
-                                        context.getString(R.string.server_default_set)
+                                        serverDefaultSetText
                                     },
                                     android.widget.Toast.LENGTH_SHORT,
                                 ).show()
