@@ -83,8 +83,10 @@ class Socks5TunnelPlugin
                 val sshConfig =
                     ServerConfig(
                         name = "SOCKS5",
-                        host = c.sshHost, port = c.sshPort,
-                        username = c.sshUsername, keyAlias = c.sshKeyAlias,
+                        host = c.sshHost,
+                        port = c.sshPort,
+                        username = c.sshUsername,
+                        keyAlias = c.sshKeyAlias,
                         password = c.sshPassword,
                         keyAlgorithm = ServerConfig.KeyAlgorithm.valueOf(c.sshKeyAlgorithm),
                         connectTimeout = c.common.connectTimeout,
@@ -126,17 +128,13 @@ class Socks5TunnelPlugin
         override fun openTcpChannel(
             host: String,
             port: Int,
-        ): TunnelChannel? {
-            return jschClient.createDirectChannel(host, port)
-        }
+        ): TunnelChannel? = jschClient.createDirectChannel(host, port)
 
         override fun sendUdp(
             dstHost: String,
             dstPort: Int,
             payload: ByteArray,
-        ) {
-            throw UnsupportedOperationException("UDP not supported by $id")
-        }
+        ): Unit = throw UnsupportedOperationException("UDP not supported by $id")
 
         override suspend fun forwardDns(query: ByteArray): ByteArray? = null
 

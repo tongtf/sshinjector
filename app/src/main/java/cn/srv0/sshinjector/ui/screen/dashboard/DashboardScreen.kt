@@ -106,7 +106,11 @@ fun DashboardScreen(
 
     val context = LocalContext.current
     val fragmentActivity = context as? androidx.fragment.app.FragmentActivity
-    val biometricAuth = fragmentActivity?.let { cn.srv0.sshinjector.ui.biometric.BiometricAuth.from(it) }
+    val biometricAuth =
+        fragmentActivity?.let {
+            cn.srv0.sshinjector.ui.biometric.BiometricAuth
+                .from(it)
+        }
 
     LaunchedEffect(Unit) { keyViewModel.refresh() }
 
@@ -270,7 +274,9 @@ fun DashboardScreen(
                                     ratioLevelColor(
                                         MainViewModel.ratioLevel(
                                             if (state.cpuUsage != "-") {
-                                                state.cpuUsage.replace("%", "").toFloatOrNull()
+                                                state.cpuUsage
+                                                    .replace("%", "")
+                                                    .toFloatOrNull()
                                                     ?.div(10f) ?: 0f
                                             } else {
                                                 0f
@@ -299,8 +305,10 @@ fun DashboardScreen(
                                             state.javaHeapUsage.contains(" MB")
                                         ) {
                                             val num =
-                                                state.javaHeapUsage.replace(" MB", "")
-                                                    .replace(" GB", "").toFloatOrNull() ?: 0f
+                                                state.javaHeapUsage
+                                                    .replace(" MB", "")
+                                                    .replace(" GB", "")
+                                                    .toFloatOrNull() ?: 0f
                                             val inMb =
                                                 if (state.javaHeapUsage.contains(" GB")) {
                                                     num * 1024f
@@ -581,11 +589,12 @@ fun DashboardScreen(
                                                                 context.resources.getString(
                                                                     cn.srv0.sshinjector.R.string.dashboard_key_copied,
                                                                 )
-                                                            android.widget.Toast.makeText(
-                                                                context,
-                                                                label,
-                                                                android.widget.Toast.LENGTH_SHORT,
-                                                            ).show()
+                                                            android.widget.Toast
+                                                                .makeText(
+                                                                    context,
+                                                                    label,
+                                                                    android.widget.Toast.LENGTH_SHORT,
+                                                                ).show()
                                                         }
                                                     },
                                             contentAlignment = Alignment.Center,
@@ -705,7 +714,10 @@ fun ServerListItem(
     val isTransitioning =
         connectionStatus in
             listOf(
-                "Connecting", "Authenticating", "EstablishingTunnel", "Disconnecting",
+                "Connecting",
+                "Authenticating",
+                "EstablishingTunnel",
+                "Disconnecting",
             )
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseScale by infiniteTransition.animateFloat(

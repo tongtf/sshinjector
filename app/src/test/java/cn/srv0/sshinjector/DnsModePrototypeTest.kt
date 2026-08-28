@@ -70,7 +70,12 @@ class DnsModePrototypeTest {
 
         // Verify port (big endian)
         val portBytes = byteArrayOf(connectReq[8], connectReq[9])
-        val parsedPort = ByteBuffer.wrap(portBytes).order(ByteOrder.BIG_ENDIAN).getShort().toInt() and 0xFFFF
+        val parsedPort =
+            ByteBuffer
+                .wrap(portBytes)
+                .order(ByteOrder.BIG_ENDIAN)
+                .getShort()
+                .toInt() and 0xFFFF
         assertEquals(targetPort, parsedPort)
 
         println("[REMOTE] SOCKS5 handshake + CONNECT structure verified")
@@ -149,12 +154,18 @@ class DnsModePrototypeTest {
         if (port != 53) return false
         val excludedDns =
             setOf(
-                "8.8.8.8", "8.8.4.4",
-                "1.1.1.1", "1.0.0.1",
-                "9.9.9.9", "149.112.112.112",
-                "223.5.5.5", "223.6.6.6",
-                "114.114.114.114", "114.114.115.115",
-                "119.29.29.29", "182.254.116.116",
+                "8.8.8.8",
+                "8.8.4.4",
+                "1.1.1.1",
+                "1.0.0.1",
+                "9.9.9.9",
+                "149.112.112.112",
+                "223.5.5.5",
+                "223.6.6.6",
+                "114.114.114.114",
+                "114.114.115.115",
+                "119.29.29.29",
+                "182.254.116.116",
             )
         return excludedDns.contains(ip)
     }
@@ -218,9 +229,7 @@ class DnsModePrototypeTest {
     private fun shouldUseRemoteDns(
         domain: String,
         whitelist: Set<String>,
-    ): Boolean {
-        return domain in whitelist
-    }
+    ): Boolean = domain in whitelist
 
     // =====================================================================
     // 核心 DNS 协议逻辑验证
@@ -328,12 +337,18 @@ class DnsModePrototypeTest {
     private fun isExcludedRoute(ip: String): Boolean {
         val excludedIps =
             setOf(
-                "8.8.8.8", "8.8.4.4",
-                "1.1.1.1", "1.0.0.1",
-                "9.9.9.9", "149.112.112.112",
-                "223.5.5.5", "223.6.6.6",
-                "114.114.114.114", "114.114.115.115",
-                "119.29.29.29", "182.254.116.116",
+                "8.8.8.8",
+                "8.8.4.4",
+                "1.1.1.1",
+                "1.0.0.1",
+                "9.9.9.9",
+                "149.112.112.112",
+                "223.5.5.5",
+                "223.6.6.6",
+                "114.114.114.114",
+                "114.114.115.115",
+                "119.29.29.29",
+                "182.254.116.116",
             )
         return excludedIps.contains(ip)
     }

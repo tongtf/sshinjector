@@ -41,9 +41,18 @@ class ServerEditViewModelTest {
         }
         val settings = mock<SettingsDataStore>()
         // init 中 collect 全局设置流, mock 需要返回非空流
-        org.mockito.kotlin.doReturn(kotlinx.coroutines.flow.emptyFlow<Int?>()).`when`(settings).mtu
-        org.mockito.kotlin.doReturn(kotlinx.coroutines.flow.emptyFlow<Int?>()).`when`(settings).keepAlive
-        org.mockito.kotlin.doReturn(kotlinx.coroutines.flow.emptyFlow<Boolean?>()).`when`(settings).enableIPv6
+        org.mockito.kotlin
+            .doReturn(kotlinx.coroutines.flow.emptyFlow<Int?>())
+            .`when`(settings)
+            .mtu
+        org.mockito.kotlin
+            .doReturn(kotlinx.coroutines.flow.emptyFlow<Int?>())
+            .`when`(settings)
+            .keepAlive
+        org.mockito.kotlin
+            .doReturn(kotlinx.coroutines.flow.emptyFlow<Boolean?>())
+            .`when`(settings)
+            .enableIPv6
         viewModel =
             ServerEditViewModel(
                 serverDao,

@@ -23,7 +23,9 @@ class DnsInterceptorTest {
 
     @Test
     fun `test DNS query ID counter`() {
-        val counter = java.util.concurrent.atomic.AtomicInteger(0)
+        val counter =
+            java.util.concurrent.atomic
+                .AtomicInteger(0)
         val id1 = counter.incrementAndGet()
         val id2 = counter.incrementAndGet()
         assertNotEquals(id1, id2)

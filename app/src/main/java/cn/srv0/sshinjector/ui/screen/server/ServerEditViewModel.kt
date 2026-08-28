@@ -55,8 +55,7 @@ class ServerEditViewModel
                     .combine(settingsDataStore.keepAlive) { mtu, keepAlive -> mtu to keepAlive }
                     .combine(settingsDataStore.enableIPv6) { (mtu, keepAlive), ipv6 ->
                         GlobalNetworkSettings(mtu, keepAlive, ipv6)
-                    }
-                    .collect { _globalSettings.value = it }
+                    }.collect { _globalSettings.value = it }
             }
         }
 

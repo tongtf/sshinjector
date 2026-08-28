@@ -12,7 +12,9 @@ import javax.crypto.spec.GCMParameterSpec
  * 加密失败返回原明文、解密失败返回 null，保证旧数据与降级路径可用。
  * 注意: 加密失败降级为明文是有意为之的兼容策略, 但会记录日志以便排查。
  */
-class AesGcmCipher(private val key: SecretKey) {
+class AesGcmCipher(
+    private val key: SecretKey,
+) {
     fun encrypt(plain: String?): String? {
         if (plain.isNullOrEmpty()) return plain
         if (isEncrypted(plain)) return plain

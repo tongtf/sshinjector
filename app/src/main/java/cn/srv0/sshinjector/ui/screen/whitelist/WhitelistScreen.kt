@@ -92,8 +92,8 @@ fun WhitelistScreen(
     val allApps by viewModel.cachedApps.collectAsState()
     val loaded by viewModel.appsLoaded.collectAsState()
 
-    fun checkPermission(): Boolean {
-        return try {
+    fun checkPermission(): Boolean =
+        try {
             val apps =
                 context.packageManager.getInstalledApplications(
                     PackageManager.ApplicationInfoFlags.of(0),
@@ -104,7 +104,6 @@ fun WhitelistScreen(
         } catch (_: Exception) {
             true
         }
-    }
 
     fun openAppSettings() {
         try {
@@ -299,8 +298,7 @@ fun WhitelistScreen(
                             .background(
                                 MaterialTheme.colorScheme.primaryContainer,
                                 RoundedCornerShape(8.dp),
-                            )
-                            .padding(12.dp),
+                            ).padding(12.dp),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
@@ -524,7 +522,7 @@ fun AppListItem(
     val context2 = LocalContext.current
     val iconBitmap by produceState<
         androidx.compose.ui.graphics.ImageBitmap?,
-        >(null, app.packageName) {
+    >(null, app.packageName) {
         value =
             withContext(Dispatchers.IO) {
                 runCatching {
@@ -536,7 +534,9 @@ fun AppListItem(
                     val h = d.intrinsicHeight.coerceAtLeast(1)
                     val bmp =
                         android.graphics.Bitmap.createBitmap(
-                            w, h, android.graphics.Bitmap.Config.ARGB_8888,
+                            w,
+                            h,
+                            android.graphics.Bitmap.Config.ARGB_8888,
                         )
                     val canvas = android.graphics.Canvas(bmp)
                     d.setBounds(0, 0, w, h)
@@ -572,12 +572,12 @@ fun AppListItem(
         ) {
             Box(
                 modifier =
-                    Modifier.size(48.dp)
+                    Modifier
+                        .size(48.dp)
                         .background(
                             MaterialTheme.colorScheme.surfaceVariant,
                             RoundedCornerShape(12.dp),
-                        )
-                        .clip(RoundedCornerShape(12.dp)),
+                        ).clip(RoundedCornerShape(12.dp)),
                 contentAlignment = Alignment.Center,
             ) {
                 val bitmap = iconBitmap
@@ -590,7 +590,11 @@ fun AppListItem(
                     )
                 } else {
                     Text(
-                        text = app.name.first().toString().uppercase(),
+                        text =
+                            app.name
+                                .first()
+                                .toString()
+                                .uppercase(),
                         fontSize = 24.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -642,8 +646,7 @@ fun AppListItem(
 
             Switch(
                 checked = isEnabled,
-                onCheckedChange = {
-                        enabled ->
+                onCheckedChange = { enabled ->
                     onToggle(app.packageName, enabled)
                 },
                 colors =

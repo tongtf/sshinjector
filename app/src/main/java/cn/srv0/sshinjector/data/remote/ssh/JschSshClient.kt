@@ -143,9 +143,7 @@ class KnownHostsManager
         private fun findHostLine(
             host: String,
             port: Int,
-        ): String? {
-            return knownHostsFile.readText().lines().firstOrNull { it.startsWith("$host,$port ") }
-        }
+        ): String? = knownHostsFile.readText().lines().firstOrNull { it.startsWith("$host,$port ") }
 
         private fun extractFingerprint(line: String): String {
             // 格式: host,port keytype base64key SHA256:fingerprint
@@ -178,7 +176,8 @@ class JschSshClient
     constructor(
         private val keyManager: SshKeyManager,
         private val knownHostsManager: KnownHostsManager,
-    ) : SshChannelFactory, RemoteCommandExecutor {
+    ) : SshChannelFactory,
+        RemoteCommandExecutor {
         companion object {
             private const val TAG = "JschSshClient"
             private const val SESSION_POOL_SIZE = 3
@@ -196,8 +195,7 @@ class JschSshClient
                         it.name == "setLocalWindowSizeMax" ||
                             it.name == "setLocalWindowSize" ||
                             it.name == "setSendMaxPacketSize"
-                    }
-                    .map {
+                    }.map {
                         it.isAccessible = true
                         it
                     }
@@ -270,8 +268,8 @@ class JschSshClient
         private fun createSession(
             config: ServerConfig,
             index: Int,
-        ): PooledSession? {
-            return try {
+        ): PooledSession? =
+            try {
                 val jsch = JSch()
                 // JSch.setLogger 是全局静态，只设置一次
                 synchronized(JSch::class.java) {
@@ -353,7 +351,6 @@ class JschSshClient
                 android.util.Log.w(TAG, "createSession[$index] failed: ${e.message}")
                 null
             }
-        }
 
         private fun verifyHostKey(
             config: ServerConfig,

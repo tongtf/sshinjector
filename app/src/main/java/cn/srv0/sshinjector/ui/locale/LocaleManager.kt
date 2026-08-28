@@ -13,15 +13,14 @@ object LocaleManager {
     fun getDisplayLabel(
         langCode: String,
         context: Context,
-    ): String {
-        return when (langCode) {
+    ): String =
+        when (langCode) {
             LANGUAGE_SYSTEM -> context.getString(cn.srv0.sshinjector.R.string.language_system)
             LANGUAGE_CHINESE -> context.getString(cn.srv0.sshinjector.R.string.language_chinese)
             LANGUAGE_ENGLISH -> context.getString(cn.srv0.sshinjector.R.string.language_english)
             LANGUAGE_RUSSIAN -> context.getString(cn.srv0.sshinjector.R.string.language_russian)
             else -> langCode
         }
-    }
 
     fun applyLanguage(
         context: Context,

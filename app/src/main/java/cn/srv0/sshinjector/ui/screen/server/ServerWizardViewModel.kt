@@ -29,13 +29,23 @@ enum class WizardStep {
 sealed class WizardResult {
     object None : WizardResult()
 
-    data class Success(val account: String, val keyAlias: String) : WizardResult()
+    data class Success(
+        val account: String,
+        val keyAlias: String,
+    ) : WizardResult()
 
-    data class LocalOnly(val reason: String, val keyAlias: String) : WizardResult()
+    data class LocalOnly(
+        val reason: String,
+        val keyAlias: String,
+    ) : WizardResult()
 
-    data class Failed(val message: String) : WizardResult()
+    data class Failed(
+        val message: String,
+    ) : WizardResult()
 
-    data class Tampered(val message: String) : WizardResult()
+    data class Tampered(
+        val message: String,
+    ) : WizardResult()
 }
 
 @HiltViewModel

@@ -64,7 +64,8 @@ class GfwListMatcher(
                 )
 
             val text = if (rawText.startsWith("\uFEFF")) rawText.substring(1) else rawText
-            text.lineSequence()
+            text
+                .lineSequence()
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
                 .forEach { line ->

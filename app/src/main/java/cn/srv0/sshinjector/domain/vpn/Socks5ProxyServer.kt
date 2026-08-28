@@ -179,9 +179,7 @@ class Socks5ProxyServer
             pendingTunCallbacks.remove(connectionId)
         }
 
-        fun getTunCallback(connectionId: Int): ((ByteArray, Int, Int) -> Unit)? {
-            return pendingTunCallbacks.remove(connectionId)
-        }
+        fun getTunCallback(connectionId: Int): ((ByteArray, Int, Int) -> Unit)? = pendingTunCallbacks.remove(connectionId)
 
         private fun handleAccept(key: SelectionKey) {
             val serverChannel = key.channel() as ServerSocketChannel
@@ -244,15 +242,14 @@ class Socks5ProxyServer
             }
         }
 
-        fun getStats(): ProxyStats {
-            return ProxyStats(
+        fun getStats(): ProxyStats =
+            ProxyStats(
                 status = serverState.value.status,
                 port = boundPort.value,
                 activeConnections = activeConnections.value,
                 totalBytesUp = totalBytesUp.value,
                 totalBytesDown = totalBytesDown.value,
             )
-        }
 
         data class ProxyStats(
             val status: ServerState.Status,
@@ -529,8 +526,8 @@ private class Socks5Connection(
     private fun buildTunResponse(
         ignoredBindHost: String,
         bindPort: Int,
-    ): ByteArray {
-        return ByteArray(10).apply {
+    ): ByteArray =
+        ByteArray(10).apply {
             this[0] = 0x05 // VER: 5
             this[1] = 0x00 // REP: Success
             this[2] = 0x00 // RSV: 0
@@ -542,27 +539,28 @@ private class Socks5Connection(
             this[8] = (bindPort shr 8).toByte()
             this[9] = bindPort.toByte() // BND.PORT: 0
         }
-    }
 
     private fun buildUdpTunResponse(
         ignoredBindHost: String,
         bindPort: Int,
-    ): ByteArray {
-        return buildTunResponse(ignoredBindHost, bindPort)
-    }
+    ): ByteArray = buildTunResponse(ignoredBindHost, bindPort)
 
     private fun parseIpv4(): Pair<String, Int> {
         val bytes = ByteArray(4)
         buffer.get(bytes)
         val port = readPort()
-        return java.net.InetAddress.getByAddress(bytes).hostAddress!! to port
+        return java.net.InetAddress
+            .getByAddress(bytes)
+            .hostAddress!! to port
     }
 
     private fun parseIpv6(): Pair<String, Int> {
         val bytes = ByteArray(16)
         buffer.get(bytes)
         val port = readPort()
-        return java.net.InetAddress.getByAddress(bytes).hostAddress!! to port
+        return java.net.InetAddress
+            .getByAddress(bytes)
+            .hostAddress!! to port
     }
 
     private fun parseDomain(): Pair<String, Int> {
@@ -753,20 +751,34 @@ private class Socks5Connection(
         // 简化: 返回 0.0.0.0:0 作为绑定地址
         return byteArrayOf(
             // VER REP RSV ATYP(IPv4)
-            0x05, 0x00, 0x00, 0x01,
+            0x05,
+            0x00,
+            0x00,
+            0x01,
             // BND.ADDR (0.0.0.0)
-            0x00, 0x00, 0x00, 0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
             // BND.PORT (0)
-            0x00, 0x00,
+            0x00,
+            0x00,
         )
     }
 
     private fun sendErrorReply(rep: Int) {
         val reply =
             byteArrayOf(
-                0x05, rep.toByte(), 0x00, 0x01,
-                0x00, 0x00, 0x00, 0x00,
-                0x00, 0x00,
+                0x05,
+                rep.toByte(),
+                0x00,
+                0x01,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
             )
         sendReply(reply)
     }

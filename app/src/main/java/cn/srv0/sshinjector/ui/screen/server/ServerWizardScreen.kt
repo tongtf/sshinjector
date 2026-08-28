@@ -473,18 +473,17 @@ private fun ResultStep(
 }
 
 @Composable
-private fun stepTitleRes(step: WizardStep): Int {
-    return when (step) {
+private fun stepTitleRes(step: WizardStep): Int =
+    when (step) {
         WizardStep.SERVER_INFO -> R.string.wizard_step_info
         WizardStep.LOGIN_CREDENTIALS -> R.string.wizard_step_login
         WizardStep.PROVISIONING -> R.string.wizard_step_provision
         WizardStep.RESULT -> R.string.wizard_step_result
     }
-}
 
 @Composable
-private fun stepLabelRes(step: ServerProvisioning.Step): Int {
-    return when (step) {
+private fun stepLabelRes(step: ServerProvisioning.Step): Int =
+    when (step) {
         ServerProvisioning.Step.DETECT_PRIVILEGE -> R.string.wizard_step_privilege
         ServerProvisioning.Step.UPLOAD_SCRIPT -> R.string.wizard_step_upload_script
         ServerProvisioning.Step.UPLOAD_PUBKEY -> R.string.wizard_step_upload_pubkey
@@ -492,4 +491,3 @@ private fun stepLabelRes(step: ServerProvisioning.Step): Int {
         ServerProvisioning.Step.VERIFY -> R.string.wizard_step_verify
         ServerProvisioning.Step.DONE -> R.string.wizard_step_done
     }
-}

@@ -112,9 +112,10 @@ class SettingsDataStore
             context.dataStore.edit { it[KEY_DOMAIN_LIST_LAST_UPDATE] = timestamp }
         }
 
-        suspend fun getDomainListLastUpdate(): Long? {
-            return context.dataStore.data.map { it[KEY_DOMAIN_LIST_LAST_UPDATE] }.first()
-        }
+        suspend fun getDomainListLastUpdate(): Long? =
+            context.dataStore.data
+                .map { it[KEY_DOMAIN_LIST_LAST_UPDATE] }
+                .first()
 
         val language: Flow<String> =
             context.dataStore.data
@@ -122,8 +123,11 @@ class SettingsDataStore
 
         suspend fun setLanguage(code: String) {
             context.dataStore.edit { it[KEY_LANGUAGE] = code }
-            context.getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE)
-                .edit().putString("language", code).apply()
+            context
+                .getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE)
+                .edit()
+                .putString("language", code)
+                .apply()
         }
 
         suspend fun setKeyAlias(
@@ -136,7 +140,9 @@ class SettingsDataStore
 
         suspend fun getKeyAlias(serverId: Long): String? {
             val key = stringPreferencesKey("${KEY_KEYSTORE_ALIAS_PREFIX}$serverId")
-            return context.dataStore.data.map { it[key] }.first()
+            return context.dataStore.data
+                .map { it[key] }
+                .first()
         }
 
         suspend fun removeKeyAlias(serverId: Long) {

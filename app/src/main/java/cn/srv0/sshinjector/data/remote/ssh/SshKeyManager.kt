@@ -69,20 +69,21 @@ class SshKeyManager
                             error("设备不支持 Ed25519 硬件密钥, 请改用 ECDSA P-256")
                         }
                     kg.initialize(
-                        KeyGenParameterSpec.Builder(
-                            fullAlias,
-                            KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY,
-                        ).apply {
-                            setDigests(
-                                KeyProperties.DIGEST_SHA256,
-                                KeyProperties.DIGEST_SHA384,
-                                KeyProperties.DIGEST_SHA512,
-                            )
-                            if (requireBiometric) {
-                                setUserAuthenticationRequired(true)
-                                setUserAuthenticationParameters(300, KeyProperties.AUTH_BIOMETRIC_STRONG)
-                            }
-                        }.build(),
+                        KeyGenParameterSpec
+                            .Builder(
+                                fullAlias,
+                                KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY,
+                            ).apply {
+                                setDigests(
+                                    KeyProperties.DIGEST_SHA256,
+                                    KeyProperties.DIGEST_SHA384,
+                                    KeyProperties.DIGEST_SHA512,
+                                )
+                                if (requireBiometric) {
+                                    setUserAuthenticationRequired(true)
+                                    setUserAuthenticationParameters(300, KeyProperties.AUTH_BIOMETRIC_STRONG)
+                                }
+                            }.build(),
                     )
                     kg.generateKeyPair()
                 } else {
@@ -96,22 +97,23 @@ class SshKeyManager
 
                     val kg = KeyPairGenerator.getInstance(algoName, "AndroidKeyStore")
                     val specBuilder =
-                        KeyGenParameterSpec.Builder(
-                            fullAlias,
-                            KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY,
-                        ).apply {
-                            curveSpec?.let { setAlgorithmParameterSpec(it) }
-                            if (algorithm == 1) setKeySize(2048)
-                            setDigests(
-                                KeyProperties.DIGEST_SHA256,
-                                KeyProperties.DIGEST_SHA384,
-                                KeyProperties.DIGEST_SHA512,
-                            )
-                            if (requireBiometric) {
-                                setUserAuthenticationRequired(true)
-                                setUserAuthenticationParameters(300, KeyProperties.AUTH_BIOMETRIC_STRONG)
+                        KeyGenParameterSpec
+                            .Builder(
+                                fullAlias,
+                                KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY,
+                            ).apply {
+                                curveSpec?.let { setAlgorithmParameterSpec(it) }
+                                if (algorithm == 1) setKeySize(2048)
+                                setDigests(
+                                    KeyProperties.DIGEST_SHA256,
+                                    KeyProperties.DIGEST_SHA384,
+                                    KeyProperties.DIGEST_SHA512,
+                                )
+                                if (requireBiometric) {
+                                    setUserAuthenticationRequired(true)
+                                    setUserAuthenticationParameters(300, KeyProperties.AUTH_BIOMETRIC_STRONG)
+                                }
                             }
-                        }
                     kg.initialize(specBuilder.build())
                     kg.generateKeyPair()
                 }
@@ -239,7 +241,8 @@ class SshKeyManager
             val pass = passphrase?.toByteArray(StandardCharsets.UTF_8) ?: ByteArray(0)
             val keyPair =
                 try {
-                    com.jcraft.jsch.KeyPair.load(jsch, pem.toByteArray(), pass)
+                    com.jcraft.jsch.KeyPair
+                        .load(jsch, pem.toByteArray(), pass)
                 } catch (e: Exception) {
                     error("无法解析私钥: ${e.message}")
                 }
@@ -274,14 +277,16 @@ class SshKeyManager
             val passBytes = passphrase?.toByteArray(StandardCharsets.UTF_8) ?: ByteArray(0)
             val pemBytes = pem.toByteArray(StandardCharsets.UTF_8)
             val payload =
-                java.io.ByteArrayOutputStream().apply {
-                    write(passBytes.size shr 24 and 0xFF)
-                    write(passBytes.size shr 16 and 0xFF)
-                    write(passBytes.size shr 8 and 0xFF)
-                    write(passBytes.size and 0xFF)
-                    write(passBytes)
-                    write(pemBytes)
-                }.toByteArray()
+                java.io
+                    .ByteArrayOutputStream()
+                    .apply {
+                        write(passBytes.size shr 24 and 0xFF)
+                        write(passBytes.size shr 16 and 0xFF)
+                        write(passBytes.size shr 8 and 0xFF)
+                        write(passBytes.size and 0xFF)
+                        write(passBytes)
+                        write(pemBytes)
+                    }.toByteArray()
 
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, wrappingKey)
@@ -332,11 +337,11 @@ class SshKeyManager
             }
             val kg = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
             kg.init(
-                KeyGenParameterSpec.Builder(
-                    importWrapperAlias,
-                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
-                )
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                KeyGenParameterSpec
+                    .Builder(
+                        importWrapperAlias,
+                        KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+                    ).setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                     .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                     .setKeySize(256)
                     .build(),
@@ -345,7 +350,11 @@ class SshKeyManager
         }
 
         /** 导入的原始 PEM + 口令 + 算法 (内存缓存) */
-        private class ImportedPem(val pem: String, val passphrase: ByteArray?, val algorithm: String)
+        private class ImportedPem(
+            val pem: String,
+            val passphrase: ByteArray?,
+            val algorithm: String,
+        )
 
         private val importedPemCache = java.util.concurrent.ConcurrentHashMap<String, ImportedPem>()
 
@@ -515,9 +524,7 @@ class SshKeyManager
             File(generatedKeysDir, "$safeName.pub").delete()
         }
 
-        fun canAccessKey(alias: String): Boolean {
-            return getPrivateKeyForAuth(alias) != null
-        }
+        fun canAccessKey(alias: String): Boolean = getPrivateKeyForAuth(alias) != null
 
         /**
          * 查询密钥是否要求用户认证(生物识别/锁屏)才能签名。
@@ -540,11 +547,15 @@ class SshKeyManager
 
         fun listKeyAliases(): List<String> {
             val keystoreAliases =
-                keyStore.aliases().asSequence()
+                keyStore
+                    .aliases()
+                    .asSequence()
                     .filter { it.startsWith(aliasPrefix) }
                     .map { it.substring(aliasPrefix.length) }
             val importedFileAliases =
-                importedKeysDir.listFiles()?.asSequence()
+                importedKeysDir
+                    .listFiles()
+                    ?.asSequence()
                     ?.filter { it.isFile && !it.name.endsWith(".meta") }
                     ?.map {
                         val name = if (it.name.endsWith(".pub")) it.name.removeSuffix(".pub") else it.name
@@ -583,8 +594,14 @@ class SshKeyManager
                         val algName = if (coordSize == 48) "ecdsa-sha2-nistp384" else "ecdsa-sha2-nistp256"
                         val curveName = if (coordSize == 48) "nistp384" else "nistp256"
 
-                        val x = publicKey.w.affineX.toByteArray().let { trimLeadingZero(it, coordSize) }
-                        val y = publicKey.w.affineY.toByteArray().let { trimLeadingZero(it, coordSize) }
+                        val x =
+                            publicKey.w.affineX
+                                .toByteArray()
+                                .let { trimLeadingZero(it, coordSize) }
+                        val y =
+                            publicKey.w.affineY
+                                .toByteArray()
+                                .let { trimLeadingZero(it, coordSize) }
 
                         val blob = java.io.ByteArrayOutputStream()
                         writeString(blob, algName.toByteArray())

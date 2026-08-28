@@ -31,7 +31,9 @@ sealed interface DomainListState {
         val updatedAt: Long?,
     ) : DomainListState
 
-    data class Error(val message: String) : DomainListState
+    data class Error(
+        val message: String,
+    ) : DomainListState
 }
 
 enum class DomainListSource { BUILTIN, DISK, URL }

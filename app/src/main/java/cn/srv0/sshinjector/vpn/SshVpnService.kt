@@ -277,7 +277,8 @@ class SshVpnService : VpnService() {
         rebuildInProgress = false
         whitelistObserverJob =
             scope.launch {
-                whitelistDao.getEnabled()
+                whitelistDao
+                    .getEnabled()
                     .map { list -> list.map { it.packageName }.toSet() }
                     .distinctUntilChanged()
                     .collectLatest { packages ->
@@ -424,19 +425,20 @@ class SshVpnService : VpnService() {
                 PendingIntent.FLAG_IMMUTABLE,
             )
 
-        return Notification.Builder(this, CHANNEL_ID)
+        return Notification
+            .Builder(this, CHANNEL_ID)
             .setContentTitle("SSHInjector")
             .setContentText("${config.name} - $status")
             .setSmallIcon(R.drawable.ic_vpn_key)
             .setContentIntent(pendingIntent)
             .addAction(
-                Notification.Action.Builder(
-                    null,
-                    "断开",
-                    disconnectPendingIntent,
-                ).build(),
-            )
-            .setOngoing(true)
+                Notification.Action
+                    .Builder(
+                        null,
+                        "断开",
+                        disconnectPendingIntent,
+                    ).build(),
+            ).setOngoing(true)
             .build()
     }
 
@@ -532,7 +534,8 @@ class SshVpnService : VpnService() {
         try {
             connectivityManager = getSystemService(ConnectivityManager::class.java)
             val request =
-                NetworkRequest.Builder()
+                NetworkRequest
+                    .Builder()
                     .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                     .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
                     .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)

@@ -31,9 +31,7 @@ interface TunnelPlugin {
         dstHost: String,
         dstPort: Int,
         payload: ByteArray,
-    ) {
-        throw UnsupportedOperationException("UDP not supported by $id")
-    }
+    ): Unit = throw UnsupportedOperationException("UDP not supported by $id")
 
     suspend fun forwardDns(query: ByteArray): ByteArray? = null
 

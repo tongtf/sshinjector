@@ -711,46 +711,45 @@ fun KeyManagerScreen(
                         listOf(
                             false to stringResource(R.string.key_private),
                             true to stringResource(R.string.key_public),
-                        )
-                            .forEach { (value, label) ->
-                                Surface(
-                                    modifier =
-                                        Modifier
-                                            .weight(1f)
-                                            .clickable { onIsPublicChange(value) },
-                                    shape = RoundedCornerShape(8.dp),
+                        ).forEach { (value, label) ->
+                            Surface(
+                                modifier =
+                                    Modifier
+                                        .weight(1f)
+                                        .clickable { onIsPublicChange(value) },
+                                shape = RoundedCornerShape(8.dp),
+                                color =
+                                    if (isPublic == value) {
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceVariant.copy(
+                                            alpha = 0.3f,
+                                        )
+                                    },
+                            ) {
+                                Text(
+                                    text = label,
+                                    fontSize = 14.sp,
+                                    fontWeight =
+                                        if (isPublic == value) {
+                                            FontWeight.Bold
+                                        } else {
+                                            FontWeight.Normal
+                                        },
                                     color =
                                         if (isPublic == value) {
-                                            MaterialTheme.colorScheme.primaryContainer
+                                            MaterialTheme.colorScheme.onPrimaryContainer
                                         } else {
-                                            MaterialTheme.colorScheme.surfaceVariant.copy(
-                                                alpha = 0.3f,
-                                            )
+                                            MaterialTheme.colorScheme.onSurfaceVariant
                                         },
-                                ) {
-                                    Text(
-                                        text = label,
-                                        fontSize = 14.sp,
-                                        fontWeight =
-                                            if (isPublic == value) {
-                                                FontWeight.Bold
-                                            } else {
-                                                FontWeight.Normal
-                                            },
-                                        color =
-                                            if (isPublic == value) {
-                                                MaterialTheme.colorScheme.onPrimaryContainer
-                                            } else {
-                                                MaterialTheme.colorScheme.onSurfaceVariant
-                                            },
-                                        modifier =
-                                            Modifier.padding(
-                                                horizontal = 16.dp,
-                                                vertical = 10.dp,
-                                            ),
-                                    )
-                                }
+                                    modifier =
+                                        Modifier.padding(
+                                            horizontal = 16.dp,
+                                            vertical = 10.dp,
+                                        ),
+                                )
                             }
+                        }
                     }
                     Spacer(modifier = Modifier.height(12.dp))
                     TextField(
@@ -966,8 +965,7 @@ fun ImportKeyDialog(
                     listOf(
                         false to stringResource(R.string.key_private),
                         true to stringResource(R.string.key_public),
-                    ).forEach {
-                            (value, label) ->
+                    ).forEach { (value, label) ->
                         Surface(
                             modifier =
                                 Modifier

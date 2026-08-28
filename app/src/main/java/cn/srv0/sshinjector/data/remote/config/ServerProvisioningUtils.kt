@@ -3,11 +3,10 @@ package cn.srv0.sshinjector.data.remote.config
 import java.security.MessageDigest
 
 /** 从 `sha256sum` 输出中提取 64 位十六进制哈希（忽略文件名部分） */
-internal fun extractSha256(stdout: String): String? {
-    return stdout.trim().split(Regex("\\s+")).firstOrNull()?.takeIf {
+internal fun extractSha256(stdout: String): String? =
+    stdout.trim().split(Regex("\\s+")).firstOrNull()?.takeIf {
         it.length == 64 && it.all { c -> c in '0'..'9' || c in 'a'..'f' }
     }
-}
 
 /** 校验 OpenSSH 公钥格式：允许 ssh-ed25519 / ssh-rsa / ecdsa-sha2-*，格式 "<algo> <base64> [comment]" */
 internal fun isValidPublicKey(key: String): Boolean {

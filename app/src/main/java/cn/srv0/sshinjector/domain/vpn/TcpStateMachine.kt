@@ -353,27 +353,31 @@ class TcpStateMachine(
         if (domain != null) {
             val domainBytes = domain.toByteArray(Charsets.US_ASCII)
             buf =
-                ByteBuffer.allocate(4 + 1 + domainBytes.size + 2).apply {
-                    put(0x05) // VER
-                    put(0x01) // CMD: CONNECT
-                    put(0x00) // RSV
-                    put(0x03) // ATYP: Domain
-                    put(domainBytes.size.toByte())
-                    put(domainBytes)
-                    putShort(dstPort.toShort())
-                }.array()
+                ByteBuffer
+                    .allocate(4 + 1 + domainBytes.size + 2)
+                    .apply {
+                        put(0x05) // VER
+                        put(0x01) // CMD: CONNECT
+                        put(0x00) // RSV
+                        put(0x03) // ATYP: Domain
+                        put(domainBytes.size.toByte())
+                        put(domainBytes)
+                        putShort(dstPort.toShort())
+                    }.array()
         } else {
             val ipBytes = dstIp.address
             val atyp = if (ipBytes.size == 4) 0x01 else 0x04
             buf =
-                ByteBuffer.allocate(4 + ipBytes.size + 2).apply {
-                    put(0x05) // VER
-                    put(0x01) // CMD: CONNECT
-                    put(0x00) // RSV
-                    put(atyp.toByte())
-                    put(ipBytes)
-                    putShort(dstPort.toShort())
-                }.array()
+                ByteBuffer
+                    .allocate(4 + ipBytes.size + 2)
+                    .apply {
+                        put(0x05) // VER
+                        put(0x01) // CMD: CONNECT
+                        put(0x00) // RSV
+                        put(atyp.toByte())
+                        put(ipBytes)
+                        putShort(dstPort.toShort())
+                    }.array()
         }
         return buf
     }

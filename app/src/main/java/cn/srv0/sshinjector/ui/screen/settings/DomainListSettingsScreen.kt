@@ -258,9 +258,8 @@ private fun StatusRow(
     }
 }
 
-private fun formatTime(timestamp: Long): String {
-    return SimpleDateFormat(
+private fun formatTime(timestamp: Long): String =
+    SimpleDateFormat(
         "yyyy-MM-dd HH:mm",
         Locale.getDefault(),
     ).format(Date(timestamp))
-}

@@ -63,7 +63,8 @@ class WhitelistViewModel
          * 应用列表缓存是否有效且未过期
          */
         private fun hasFreshCache(): Boolean =
-            _appsLoaded.value && _cachedApps.value.isNotEmpty() &&
+            _appsLoaded.value &&
+                _cachedApps.value.isNotEmpty() &&
                 (System.currentTimeMillis() - lastCacheTime) < cacheValidityMs
 
         /**
@@ -81,13 +82,15 @@ class WhitelistViewModel
                     withContext(Dispatchers.IO) {
                         val pm = context.packageManager
                         val flags = PackageManager.ApplicationInfoFlags.of(0)
-                        pm.getInstalledApplications(flags).map { info ->
-                            InstalledApp(
-                                packageName = info.packageName,
-                                name = pm.getApplicationLabel(info).toString(),
-                                isSystem = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0,
-                            )
-                        }.sortedBy { it.name.lowercase() }
+                        pm
+                            .getInstalledApplications(flags)
+                            .map { info ->
+                                InstalledApp(
+                                    packageName = info.packageName,
+                                    name = pm.getApplicationLabel(info).toString(),
+                                    isSystem = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0,
+                                )
+                            }.sortedBy { it.name.lowercase() }
                     }
                 _cachedApps.value = apps
                 _appsLoaded.value = true

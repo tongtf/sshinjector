@@ -117,8 +117,8 @@ class ServerRepository
             }
     }
 
-private fun ServerEntity.toDomain(credentialCrypto: CredentialCrypto): ServerConfig {
-    return ServerConfig(
+private fun ServerEntity.toDomain(credentialCrypto: CredentialCrypto): ServerConfig =
+    ServerConfig(
         id = id,
         name = name,
         host = host,
@@ -152,10 +152,9 @@ private fun ServerEntity.toDomain(credentialCrypto: CredentialCrypto): ServerCon
         socksPort = socksPort,
         hostKeyFingerprint = hostKeyFingerprint,
     )
-}
 
-private fun ServerConfig.toEntity(credentialCrypto: CredentialCrypto): ServerEntity {
-    return ServerEntity(
+private fun ServerConfig.toEntity(credentialCrypto: CredentialCrypto): ServerEntity =
+    ServerEntity(
         id = id,
         name = name,
         host = host,
@@ -181,7 +180,6 @@ private fun ServerConfig.toEntity(credentialCrypto: CredentialCrypto): ServerEnt
         updatedAt = updatedAt,
         hostKeyFingerprint = hostKeyFingerprint,
     )
-}
 
 private fun parseJsonStringList(json: String?): List<String> {
     if (json.isNullOrEmpty()) return emptyList()
@@ -198,21 +196,19 @@ private fun toJsonStringList(list: List<String>): String? {
     return JSONArray(list).toString()
 }
 
-private fun WhitelistAppEntity.toDomain(): WhitelistApp {
-    return WhitelistApp(
+private fun WhitelistAppEntity.toDomain(): WhitelistApp =
+    WhitelistApp(
         packageName = packageName,
         appName = appName,
         iconHash = "",
         isEnabled = isEnabled,
         addedAt = addedAt,
     )
-}
 
-private fun WhitelistApp.toEntity(): WhitelistAppEntity {
-    return WhitelistAppEntity(
+private fun WhitelistApp.toEntity(): WhitelistAppEntity =
+    WhitelistAppEntity(
         packageName = packageName,
         appName = appName,
         isEnabled = isEnabled,
         addedAt = addedAt,
     )
-}

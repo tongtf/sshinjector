@@ -67,7 +67,11 @@ fun SettingsScreen(
     var showLicenseDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val fragmentActivity = context as? androidx.fragment.app.FragmentActivity
-    val biometricAuth = fragmentActivity?.let { cn.srv0.sshinjector.ui.biometric.BiometricAuth.from(it) }
+    val biometricAuth =
+        fragmentActivity?.let {
+            cn.srv0.sshinjector.ui.biometric.BiometricAuth
+                .from(it)
+        }
     val versionName =
         remember {
             try {
@@ -325,8 +329,7 @@ fun SettingsScreen(
                                     .clickable {
                                         viewModel.setLanguage(code)
                                         showLangDialog = false
-                                    }
-                                    .padding(vertical = 12.dp),
+                                    }.padding(vertical = 12.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -380,8 +383,7 @@ fun SettingsScreen(
                                     .clickable {
                                         viewModel.setDnsMode(value)
                                         showDnsDialog = false
-                                    }
-                                    .padding(vertical = 12.dp),
+                                    }.padding(vertical = 12.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {

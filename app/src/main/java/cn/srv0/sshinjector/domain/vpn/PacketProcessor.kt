@@ -132,9 +132,7 @@ class PacketProcessor
             srcPort: Int,
             dstPort: Int,
             payload: ByteArray,
-        ): ByteArray {
-            return udpRelay.buildUdpResponsePacket(srcIp, dstIp, srcPort, dstPort, payload)
-        }
+        ): ByteArray = udpRelay.buildUdpResponsePacket(srcIp, dstIp, srcPort, dstPort, payload)
 
         fun cleanupStaleConnections(timeoutMs: Long = DEFAULT_CONNECTION_CLEANUP_TIMEOUT_MS) {
             tcpStateMachine.cleanupStaleConnections(timeoutMs)

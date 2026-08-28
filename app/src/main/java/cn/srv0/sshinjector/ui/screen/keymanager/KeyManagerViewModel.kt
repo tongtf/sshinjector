@@ -118,8 +118,8 @@ class KeyManagerViewModel
             refresh()
         }
 
-        fun copyPublicKey(text: String): Boolean {
-            return try {
+        fun copyPublicKey(text: String): Boolean =
+            try {
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                 if (clipboard != null) {
                     val clip = ClipData.newPlainText("SSH Public Key", text)
@@ -131,5 +131,4 @@ class KeyManagerViewModel
             } catch (e: Exception) {
                 false
             }
-        }
     }

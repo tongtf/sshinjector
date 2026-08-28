@@ -70,7 +70,8 @@ fun ServerListScreen(
     val fragmentActivity = context as? androidx.fragment.app.FragmentActivity
     val biometricAuth =
         fragmentActivity?.let {
-            cn.srv0.sshinjector.ui.biometric.BiometricAuth.from(it)
+            cn.srv0.sshinjector.ui.biometric.BiometricAuth
+                .from(it)
         }
 
     LaunchedEffect(servers, connectingServerId) {
@@ -178,23 +179,26 @@ fun ServerListScreen(
                         onConnect = {
                             if (server.isActive || connectingServerId == server.id) {
                                 viewModel.disconnect()
-                                android.widget.Toast.makeText(
-                                    context,
-                                    context.getString(R.string.dashboard_disconnecting),
-                                    android.widget.Toast.LENGTH_SHORT,
-                                ).show()
+                                android.widget.Toast
+                                    .makeText(
+                                        context,
+                                        context.getString(R.string.dashboard_disconnecting),
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
                             } else {
                                 val onGranted = {
                                     viewModel.connect(server.id)
-                                    android.widget.Toast.makeText(
-                                        context,
-                                        context.getString(
-                                            R.string.dashboard_connecting_to,
-                                        ).format(
-                                            server.name,
-                                        ),
-                                        android.widget.Toast.LENGTH_SHORT,
-                                    ).show()
+                                    android.widget.Toast
+                                        .makeText(
+                                            context,
+                                            context
+                                                .getString(
+                                                    R.string.dashboard_connecting_to,
+                                                ).format(
+                                                    server.name,
+                                                ),
+                                            android.widget.Toast.LENGTH_SHORT,
+                                        ).show()
                                 }
                                 if (fragmentActivity != null && biometricAuth != null) {
                                     biometricAuth.connectIfAllowed(
@@ -209,15 +213,16 @@ fun ServerListScreen(
                         },
                         onToggleDefault = {
                             viewModel.toggleDefault(server.id)
-                            android.widget.Toast.makeText(
-                                context,
-                                if (server.isActive) {
-                                    context.getString(R.string.server_default_unset)
-                                } else {
-                                    context.getString(R.string.server_default_set)
-                                },
-                                android.widget.Toast.LENGTH_SHORT,
-                            ).show()
+                            android.widget.Toast
+                                .makeText(
+                                    context,
+                                    if (server.isActive) {
+                                        context.getString(R.string.server_default_unset)
+                                    } else {
+                                        context.getString(R.string.server_default_set)
+                                    },
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
                         },
                     )
                 }
@@ -320,8 +325,7 @@ fun ServerCard(
                                 .background(
                                     MaterialTheme.colorScheme.primaryContainer,
                                     RoundedCornerShape(4.dp),
-                                )
-                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                                ).padding(horizontal = 8.dp, vertical = 2.dp),
                     )
                 }
                 IconButton(onClick = onConnect) {

@@ -77,7 +77,8 @@ class MainViewModel
         private fun registerNetworkCallback() {
             try {
                 val request =
-                    NetworkRequest.Builder()
+                    NetworkRequest
+                        .Builder()
                         .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                         .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
                         .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
@@ -443,18 +444,17 @@ class MainViewModel
             private const val NETWORK_TIMEOUT_MS = 5000
 
             @JvmStatic
-            fun formatMemorySize(bytes: Long): String {
-                return when {
+            fun formatMemorySize(bytes: Long): String =
+                when {
                     bytes < 0 -> "-"
                     bytes < 1024L * 1024 * 1024 ->
                         String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024))
                     else -> String.format(java.util.Locale.ROOT, "%.1f GB", bytes / (1024.0 * 1024 * 1024))
                 }
-            }
 
             @JvmStatic
-            fun formatBytes(bytes: Long): String {
-                return when {
+            fun formatBytes(bytes: Long): String =
+                when {
                     bytes < 0 -> "-"
                     bytes < 1024 -> String.format(java.util.Locale.ROOT, "%d B", bytes)
                     bytes < 1024L * 1024 ->
@@ -463,7 +463,6 @@ class MainViewModel
                         String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024))
                     else -> String.format(java.util.Locale.ROOT, "%.2f GB", bytes / (1024.0 * 1024 * 1024))
                 }
-            }
 
             @JvmStatic
             fun formatDuration(durationMs: Long): String {
@@ -488,13 +487,12 @@ class MainViewModel
             }
 
             @JvmStatic
-            fun ratioLevel(ratio: Float): RatioLevel {
-                return when {
+            fun ratioLevel(ratio: Float): RatioLevel =
+                when {
                     ratio < RATIO_LOW -> RatioLevel.OK
                     ratio < RATIO_HIGH -> RatioLevel.WARNING
                     else -> RatioLevel.BAD
                 }
-            }
         }
 
         fun switchDnsMode() {
@@ -530,7 +528,8 @@ class MainViewModel
                     }
                 val dnsSuccessCount = dnsResults.count { it.second }
                 val dnsAvgLatency =
-                    dnsResults.filter { it.second && it.first != null }
+                    dnsResults
+                        .filter { it.second && it.first != null }
                         .mapNotNull { it.first }
                         .takeIf { it.isNotEmpty() }
                         ?.let { list -> list.sum() / list.size }
@@ -541,7 +540,8 @@ class MainViewModel
                     }
                 val httpSuccessCount = httpResults.count { it.second }
                 val httpAvgLatency =
-                    httpResults.filter { it.second && it.first != null }
+                    httpResults
+                        .filter { it.second && it.first != null }
                         .mapNotNull { it.first }
                         .takeIf { it.isNotEmpty() }
                         ?.let { list -> list.sum() / list.size }
@@ -566,8 +566,8 @@ class MainViewModel
             }
         }
 
-        private fun testDnsResolution(dnsMode: Int): Pair<Long?, Boolean> {
-            return try {
+        private fun testDnsResolution(dnsMode: Int): Pair<Long?, Boolean> =
+            try {
                 val start = System.currentTimeMillis()
                 when (dnsMode) {
                     0, 2 -> {
@@ -581,11 +581,34 @@ class MainViewModel
                         connection.setRequestProperty("Accept", "application/dns-message")
                         val query =
                             byteArrayOf(
-                                0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
-                                0x00, 0x00, 0x00, 0x00,
-                                0x06, 0x67, 0x6F, 0x6F, 0x67, 0x6C, 0x65,
-                                0x03, 0x63, 0x6F, 0x6D, 0x00,
-                                0x00, 0x01, 0x00, 0x01,
+                                0x00,
+                                0x01,
+                                0x01,
+                                0x00,
+                                0x00,
+                                0x01,
+                                0x00,
+                                0x00,
+                                0x00,
+                                0x00,
+                                0x00,
+                                0x00,
+                                0x06,
+                                0x67,
+                                0x6F,
+                                0x6F,
+                                0x67,
+                                0x6C,
+                                0x65,
+                                0x03,
+                                0x63,
+                                0x6F,
+                                0x6D,
+                                0x00,
+                                0x00,
+                                0x01,
+                                0x00,
+                                0x01,
                             )
                         connection.outputStream.write(query)
                         connection.outputStream.flush()
@@ -599,11 +622,34 @@ class MainViewModel
                         socket.soTimeout = NETWORK_TIMEOUT_MS
                         val query =
                             byteArrayOf(
-                                0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
-                                0x00, 0x00, 0x00, 0x00,
-                                0x06, 0x67, 0x6F, 0x6F, 0x67, 0x6C, 0x65,
-                                0x03, 0x63, 0x6F, 0x6D, 0x00,
-                                0x00, 0x01, 0x00, 0x01,
+                                0x00,
+                                0x01,
+                                0x01,
+                                0x00,
+                                0x00,
+                                0x01,
+                                0x00,
+                                0x00,
+                                0x00,
+                                0x00,
+                                0x00,
+                                0x00,
+                                0x06,
+                                0x67,
+                                0x6F,
+                                0x6F,
+                                0x67,
+                                0x6C,
+                                0x65,
+                                0x03,
+                                0x63,
+                                0x6F,
+                                0x6D,
+                                0x00,
+                                0x00,
+                                0x01,
+                                0x00,
+                                0x01,
                             )
                         val addr = java.net.InetAddress.getByName("8.8.8.8")
                         val packet = java.net.DatagramPacket(query, query.size, addr, 53)
@@ -621,10 +667,9 @@ class MainViewModel
             } catch (e: Exception) {
                 Pair(null, false)
             }
-        }
 
-        private fun testHttpConnectivity(): Triple<Long?, Boolean, Int> {
-            return try {
+        private fun testHttpConnectivity(): Triple<Long?, Boolean, Int> =
+            try {
                 val start = System.currentTimeMillis()
                 val url = java.net.URL("https://www.baidu.com")
                 val connection = url.openConnection() as javax.net.ssl.HttpsURLConnection
@@ -639,7 +684,6 @@ class MainViewModel
             } catch (e: Exception) {
                 Triple(null, false, 0)
             }
-        }
 
         fun connect(serverId: Long) {
             // 更新服务器连接状态为 Connecting

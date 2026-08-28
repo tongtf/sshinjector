@@ -59,10 +59,18 @@ class VpnController
         private val readBuffer = ByteBuffer.allocate(32768).order(ByteOrder.BIG_ENDIAN)
 
         // 热点路径只累加原子计数, 由 statsFlushLoop 节流发布到 connectionStats
-        private val bytesSentCounter = java.util.concurrent.atomic.AtomicLong(0)
-        private val bytesReceivedCounter = java.util.concurrent.atomic.AtomicLong(0)
-        private val packetsSentCounter = java.util.concurrent.atomic.AtomicLong(0)
-        private val packetsReceivedCounter = java.util.concurrent.atomic.AtomicLong(0)
+        private val bytesSentCounter =
+            java.util.concurrent.atomic
+                .AtomicLong(0)
+        private val bytesReceivedCounter =
+            java.util.concurrent.atomic
+                .AtomicLong(0)
+        private val packetsSentCounter =
+            java.util.concurrent.atomic
+                .AtomicLong(0)
+        private val packetsReceivedCounter =
+            java.util.concurrent.atomic
+                .AtomicLong(0)
 
         // 用于 SYSTEM 模式 DNS 绕过的 socket 保护函数
         private var protectDatagramChannel: ((java.net.DatagramSocket) -> Boolean)? = null
@@ -611,8 +619,8 @@ class VpnController
         private fun extractDstIp(
             buffer: ByteBuffer,
             version: Int,
-        ): InetAddress? {
-            return try {
+        ): InetAddress? =
+            try {
                 buffer.mark()
                 buffer.position(buffer.position() + (if (version == 4) 16 else 24)) // Skip to dst IP
                 if (version == 4) {
@@ -629,13 +637,12 @@ class VpnController
             } finally {
                 buffer.reset()
             }
-        }
 
         private fun extractProtocol(
             buffer: ByteBuffer,
             version: Int,
-        ): Int {
-            return try {
+        ): Int =
+            try {
                 buffer.mark()
                 val protoOffset = if (version == 4) 9 else 6
                 val proto = buffer.get(buffer.position() + protoOffset).toInt() and 0xFF
@@ -644,13 +651,12 @@ class VpnController
             } catch (_: Exception) {
                 -1
             }
-        }
 
         private fun extractDstPort(
             buffer: ByteBuffer,
             version: Int,
-        ): Int {
-            return try {
+        ): Int =
+            try {
                 buffer.mark()
                 val ipHeaderLen =
                     if (version == 4) {
@@ -667,7 +673,6 @@ class VpnController
             } catch (_: Exception) {
                 -1
             }
-        }
 
         /**
          * 判定 IP 是否为 DnsInterceptor 分配的假 IP (198.18.0.0/15, fd00::/8)。
@@ -930,8 +935,7 @@ class VpnController
                         .filterNotNull()
                         .filter { host ->
                             !host.startsWith("fe80") && !host.startsWith("::1") && !host.startsWith("127.")
-                        }
-                        .partition { it.contains(':') }
+                        }.partition { it.contains(':') }
                 dnsList.addAll(v4)
                 dnsList.addAll(v6)
             } catch (e: Exception) {
@@ -943,8 +947,8 @@ class VpnController
         private fun buildTunnelConfig(
             server: ServerConfig,
             password: String?,
-        ): TunnelConfig {
-            return TunnelConfig.Socks5(
+        ): TunnelConfig =
+            TunnelConfig.Socks5(
                 sshHost = server.host,
                 sshPort = server.port,
                 sshUsername = server.username,
@@ -958,7 +962,6 @@ class VpnController
                     ),
                 socksPort = server.socksPort,
             )
-        }
 
         fun getCurrentServer(): ServerConfig? = currentServer
 

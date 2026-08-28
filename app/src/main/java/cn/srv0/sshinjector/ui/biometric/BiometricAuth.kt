@@ -57,14 +57,14 @@ class BiometricAuth
                     },
                 )
             val promptInfo =
-                PromptInfo.Builder()
+                PromptInfo
+                    .Builder()
                     .setTitle(title)
                     .setSubtitle(activity.getString(R.string.settings_verify_identity_sub))
                     .setNegativeButtonText(activity.getString(R.string.cancel))
                     .setAllowedAuthenticators(
                         androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG,
-                    )
-                    .build()
+                    ).build()
             prompt.authenticate(promptInfo)
         }
 

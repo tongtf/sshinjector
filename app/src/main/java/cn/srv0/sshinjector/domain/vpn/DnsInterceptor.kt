@@ -96,13 +96,23 @@ class DnsInterceptor
         // SYSTEM 模式使用的系统真实 DNS 服务器列表
         @Volatile private var systemDnsServers: List<String> = emptyList()
 
-        val queriesIntercepted = java.util.concurrent.atomic.AtomicLong(0)
-        val queriesResolved = java.util.concurrent.atomic.AtomicLong(0)
-        val cacheHits = java.util.concurrent.atomic.AtomicLong(0)
-        val cacheMisses = java.util.concurrent.atomic.AtomicLong(0)
+        val queriesIntercepted =
+            java.util.concurrent.atomic
+                .AtomicLong(0)
+        val queriesResolved =
+            java.util.concurrent.atomic
+                .AtomicLong(0)
+        val cacheHits =
+            java.util.concurrent.atomic
+                .AtomicLong(0)
+        val cacheMisses =
+            java.util.concurrent.atomic
+                .AtomicLong(0)
 
         // 定期清理过期待查
-        private val cleanupScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
+        private val cleanupScheduler =
+            java.util.concurrent.Executors
+                .newSingleThreadScheduledExecutor()
 
         init {
             cleanupScheduler.scheduleAtFixedRate({
@@ -638,9 +648,7 @@ class DnsInterceptor
          * 获取待发送的 DNS 响应
          * 由 VpnService 调用写回 TUN 接口
          */
-        suspend fun pollResponse(): DnsResponse? {
-            return pendingResponses.receiveCatching().getOrNull()
-        }
+        suspend fun pollResponse(): DnsResponse? = pendingResponses.receiveCatching().getOrNull()
 
         /**
          * 排空待发送 DNS 响应队列。

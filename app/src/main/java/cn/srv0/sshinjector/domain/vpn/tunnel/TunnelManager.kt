@@ -76,9 +76,8 @@ class TunnelManager
 
         fun hasPlugin(id: String): Boolean = plugins.containsKey(id)
 
-        fun getActiveOrFallback(): TunnelPlugin {
-            return _activePlugin.value
+        fun getActiveOrFallback(): TunnelPlugin =
+            _activePlugin.value
                 ?: plugins[DEFAULT_PLUGIN_ID]
                 ?: error("No tunnel plugin available")
-        }
     }

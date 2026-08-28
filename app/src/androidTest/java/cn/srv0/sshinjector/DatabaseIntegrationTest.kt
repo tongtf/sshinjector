@@ -23,7 +23,8 @@ class DatabaseIntegrationTest {
     fun setup() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         db =
-            Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
+            Room
+                .inMemoryDatabaseBuilder(context, AppDatabase::class.java)
                 .allowMainThreadQueries()
                 .build()
         serverDao = db.serverDao()

@@ -37,9 +37,16 @@ class Socks5ProtocolTest {
         // SOCKS5 成功响应: VER=5, REP=0(Success), RSV=0, ATYP=1(IPv4), BND.ADDR, BND.PORT
         val response =
             byteArrayOf(
-                0x05, 0x00, 0x00, 0x01, // VER REP RSV ATYP
-                0x00, 0x00, 0x00, 0x00, // BND.ADDR
-                0x00, 0x00, // BND.PORT
+                0x05,
+                0x00,
+                0x00,
+                0x01, // VER REP RSV ATYP
+                0x00,
+                0x00,
+                0x00,
+                0x00, // BND.ADDR
+                0x00,
+                0x00, // BND.PORT
             )
 
         assertEquals(0x05, response[0].toInt() and 0xFF)

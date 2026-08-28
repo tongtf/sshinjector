@@ -69,10 +69,12 @@ class CredentialCryptoRoundTripTest {
     fun `server repository round trip stores encrypted and decrypts on read`() =
         runBlocking {
             val db =
-                Room.inMemoryDatabaseBuilder(
-                    ApplicationProvider.getApplicationContext<Context>(),
-                    AppDatabase::class.java,
-                ).allowMainThreadQueries().build()
+                Room
+                    .inMemoryDatabaseBuilder(
+                        ApplicationProvider.getApplicationContext<Context>(),
+                        AppDatabase::class.java,
+                    ).allowMainThreadQueries()
+                    .build()
             try {
                 val repo = ServerRepository(db.serverDao(), db.whitelistDao(), crypto)
                 val id =

@@ -287,8 +287,7 @@ fun ServerEditScreen(
                             showKeyDropdown = !showKeyDropdown
                         },
                         onGenerate = {
-                            viewModel.generateAndAssociate {
-                                    newAlias ->
+                            viewModel.generateAndAssociate { newAlias ->
                                 keyAlias = newAlias
                             }
                         },
@@ -471,7 +470,8 @@ fun OutlinedTextFieldRow(
         supportingText = supportingText?.let { { Text(it) } },
         visualTransformation =
             if (password) {
-                androidx.compose.ui.text.input.PasswordVisualTransformation()
+                androidx.compose.ui.text.input
+                    .PasswordVisualTransformation()
             } else {
                 androidx.compose.ui.text.input.VisualTransformation.None
             },

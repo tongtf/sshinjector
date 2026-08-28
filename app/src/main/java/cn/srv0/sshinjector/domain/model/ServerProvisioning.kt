@@ -31,33 +31,55 @@ object ServerProvisioning {
 
     /** 步骤结果 */
     sealed class StepResult {
-        data class Running(val step: Step) : StepResult()
+        data class Running(
+            val step: Step,
+        ) : StepResult()
 
-        data class Succeeded(val step: Step, val detail: String? = null) : StepResult()
+        data class Succeeded(
+            val step: Step,
+            val detail: String? = null,
+        ) : StepResult()
     }
 
     /** 最终结果 */
     sealed class Outcome {
         /** 完整成功：隧道账号已配置 */
-        data class FullSuccess(val account: String) : Outcome()
+        data class FullSuccess(
+            val account: String,
+        ) : Outcome()
 
         /** 无 root/sudo 权限，仅保存本机配置 */
-        data class LocalOnly(val reason: String) : Outcome()
+        data class LocalOnly(
+            val reason: String,
+        ) : Outcome()
 
         /** 脚本完整性校验失败（可能被篡改） */
-        data class TamperDetected(val expectedSha256: String, val actualSha256: String?) : Outcome()
+        data class TamperDetected(
+            val expectedSha256: String,
+            val actualSha256: String?,
+        ) : Outcome()
 
         /** 失败 */
-        data class Failed(val step: Step?, val message: String) : Outcome()
+        data class Failed(
+            val step: Step?,
+            val message: String,
+        ) : Outcome()
     }
 
     /** 配置过程事件：逐步进度 + 最终结果 */
     sealed class ProvisionEvent {
-        data class StepStarted(val step: Step) : ProvisionEvent()
+        data class StepStarted(
+            val step: Step,
+        ) : ProvisionEvent()
 
-        data class StepCompleted(val step: Step, val detail: String? = null) : ProvisionEvent()
+        data class StepCompleted(
+            val step: Step,
+            val detail: String? = null,
+        ) : ProvisionEvent()
 
-        data class Finished(val outcome: Outcome) : ProvisionEvent()
+        data class Finished(
+            val outcome: Outcome,
+        ) : ProvisionEvent()
     }
 }
 

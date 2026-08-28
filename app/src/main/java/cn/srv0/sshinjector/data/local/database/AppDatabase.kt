@@ -49,20 +49,19 @@ abstract class AppDatabase : RoomDatabase() {
                 }
             }
 
-        fun getInstance(context: Context): AppDatabase {
-            return INSTANCE ?: synchronized(this) {
+        fun getInstance(context: Context): AppDatabase =
+            INSTANCE ?: synchronized(this) {
                 val instance =
-                    Room.databaseBuilder(
-                        context.applicationContext,
-                        AppDatabase::class.java,
-                        "sshinjector.db",
-                    )
-                        .addMigrations(MIGRATION_2_3)
+                    Room
+                        .databaseBuilder(
+                            context.applicationContext,
+                            AppDatabase::class.java,
+                            "sshinjector.db",
+                        ).addMigrations(MIGRATION_2_3)
                         .addMigrations(MIGRATION_3_4)
                         .build()
                 INSTANCE = instance
                 instance
             }
-        }
     }
 }

@@ -18,9 +18,7 @@ class AndroidKeyStoreIdentity(
 ) : Identity {
     override fun setPassphrase(passphrase: ByteArray?): Boolean = true
 
-    override fun getPublicKeyBlob(): ByteArray {
-        return publicKeyBytes
-    }
+    override fun getPublicKeyBlob(): ByteArray = publicKeyBytes
 
     override fun getName(): String = fullAlias
 
@@ -204,8 +202,14 @@ class AndroidKeyStoreIdentity(
             val algName = if (coordSize == 48) "ecdsa-sha2-nistp384" else "ecdsa-sha2-nistp256"
             val curveName = if (coordSize == 48) "nistp384" else "nistp256"
 
-            val x = publicKey.w.affineX.toByteArray().let { trimLeadingZero(it, coordSize) }
-            val y = publicKey.w.affineY.toByteArray().let { trimLeadingZero(it, coordSize) }
+            val x =
+                publicKey.w.affineX
+                    .toByteArray()
+                    .let { trimLeadingZero(it, coordSize) }
+            val y =
+                publicKey.w.affineY
+                    .toByteArray()
+                    .let { trimLeadingZero(it, coordSize) }
 
             val buf = ByteArrayOutputStream()
             writeString(buf, algName.toByteArray())

@@ -163,8 +163,7 @@ fun DraggableNavIcon(
             modifier
                 .pointerInput(Unit) {
                     detectTapGestures { onClick() }
-                }
-                .pointerInput(Unit) {
+                }.pointerInput(Unit) {
                     detectDragGestures { change, dragAmount ->
                         change.consume()
                         onDragDelta(dragAmount)

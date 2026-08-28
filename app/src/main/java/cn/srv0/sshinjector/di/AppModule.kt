@@ -29,35 +29,25 @@ object AppModule {
     @Singleton
     fun provideAppDatabase(
         @ApplicationContext context: Context,
-    ): AppDatabase {
-        return AppDatabase.getInstance(context)
-    }
+    ): AppDatabase = AppDatabase.getInstance(context)
 
     @Provides
     @Singleton
-    fun provideServerDao(db: AppDatabase): cn.srv0.sshinjector.data.local.dao.ServerDao {
-        return db.serverDao()
-    }
+    fun provideServerDao(db: AppDatabase): cn.srv0.sshinjector.data.local.dao.ServerDao = db.serverDao()
 
     @Provides
     @Singleton
-    fun provideWhitelistDao(db: AppDatabase): cn.srv0.sshinjector.data.local.dao.WhitelistDao {
-        return db.whitelistDao()
-    }
+    fun provideWhitelistDao(db: AppDatabase): cn.srv0.sshinjector.data.local.dao.WhitelistDao = db.whitelistDao()
 
     @Provides
     @Singleton
     fun provideSettingsDataStore(
         @ApplicationContext context: Context,
-    ): SettingsDataStore {
-        return SettingsDataStore(context)
-    }
+    ): SettingsDataStore = SettingsDataStore(context)
 
     @Provides
     @Singleton
-    fun provideCredentialCrypto(): CredentialCrypto {
-        return CredentialCrypto()
-    }
+    fun provideCredentialCrypto(): CredentialCrypto = CredentialCrypto()
 
     @Provides
     @Singleton
@@ -65,34 +55,26 @@ object AppModule {
         serverDao: cn.srv0.sshinjector.data.local.dao.ServerDao,
         whitelistDao: cn.srv0.sshinjector.data.local.dao.WhitelistDao,
         credentialCrypto: CredentialCrypto,
-    ): ServerRepository {
-        return ServerRepository(serverDao, whitelistDao, credentialCrypto)
-    }
+    ): ServerRepository = ServerRepository(serverDao, whitelistDao, credentialCrypto)
 
     @Provides
     @Singleton
     fun provideSshKeyManager(
         @ApplicationContext context: Context,
-    ): SshKeyManager {
-        return SshKeyManager(context)
-    }
+    ): SshKeyManager = SshKeyManager(context)
 
     @Provides
     @Singleton
     fun provideKnownHostsManager(
         @ApplicationContext context: Context,
-    ): KnownHostsManager {
-        return KnownHostsManager(context)
-    }
+    ): KnownHostsManager = KnownHostsManager(context)
 
     @Provides
     @Singleton
     fun provideJschSshClient(
         keyManager: SshKeyManager,
         knownHostsManager: KnownHostsManager,
-    ): JschSshClient {
-        return JschSshClient(keyManager, knownHostsManager)
-    }
+    ): JschSshClient = JschSshClient(keyManager, knownHostsManager)
 
     @Provides
     @Singleton
@@ -103,22 +85,16 @@ object AppModule {
     fun providePacketProcessor(
         tunnelManager: TunnelManager,
         sshIoDispatcher: SshIoDispatcher,
-    ): PacketProcessor {
-        return PacketProcessor(tunnelManager, sshIoDispatcher)
-    }
+    ): PacketProcessor = PacketProcessor(tunnelManager, sshIoDispatcher)
 
     @Provides
     @Singleton
-    fun provideDnsInterceptor(): DnsInterceptor {
-        return DnsInterceptor()
-    }
+    fun provideDnsInterceptor(): DnsInterceptor = DnsInterceptor()
 
     @Provides
     @Singleton
     fun provideServerProvisioner(
         @ApplicationContext context: Context,
         commandExecutor: RemoteCommandExecutor,
-    ): ServerProvisionerContract {
-        return ServerProvisioner(context, commandExecutor)
-    }
+    ): ServerProvisionerContract = ServerProvisioner(context, commandExecutor)
 }
