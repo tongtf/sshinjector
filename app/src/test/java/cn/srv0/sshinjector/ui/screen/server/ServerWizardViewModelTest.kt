@@ -1,10 +1,10 @@
 package cn.srv0.sshinjector.ui.screen.server
 
-import cn.srv0.sshinjector.data.local.dao.ServerDao
 import cn.srv0.sshinjector.data.remote.ssh.SshKeyManager
 import cn.srv0.sshinjector.domain.model.LoginCredential
 import cn.srv0.sshinjector.domain.model.ServerProvisionerContract
 import cn.srv0.sshinjector.domain.model.ServerProvisioning
+import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
@@ -20,6 +20,7 @@ import org.junit.Before
 import org.junit.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
+import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
@@ -29,17 +30,17 @@ import org.mockito.kotlin.whenever
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class ServerWizardViewModelTest {
-    private lateinit var serverDao: ServerDao
+    private lateinit var serverRepository: ServerRepository
     private lateinit var keyManager: SshKeyManager
     private lateinit var provisioner: ServerProvisionerContract
     private lateinit var viewModel: ServerWizardViewModel
 
     @Before
     fun setUp() {
-        serverDao = mock()
+        serverRepository = mock()
         keyManager = mock()
         provisioner = mock()
-        viewModel = ServerWizardViewModel(serverDao, keyManager, provisioner)
+        viewModel = ServerWizardViewModel(serverRepository, keyManager, provisioner)
     }
 
     @After
@@ -109,7 +110,7 @@ class ServerWizardViewModelTest {
                     ),
                 ),
             )
-            whenever(serverDao.insert(any())).thenReturn(1L)
+            whenever(serverRepository.saveServerEdit(any(), any(), any())).thenReturn(1L)
 
             viewModel.setServerName("my vps")
             viewModel.setHost("example.com")
@@ -127,12 +128,12 @@ class ServerWizardViewModelTest {
 
             viewModel.save {}
             testScheduler.advanceUntilIdle()
-            val captor = argumentCaptor<cn.srv0.sshinjector.data.local.entity.ServerEntity>()
-            verify(serverDao).insert(captor.capture())
-            val entity = captor.firstValue
-            assertEquals("sshproxy", entity.username)
-            assertEquals("example.com", entity.host)
-            assertEquals(22, entity.port)
+            val captor = argumentCaptor<cn.srv0.sshinjector.domain.model.ServerConfig>()
+            verify(serverRepository).saveServerEdit(eq(-1L), captor.capture(), eq(false))
+            val config = captor.firstValue
+            assertEquals("sshproxy", config.username)
+            assertEquals("example.com", config.host)
+            assertEquals(22, config.port)
             assertTrue(viewModel.saved.value)
         }
 
@@ -151,7 +152,7 @@ class ServerWizardViewModelTest {
                     ),
                 ),
             )
-            whenever(serverDao.insert(any())).thenReturn(1L)
+            whenever(serverRepository.saveServerEdit(any(), any(), any())).thenReturn(1L)
 
             viewModel.setServerName("vps")
             viewModel.setHost("example.com")
@@ -166,8 +167,8 @@ class ServerWizardViewModelTest {
 
             viewModel.save {}
             testScheduler.advanceUntilIdle()
-            val captor = argumentCaptor<cn.srv0.sshinjector.data.local.entity.ServerEntity>()
-            verify(serverDao).insert(captor.capture())
+            val captor = argumentCaptor<cn.srv0.sshinjector.domain.model.ServerConfig>()
+            verify(serverRepository).saveServerEdit(eq(-1L), captor.capture(), eq(false))
             assertEquals("sshproxy", captor.firstValue.username)
         }
 

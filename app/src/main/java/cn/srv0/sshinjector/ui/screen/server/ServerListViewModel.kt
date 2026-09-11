@@ -4,8 +4,8 @@ import android.app.Application
 import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import cn.srv0.sshinjector.data.local.dao.ServerDao
-import cn.srv0.sshinjector.data.local.entity.ServerEntity
+import cn.srv0.sshinjector.domain.model.ServerConfig
+import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import cn.srv0.sshinjector.vpn.SshVpnService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -20,9 +20,9 @@ class ServerListViewModel
     @Inject
     constructor(
         application: Application,
-        private val serverDao: ServerDao,
+        private val serverRepository: ServerRepository,
     ) : AndroidViewModel(application) {
-        private val _servers = MutableStateFlow<List<ServerEntity>>(emptyList())
+        private val _servers = MutableStateFlow<List<ServerConfig>>(emptyList())
         val servers = _servers.asStateFlow()
 
         private val _connectingServerId = MutableStateFlow<Long?>(null)
@@ -33,24 +33,24 @@ class ServerListViewModel
 
         init {
             viewModelScope.launch {
-                serverDao.getAll().collect { _servers.value = it }
+                serverRepository.allServersFlow.collect { _servers.value = it }
             }
         }
 
         fun delete(id: Long) {
             viewModelScope.launch {
-                val wasActive = serverDao.getByIdBlocking(id)?.isActive == true
-                serverDao.delete(id)
+                val wasActive = serverRepository.getServerById(id)?.isActive == true
+                serverRepository.deleteServer(id)
                 // 删除默认服务器后, 提升一条其他服务器作为默认 (若有)
                 if (wasActive) {
-                    serverDao.getAllBlocking().firstOrNull()?.let { serverDao.setActive(it.id) }
+                    serverRepository.getAllServers().firstOrNull()?.let { serverRepository.setActiveServer(it.id) }
                 }
             }
         }
 
         fun setActive(id: Long) {
             viewModelScope.launch {
-                serverDao.setActive(id)
+                serverRepository.setActiveServer(id)
             }
         }
 
@@ -59,11 +59,11 @@ class ServerListViewModel
          */
         fun toggleDefault(id: Long) {
             viewModelScope.launch {
-                val server = serverDao.getByIdBlocking(id)
+                val server = serverRepository.getServerById(id)
                 if (server?.isActive == true) {
-                    serverDao.deactivateAll()
+                    serverRepository.deactivateAllServers()
                 } else {
-                    serverDao.setActive(id)
+                    serverRepository.setActiveServer(id)
                 }
             }
         }

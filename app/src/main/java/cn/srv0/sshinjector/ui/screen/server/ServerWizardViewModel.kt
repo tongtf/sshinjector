@@ -3,12 +3,12 @@ package cn.srv0.sshinjector.ui.screen.server
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cn.srv0.sshinjector.R
-import cn.srv0.sshinjector.data.local.dao.ServerDao
-import cn.srv0.sshinjector.data.local.entity.ServerEntity
 import cn.srv0.sshinjector.data.remote.ssh.SshKeyManager
 import cn.srv0.sshinjector.domain.model.LoginCredential
+import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.model.ServerProvisionerContract
 import cn.srv0.sshinjector.domain.model.ServerProvisioning
+import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -52,7 +52,7 @@ sealed class WizardResult {
 class ServerWizardViewModel
     @Inject
     constructor(
-        private val serverDao: ServerDao,
+        private val serverRepository: ServerRepository,
         private val keyManager: SshKeyManager,
         private val provisioner: ServerProvisionerContract,
     ) : ViewModel() {
@@ -227,16 +227,18 @@ class ServerWizardViewModel
                 (_result.value as? WizardResult.Success)?.account
                     ?: ServerProvisioning.TUNNEL_ACCOUNT
             viewModelScope.launch {
-                serverDao.insert(
-                    ServerEntity(
+                serverRepository.saveServerEdit(
+                    -1L,
+                    ServerConfig(
                         name = _serverName.value,
                         host = _host.value,
                         port = _port.value.toIntOrNull() ?: 22,
                         username = account,
                         keyAlias = alias,
-                        keyAlgorithm = "ECDSA_P256",
+                        keyAlgorithm = ServerConfig.KeyAlgorithm.ECDSA_P256,
                         isActive = false,
                     ),
+                    setAsDefault = false,
                 )
                 _saved.value = true
                 onDone()

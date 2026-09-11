@@ -58,7 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.srv0.sshinjector.R
-import cn.srv0.sshinjector.data.local.entity.ServerEntity
+import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.ui.component.rememberClickGuard
 import kotlinx.coroutines.launch
 
@@ -172,8 +172,8 @@ fun ServerEditScreen(
                                     scope.launch { snackbarHostState.showSnackbar(firstErrorMessage.orEmpty()) }
                                     return@guard
                                 }
-                                val entity =
-                                    ServerEntity(
+                                val config =
+                                    ServerConfig(
                                         id = if (isNew) 0 else serverId,
                                         name = name,
                                         host = host,
@@ -186,7 +186,7 @@ fun ServerEditScreen(
                                         keepAliveInterval = keepAlive.toIntOrNull() ?: 30,
                                         socksPort = socksPort.toIntOrNull() ?: 1080,
                                     )
-                                viewModel.save(serverId, entity, onSave, setAsDefault)
+                                viewModel.save(serverId, config, onSave, setAsDefault)
                             }
                         },
                     ) {

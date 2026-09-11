@@ -52,7 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.srv0.sshinjector.R
-import cn.srv0.sshinjector.data.local.entity.ServerEntity
+import cn.srv0.sshinjector.domain.model.ServerConfig
 
 @OptIn(ExperimentalMaterial3Api::class)
 @SuppressLint("LocalContextGetResourceValueCall")
@@ -236,7 +236,7 @@ fun ServerListScreen(
 
 @Composable
 fun ServerCard(
-    server: ServerEntity,
+    server: ServerConfig,
     isConnecting: Boolean = false,
     onEdit: () -> Unit,
     onConnect: () -> Unit,

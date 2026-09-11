@@ -24,6 +24,8 @@ data class ServerConfig(
     val password: String? = null, // 可选：SSH 密码认证
     val socksPort: Int = 1080, // 本地 SOCKS5 监听端口
     val hostKeyFingerprint: String? = null, // SSH Host Key 指纹 (SHA256)
+    val keyPassphrase: String? = null, // 私钥 passphrase（遗留，由 SshKeyManager 独立管理）
+    val remoteDnsServer: String = "8.8.8.8", // REMOTE 模式 DNS 解析服务器
 ) {
     enum class KeyAlgorithm { Ed25519, RSA4096, ECDSA_P256 }
 

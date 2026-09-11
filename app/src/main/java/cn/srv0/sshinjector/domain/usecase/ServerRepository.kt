@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import java.util.Date
 import javax.inject.Inject
 import cn.srv0.sshinjector.data.local.entity.DnsMode as EntityDnsMode
 
@@ -63,6 +64,59 @@ class ServerRepository
             withContext(Dispatchers.IO) {
                 serverDao.update(config.toEntity(credentialCrypto))
             }
+
+        /**
+         * 编辑/新建服务器并保留表单未展示的字段（已加密密码、指纹、DNS 模式等）。
+         *
+         * 凭据加密与不可编辑字段保留统一收敛于此，UI 层不再直连 DAO：
+         * - existingId == -1L 视为新建；否则加载既有实体并合并可编辑字段。
+         * - 密码仅在表单提供时重新加密，否则原样保留已加密密文（字节稳定）。
+         * - setAsDefault 为真时将该服务器设为唯一激活项。
+         */
+        suspend fun saveServerEdit(
+            existingId: Long,
+            incoming: ServerConfig,
+            setAsDefault: Boolean = false,
+        ): Long =
+            withContext(Dispatchers.IO) {
+                val id =
+                    if (existingId == -1L) {
+                        serverDao.insert(incoming.toEntity(credentialCrypto).copy(isActive = false))
+                    } else {
+                        val existing = serverDao.getByIdBlocking(existingId) ?: return@withContext existingId
+                        val originalIsActive = existing.isActive
+                        val merged = mergeForEdit(existing, incoming)
+                        serverDao.update(merged.copy(isActive = if (setAsDefault) false else originalIsActive))
+                        existingId
+                    }
+                if (setAsDefault) {
+                    serverDao.setActive(id)
+                }
+                id
+            }
+
+        /**
+         * 编辑合并：以既有实体为基底，仅覆盖表单可编辑字段。密码仅在提供时重新加密，
+         * 否则原样保留已加密密文（字节稳定）；keyAlgorithm/keyPassphrase/hostKeyFingerprint/
+         * dnsMode/remoteDnsServer/allowedPackages/excludedRoutes/createdAt 全部沿用既有值。
+         */
+        private fun mergeForEdit(
+            existing: ServerEntity,
+            incoming: ServerConfig,
+        ): ServerEntity =
+            existing.copy(
+                name = incoming.name,
+                host = incoming.host,
+                port = incoming.port,
+                username = incoming.username,
+                keyAlias = incoming.keyAlias,
+                enableIPv6 = incoming.enableIPv6,
+                mtu = incoming.mtu,
+                keepAliveInterval = incoming.keepAliveInterval,
+                socksPort = incoming.socksPort,
+                password = incoming.password?.let { credentialCrypto.encrypt(it) } ?: existing.password,
+                updatedAt = Date(),
+            )
 
         suspend fun deleteServer(id: Long) =
             withContext(Dispatchers.IO) {
@@ -151,6 +205,8 @@ private fun ServerEntity.toDomain(credentialCrypto: CredentialCrypto): ServerCon
         excludedRoutes = parseJsonStringList(excludedRoutes),
         socksPort = socksPort,
         hostKeyFingerprint = hostKeyFingerprint,
+        keyPassphrase = keyPassphrase,
+        remoteDnsServer = remoteDnsServer,
     )
 
 private fun ServerConfig.toEntity(credentialCrypto: CredentialCrypto): ServerEntity =
@@ -179,6 +235,8 @@ private fun ServerConfig.toEntity(credentialCrypto: CredentialCrypto): ServerEnt
         createdAt = createdAt,
         updatedAt = updatedAt,
         hostKeyFingerprint = hostKeyFingerprint,
+        keyPassphrase = keyPassphrase,
+        remoteDnsServer = remoteDnsServer,
     )
 
 private fun parseJsonStringList(json: String?): List<String> {
