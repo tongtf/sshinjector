@@ -18,6 +18,7 @@ import cn.srv0.sshinjector.domain.model.ConnectionStats
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import cn.srv0.sshinjector.domain.usecase.VpnController
+import cn.srv0.sshinjector.domain.vpn.VpnNetwork
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -309,7 +310,7 @@ class SshVpnService : VpnService() {
             Builder()
                 .setSession("SSHInjector VPN")
                 .addAddress("10.0.0.1", 24)
-                .addDnsServer("10.0.0.2")
+                .addDnsServer(VpnNetwork.TUN_IP)
                 .setMtu(config.mtu)
                 .setBlocking(true)
 
@@ -352,7 +353,7 @@ class SshVpnService : VpnService() {
                 if (config.enableIPv6) {
                     builder.addRoute("fd00::", 8)
                 }
-                builder.addRoute("10.0.0.2", 32)
+                builder.addRoute(VpnNetwork.TUN_IP, 32)
             }
         }
 

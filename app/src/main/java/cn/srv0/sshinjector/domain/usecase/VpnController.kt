@@ -7,8 +7,10 @@ import cn.srv0.sshinjector.data.local.DomainListManager
 import cn.srv0.sshinjector.domain.model.ConnectionStats
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.model.VpnState
+import cn.srv0.sshinjector.domain.vpn.CidrRoute
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
 import cn.srv0.sshinjector.domain.vpn.PacketProcessor
+import cn.srv0.sshinjector.domain.vpn.VpnNetwork
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelConfig
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -103,11 +105,6 @@ class VpnController
             _logFlow.tryEmit(message to level)
         }
 
-        private data class CidrRoute(
-            val network: InetAddress,
-            val prefixLength: Int,
-        )
-
         companion object {
             private const val TAG = "VpnController"
             private const val IPPROTO_TCP = 6
@@ -117,42 +114,6 @@ class VpnController
             private const val CONNECTION_CLEANUP_INTERVAL_MS = 60000L
             private const val STALE_CONNECTION_TIMEOUT_MS = 300000L
             private const val STATS_FLUSH_INTERVAL_MS = 100L
-
-            private fun parseCidr(cidr: String): CidrRoute? {
-                try {
-                    val parts = cidr.split("/")
-                    if (parts.size != 2) return null
-                    val ip = InetAddress.getByName(parts[0])
-                    val prefix = parts[1].toIntOrNull() ?: return null
-                    return CidrRoute(ip, prefix)
-                } catch (_: Exception) {
-                    return null
-                }
-            }
-
-            private fun ipMatchesCidr(
-                ip: InetAddress,
-                route: CidrRoute,
-            ): Boolean {
-                val ipBytes = ip.address
-                val netBytes = route.network.address
-                if (ipBytes.size != netBytes.size) return false
-
-                val prefixLen = route.prefixLength
-                val fullBytes = prefixLen / 8
-                val remainingBits = prefixLen % 8
-
-                for (i in 0 until fullBytes) {
-                    if (ipBytes[i] != netBytes[i]) return false
-                }
-                if (remainingBits > 0) {
-                    val mask = (0xFF shl (8 - remainingBits))
-                    if ((ipBytes[fullBytes].toInt() and mask) != (netBytes[fullBytes].toInt() and mask)) {
-                        return false
-                    }
-                }
-                return true
-            }
         }
 
         /**
@@ -174,7 +135,7 @@ class VpnController
 
             return try {
                 // 1. 启动隧道插件
-                val tunnelConfig = buildTunnelConfig(server, password)
+                val tunnelConfig = TunnelConfig.forSocks5(server, password)
                 addLog("正在连接隧道 (socks5)...", cn.srv0.sshinjector.ui.viewmodel.LogLevel.INFO)
                 val tunnelResult = tunnelManager.startPlugin("socks5", tunnelConfig)
                 if (tunnelResult.isFailure) {
@@ -226,7 +187,7 @@ class VpnController
                 addLog("DNS 拦截器已配置 (模式: $transportMode)", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
 
                 // 4. 解析排除路由 (CIDR)
-                excludedRoutes = currentServer?.excludedRoutes?.mapNotNull { parseCidr(it) } ?: emptyList()
+                excludedRoutes = currentServer?.excludedRoutes?.mapNotNull { CidrRoute.parse(it) } ?: emptyList()
 
                 // SYSTEM 模式: 获取 DHCP 分配的 DNS 服务器，添加到绕过列表
                 if (transportMode == DnsInterceptor.DnsTransport.SYSTEM) {
@@ -394,7 +355,7 @@ class VpnController
             val commonDohEndpoints = emptyList<CidrRoute>()
             val dnsExcludes = emptyList<CidrRoute>()
 
-            val baseRoutes = currentServer?.excludedRoutes?.mapNotNull { parseCidr(it) } ?: emptyList()
+            val baseRoutes = currentServer?.excludedRoutes?.mapNotNull { CidrRoute.parse(it) } ?: emptyList()
             excludedRoutes = baseRoutes + commonDohEndpoints + dnsExcludes
             addLog(
                 "DNS 模式已切换: $transportMode, 排除路由: ${excludedRoutes.size} 条",
@@ -691,7 +652,7 @@ class VpnController
         }
 
         private fun shouldBypassVpn(dstIp: InetAddress): Boolean {
-            val result = excludedRoutes.any { ipMatchesCidr(dstIp, it) }
+            val result = excludedRoutes.any { CidrRoute.matches(dstIp, it) }
             if (result) {
                 android.util.Log.d(
                     "VpnController",
@@ -703,7 +664,7 @@ class VpnController
 
         private fun writeDnsResponse(response: DnsInterceptor.DnsResponse) {
             try {
-                val vpnIp = InetAddress.getByName("10.0.0.2")
+                val vpnIp = InetAddress.getByName(VpnNetwork.TUN_IP)
                 val packet =
                     packetProcessor.buildUdpResponsePacket(
                         srcIp = vpnIp.address,
@@ -867,7 +828,7 @@ class VpnController
                         srcPort = 53
                     }
 
-                    val vpnIp = InetAddress.getByName("10.0.0.2")
+                    val vpnIp = InetAddress.getByName(VpnNetwork.TUN_IP)
                     val responsePkt =
                         packetProcessor.buildUdpResponsePacket(
                             srcIp = vpnIp.address,
@@ -943,25 +904,6 @@ class VpnController
             }
             return dnsList
         }
-
-        private fun buildTunnelConfig(
-            server: ServerConfig,
-            password: String?,
-        ): TunnelConfig =
-            TunnelConfig.Socks5(
-                sshHost = server.host,
-                sshPort = server.port,
-                sshUsername = server.username,
-                sshKeyAlias = server.keyAlias,
-                sshPassword = password ?: server.password,
-                sshKeyAlgorithm = server.keyAlgorithm.name,
-                common =
-                    TunnelConfig.CommonConfig(
-                        connectTimeout = server.connectTimeout,
-                        keepAliveInterval = server.keepAliveInterval,
-                    ),
-                socksPort = server.socksPort,
-            )
 
         fun getCurrentServer(): ServerConfig? = currentServer
 

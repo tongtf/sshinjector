@@ -1,5 +1,7 @@
 package cn.srv0.sshinjector.domain.vpn.tunnel
 
+import cn.srv0.sshinjector.domain.model.ServerConfig
+
 sealed class TunnelConfig {
     abstract val common: CommonConfig
 
@@ -18,4 +20,29 @@ sealed class TunnelConfig {
         val sshKeyAlgorithm: String = "ECDSA_P256",
         val socksPort: Int = 1080,
     ) : TunnelConfig()
+
+    companion object {
+        /**
+         * 从 domain [ServerConfig] 构建 SOCKS5-over-SSH 隧道配置。
+         * 显式 [password] 优先于服务器存储的密码（运行时覆盖）。
+         */
+        fun forSocks5(
+            server: ServerConfig,
+            password: String? = null,
+        ): Socks5 =
+            Socks5(
+                sshHost = server.host,
+                sshPort = server.port,
+                sshUsername = server.username,
+                sshKeyAlias = server.keyAlias,
+                sshPassword = password ?: server.password,
+                sshKeyAlgorithm = server.keyAlgorithm.name,
+                common =
+                    CommonConfig(
+                        connectTimeout = server.connectTimeout,
+                        keepAliveInterval = server.keepAliveInterval,
+                    ),
+                socksPort = server.socksPort,
+            )
+    }
 }
