@@ -21,6 +21,13 @@ buildscript {
             force("org.bouncycastle:bcpkix-jdk18on:1.85")
             force("org.bouncycastle:bcutil-jdk18on:1.85")
             force("org.apache.httpcomponents:httpmime:4.5.14")
+            // AGP UTP -> grpc-netty / ktlint-cli 传递依赖：统一升到已修复版本（Dependabot）
+            eachDependency {
+                when (requested.group) {
+                    "io.netty" -> useVersion("4.1.137.Final")
+                    "ch.qos.logback" -> useVersion("1.5.38")
+                }
+            }
         }
     }
 }
@@ -41,6 +48,13 @@ subprojects {
             force("org.apache.httpcomponents:httpcore:4.4.16")
             force("org.apache.httpcomponents:httpmime:4.5.14")
             force("com.google.protobuf:protobuf-java-util:4.35.1")
+            // 构建期传递依赖（ktlint-cli -> logback 等）：统一升到已修复版本（Dependabot）
+            eachDependency {
+                when (requested.group) {
+                    "io.netty" -> useVersion("4.1.137.Final")
+                    "ch.qos.logback" -> useVersion("1.5.38")
+                }
+            }
         }
     }
 }
