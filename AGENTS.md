@@ -57,7 +57,7 @@ JAVA_HOME=/usr/lib/jvm/jdk-17.0.19+10 ./gradlew ...
 ## Tests
 
 Unit tests in `app/src/test/java/cn/srv0/sshinjector/`. Concurrency-critical ones:
-- `Socks5BackpressureTest` — Channel outgoing backpressure must not lose/reorder data (previous ArrayDeque+suspended-slot queue **failed consistently**: accepted>consumed). Keep its wait loops **bounded** — an unbounded `while (pending != null) yield()` hung CI for 26min until the `lint-and-test` job's 30min timeout cancelled it; now uses a 30s deadline + explicit `fail`
+- `Socks5BackpressureTest` — Channel outgoing backpressure must not lose/reorder data (previous ArrayDeque+suspended-slot queue **failed consistently**: accepted>consumed). Keep its wait loops **bounded** — an unbounded `while (pending != null) yield()` hung CI for 26min until the `lint-and-test` job's 30min timeout cancelled it; now uses a 30s deadline + explicit `fail`. The simulated handoff must keep **"trySend-fail → pending slot publish" atomic under one lock** (mirrors production `backpressureLock`): without it, the writer can drain the buffer to empty in the gap and suspend on the (empty, not yet closed) channel while the producer then parks on the just-published slot → permanent deadlock (reproducible with ~20k items / slow runners; fixed 2026-09)
 - `SshIoDispatcherTest` — dynamic pool must cover 40 concurrent blocking tasks (no queue starvation)
 - `BoundedBackpressureQueue` was **deleted** (concurrency bug); don't reintroduce it.
 - `ServerFormValidatorTest` covers the shared host/port/MTU/keepAlive/username validation incl. the strict `InetAddress`-based IPv6 check (rejects `:::` / over-length groups while accepting `2400:cb00::2048` and `::1`).

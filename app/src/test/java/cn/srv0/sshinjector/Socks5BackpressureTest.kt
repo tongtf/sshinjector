@@ -17,6 +17,11 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * 验证 Socks5ProxyServer 出向背压(Channel + 连接级单槽挂起)在并发下不丢数据、不乱序。
  * 模拟: eventLoop trySend → 满则挂到单槽并暂停生产(suspendLocalRead) → 写协程消费后回填。
+ *
+ * handoff 竞态说明: "trySend 失败" 与 "pending.set(data)" 必须原子(同一把锁),
+ * 否则 writer 可能在这个窗口内把 buffer 抽干并挂起在空 channel 上,
+ * 生产者随后 park 在 pending != null → 永久死锁 (CI 慢 runner 上可复现)。
+ * 生产代码 Socks5ProxyServer 的 backpressureLock 正是覆盖 [trySend + slot 发布] 这一段。
  */
 class Socks5BackpressureTest {
     @Test
@@ -28,6 +33,8 @@ class Socks5BackpressureTest {
                     onBufferOverflow = BufferOverflow.SUSPEND,
                 )
             val pending = AtomicReference<ByteArray?>(null)
+            // 模拟生产代码 backpressureLock: 保护 [trySend 失败 → slot 发布] 与 writer 的 [接收 → 回填检查]
+            val handoffLock = Any()
             val produced = 10_000
             val consumed = AtomicInteger(0)
             val lastSeen = AtomicInteger(-1)
@@ -40,12 +47,14 @@ class Socks5BackpressureTest {
                         assertTrue("reordered v=$v last=${lastSeen.get()}", v > lastSeen.get())
                         lastSeen.set(v)
                         consumed.incrementAndGet()
-                        val p = pending.get()
-                        if (p != null && channel.trySend(p).isSuccess) pending.set(null)
+                        synchronized(handoffLock) {
+                            val p = pending.get()
+                            if (p != null && channel.trySend(p).isSuccess) pending.set(null)
+                        }
                     }
                 }
 
-            // 生产者: 满时数据已接受(挂到单槽), 暂停生产(等回填)再继续, 模拟 suspendLocalRead
+            // 生产者: 满时数据挂到连接级单槽(不丢, 已接受), 暂停生产(等回填)再继续, 模拟 suspendLocalRead
             var i = 0
             while (i < produced) {
                 val data =
@@ -53,12 +62,18 @@ class Socks5BackpressureTest {
                         it[0] = (i ushr 8).toByte()
                         it[1] = (i and 0xFF).toByte()
                     }
-                if (channel.trySend(data).isSuccess) {
-                    i++
-                } else {
-                    // 满: 数据挂到连接级单槽(不丢, 已接受), 暂停生产直到写协程回填
-                    pending.set(data)
-                    i++
+                var accepted = false
+                synchronized(handoffLock) {
+                    if (channel.trySend(data).isSuccess) {
+                        accepted = true
+                    } else {
+                        // 满: 数据挂到连接级单槽(不丢, 已接受)。与 trySend 同锁发布,
+                        // 保证 writer 的下一轮 [接收→检查] 必然看到它, 不会抽干后挂起。
+                        pending.set(data)
+                    }
+                }
+                i++
+                if (!accepted) {
                     val refillDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
                     while (pending.get() != null) {
                         // 有界等待: 若写协程异常终止, 30s 后转为明确失败而非永久挂起 (CI 曾 26min 超时)
@@ -72,7 +87,7 @@ class Socks5BackpressureTest {
             channel.close()
             writer.join()
 
-            assertEquals("data loss accepted=$produced consumed=$consumed", produced, consumed.get())
+            assertEquals("data loss accepted=$produced consumed=${consumed.get()}", produced, consumed.get())
             assertEquals("last value", produced - 1, lastSeen.get())
         }
 }
