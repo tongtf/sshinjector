@@ -22,8 +22,6 @@ class CredentialCrypto
 
         fun decrypt(stored: String?): String? = cipher().decrypt(stored)
 
-        fun isEncrypted(value: String?): Boolean = value?.startsWith(AesGcmCipher.ENCRYPTED_PREFIX) == true
-
         private fun cipher(): AesGcmCipher = AesGcmCipher(getOrCreateKey())
 
         private fun getOrCreateKey(): SecretKey {

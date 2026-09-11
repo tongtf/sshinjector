@@ -597,11 +597,11 @@ class SshKeyManager
                         val x =
                             publicKey.w.affineX
                                 .toByteArray()
-                                .let { trimLeadingZero(it, coordSize) }
+                                .let { AndroidKeyStoreIdentity.trimLeadingZero(it, coordSize) }
                         val y =
                             publicKey.w.affineY
                                 .toByteArray()
-                                .let { trimLeadingZero(it, coordSize) }
+                                .let { AndroidKeyStoreIdentity.trimLeadingZero(it, coordSize) }
 
                         val blob = java.io.ByteArrayOutputStream()
                         writeString(blob, algName.toByteArray())
@@ -677,23 +677,6 @@ class SshKeyManager
             out.write(len shr 8 and 0xFF)
             out.write(len and 0xFF)
             out.write(data)
-        }
-
-        private fun trimLeadingZero(
-            bytes: ByteArray,
-            targetSize: Int,
-        ): ByteArray {
-            val trimmed =
-                if (bytes.size > targetSize && bytes[0].toInt() == 0) {
-                    bytes.copyOfRange(1, bytes.size)
-                } else {
-                    bytes
-                }
-            if (trimmed.size == targetSize) return trimmed
-            val result = ByteArray(targetSize)
-            val offset = targetSize - trimmed.size
-            System.arraycopy(trimmed, 0, result, offset, trimmed.size)
-            return result
         }
 
         fun createJSchIdentity(

@@ -69,12 +69,6 @@ class TcpStateMachine(
             SynSent,
             SynReceived,
             Established,
-            FinWait1,
-            FinWait2,
-            CloseWait,
-            Closing,
-            LastAck,
-            TimeWait,
             Closed,
         }
     }
@@ -125,20 +119,8 @@ class TcpStateMachine(
                 conn.browserSeq = (seqNum.toLong()) and UINT32_MASK
                 conn.state = TcpConnection.TcpState.SynSent
 
-                // Route through tunnel plugin or fallback to local SOCKS5
-                val hasActiveTunnel =
-                    try {
-                        tunnelManager.getActiveOrFallback()
-                        true
-                    } catch (_: Exception) {
-                        false
-                    }
-
-                if (hasActiveTunnel) {
-                    forwardSynToTunnel(conn)
-                } else {
-                    forwardSynToSocks(conn)
-                }
+                // 通过隧道插件建立连接 (内部取 active/fallback 插件; 失败由 forwardSynToTunnel 自身 try/catch 处理)
+                forwardSynToTunnel(conn)
             } else {
                 conn.browserSeq = (seqNum.toLong()) and UINT32_MASK
                 conn.lastActivity = System.currentTimeMillis()
@@ -496,13 +478,6 @@ class TcpStateMachine(
                 closeTcpConnection(connKey, conn)
             }
         }
-    }
-
-    /**
-     * 将 TCP SYN 转发到隧道插件建立连接 (fallback 路径)
-     */
-    private fun forwardSynToSocks(conn: TcpConnection) {
-        forwardSynToTunnel(conn)
     }
 
     /**

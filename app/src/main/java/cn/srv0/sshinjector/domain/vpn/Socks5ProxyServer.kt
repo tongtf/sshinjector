@@ -167,7 +167,7 @@ class Socks5ProxyServer
         private val pendingTunCallbacks = ConcurrentHashMap<Int, (ByteArray, Int, Int) -> Unit>()
 
         /**
-         * 注册 TUN 写回回调，由 PacketProcessor.forwardSynToSocks 调用
+         * 注册 TUN 写回回调，在 SYN 建立连接 (forwardSynToTunnel → 直连通道) 时调用
          */
         fun registerTunCallback(
             connectionId: Int,

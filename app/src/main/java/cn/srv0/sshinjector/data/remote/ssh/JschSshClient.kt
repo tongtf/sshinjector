@@ -33,6 +33,18 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
+ * 计算 SSH 主机密钥的 SHA-256 指纹 (OpenSSH 格式): "SHA256:<base64"。
+ * 文件级私有函数，KnownHostsManager 与 JschSshClient 共用，避免逻辑重复。
+ */
+private fun computeFingerprint(hostKey: HostKey): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    // JSch HostKey.getKey() 返回 OpenSSH 公钥字符串
+    val bytes = hostKey.getKey().toByteArray()
+    digest.update(bytes)
+    return "SHA256:" + Base64.encodeToString(digest.digest(), Base64.NO_WRAP)
+}
+
+/**
  * 单次远程命令执行结果。
  */
 data class ExecResult(
@@ -148,14 +160,6 @@ class KnownHostsManager
         private fun extractFingerprint(line: String): String {
             // 格式: host,port keytype base64key SHA256:fingerprint
             return line.split(" ").last()
-        }
-
-        private fun computeFingerprint(key: HostKey): String {
-            val digest = MessageDigest.getInstance("SHA-256")
-            // JSch HostKey.getKey() 返回 OpenSSH 公钥字符串
-            val bytes = key.getKey().toByteArray()
-            digest.update(bytes)
-            return "SHA256:" + Base64.encodeToString(digest.digest(), Base64.NO_WRAP)
         }
     }
 
@@ -567,14 +571,6 @@ class JschSshClient
             } catch (e: Exception) {
                 android.util.Log.w(TAG, "setChannelWindowSize failed: ${e.message}")
             }
-        }
-
-        private fun computeFingerprint(hostKey: HostKey): String {
-            val digest = MessageDigest.getInstance("SHA-256")
-            // JSch HostKey.getKey() 返回 OpenSSH 公钥字符串
-            val bytes = hostKey.getKey().toByteArray()
-            digest.update(bytes)
-            return "SHA256:" + Base64.encodeToString(digest.digest(), Base64.NO_WRAP)
         }
 
         private fun handleError(message: String) {

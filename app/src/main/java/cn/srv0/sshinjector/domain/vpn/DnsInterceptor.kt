@@ -350,13 +350,8 @@ class DnsInterceptor
             queryData: ByteArray,
             queryId: Int,
         ) {
-            when (transportMode) {
-                DnsTransport.SYSTEM, DnsTransport.DOMAIN_SPLIT -> sendDnsOverProtectedSocket(queryData, queryId)
-                else -> {
-                    Log.w(TAG, "sendDnsQuery called in non-SYSTEM mode ($transportMode), should not happen")
-                    onDnsResponse(queryId, ByteArray(0))
-                }
-            }
+            // 仅 SYSTEM / DOMAIN_SPLIT(域名未命中列表) 到达此处, 均通过受保护 socket 直查; else(REMOTE) 不可达
+            sendDnsOverProtectedSocket(queryData, queryId)
         }
 
         /**
@@ -377,7 +372,7 @@ class DnsInterceptor
                 // 获取系统真实 DNS 服务器 (pending.dstIp 是 VPN 网关 10.0.0.2，不是真实 DNS)
                 val dnsServer =
                     systemDnsServers.firstOrNull()
-                        ?: pending.dstIp?.hostAddress?.takeIf { it != "10.0.0.2" }
+                        ?: pending.dstIp?.hostAddress?.takeIf { it != VpnNetwork.TUN_IP }
                         ?: "8.8.8.8"
 
                 try {
