@@ -54,6 +54,13 @@ interface ServerDao {
     @Query("UPDATE servers SET isActive = CASE WHEN id = :activeId THEN 1 ELSE 0 END")
     suspend fun setActive(activeId: Long): Int
 
+    /** TOFU 首次连接后落库主机指纹（下次连接即强校验）；JSch KEX 线程同步调用，非 suspend。 */
+    @Query("UPDATE servers SET hostKeyFingerprint = :fingerprint WHERE id = :id")
+    fun updateHostKeyFingerprint(
+        id: Long,
+        fingerprint: String,
+    )
+
     @Query("SELECT COUNT(*) FROM servers")
     suspend fun count(): Int
 }

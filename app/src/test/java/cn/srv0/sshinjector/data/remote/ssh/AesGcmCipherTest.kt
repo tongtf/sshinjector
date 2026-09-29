@@ -2,6 +2,7 @@ package cn.srv0.sshinjector.data.remote.ssh
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -66,6 +67,23 @@ class AesGcmCipherTest {
     fun `ciphertext encrypted with a different key fails to decrypt`() {
         val other = AesGcmCipher(newAesKey())
         assertNull(other.decrypt(cipher.encrypt("pw")))
+    }
+
+    @Test
+    fun `encrypt failure propagates instead of degrading to plaintext`() {
+        val brokenKey =
+            object : SecretKey {
+                override fun getAlgorithm() = "NOT-A-CIPHER"
+
+                override fun getFormat() = null
+
+                override fun getEncoded() = null
+            }
+        val broken = AesGcmCipher(brokenKey)
+        val thrown = runCatching { broken.encrypt("pw") }.exceptionOrNull()
+        assertNotNull("加密失败必须抛出而非降级返回明文", thrown)
+        // 读端明文兼容不受影响 (不触碰密钥)
+        assertEquals("legacy-pass", broken.decrypt("legacy-pass"))
     }
 
     private fun newAesKey(): SecretKey {

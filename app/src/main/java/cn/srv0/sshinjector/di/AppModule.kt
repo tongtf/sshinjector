@@ -74,7 +74,8 @@ object AppModule {
     fun provideJschSshClient(
         keyManager: SshKeyManager,
         knownHostsManager: KnownHostsManager,
-    ): JschSshClient = JschSshClient(keyManager, knownHostsManager)
+        serverDao: cn.srv0.sshinjector.data.local.dao.ServerDao,
+    ): JschSshClient = JschSshClient(keyManager, knownHostsManager, serverDao)
 
     @Provides
     @Singleton

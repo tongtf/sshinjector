@@ -227,19 +227,25 @@ class ServerWizardViewModel
                 (_result.value as? WizardResult.Success)?.account
                     ?: ServerProvisioning.TUNNEL_ACCOUNT
             viewModelScope.launch {
-                serverRepository.saveServerEdit(
-                    -1L,
-                    ServerConfig(
-                        name = _serverName.value,
-                        host = _host.value,
-                        port = _port.value.toIntOrNull() ?: 22,
-                        username = account,
-                        keyAlias = alias,
-                        keyAlgorithm = ServerConfig.KeyAlgorithm.ECDSA_P256,
-                        isActive = false,
-                    ),
-                    setAsDefault = false,
-                )
+                try {
+                    serverRepository.saveServerEdit(
+                        -1L,
+                        ServerConfig(
+                            name = _serverName.value,
+                            host = _host.value,
+                            port = _port.value.toIntOrNull() ?: 22,
+                            username = account,
+                            keyAlias = alias,
+                            keyAlgorithm = ServerConfig.KeyAlgorithm.ECDSA_P256,
+                            isActive = false,
+                        ),
+                        setAsDefault = false,
+                    )
+                } catch (e: Exception) {
+                    // 加密失败不降级为明文——保存中止并提示重试，绝不落明文
+                    _error.tryEmit("加密失败，请重试: ${e.message}")
+                    return@launch
+                }
                 _saved.value = true
                 onDone()
             }

@@ -1,16 +1,18 @@
 package cn.srv0.sshinjector.data.remote.ssh
 
 import android.content.Context
-import android.util.Base64
 import android.util.Log
+import cn.srv0.sshinjector.data.local.dao.ServerDao
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.vpn.SshChannelFactory
 import cn.srv0.sshinjector.domain.vpn.TunnelChannel
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.HostKey
+import com.jcraft.jsch.HostKeyRepository
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.JSchException
 import com.jcraft.jsch.Session
+import com.jcraft.jsch.UserInfo
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +28,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileWriter
 import java.security.MessageDigest
+import java.util.Base64
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -34,14 +37,15 @@ import javax.inject.Singleton
 
 /**
  * 计算 SSH 主机密钥的 SHA-256 指纹 (OpenSSH 格式): "SHA256:<base64"。
- * 文件级私有函数，KnownHostsManager 与 JschSshClient 共用，避免逻辑重复。
+ * 文件级私有函数，KnownHostsManager、KnownHostsHostKeyRepository 与 JschSshClient 共用，避免逻辑重复。
+ * 用 java.util.Base64 (与 android.util.Base64 NO_WRAP 输出一致)，JVM 单测可直接断言。
  */
 private fun computeFingerprint(hostKey: HostKey): String {
     val digest = MessageDigest.getInstance("SHA-256")
-    // JSch HostKey.getKey() 返回 OpenSSH 公钥字符串
+    // JSch HostKey.getKey() 返回公钥 base64 字符串
     val bytes = hostKey.getKey().toByteArray()
     digest.update(bytes)
-    return "SHA256:" + Base64.encodeToString(digest.digest(), Base64.NO_WRAP)
+    return "SHA256:" + Base64.getEncoder().encodeToString(digest.digest())
 }
 
 /**
@@ -71,28 +75,9 @@ class KnownHostsManager
             }
         }
 
-        /**
-         * 检查主机密钥是否匹配
-         * @return true 如果匹配或首次连接(TOFU), false 如果不匹配
-         */
-        fun verifyHostKey(
-            host: String,
-            port: Int,
-            hostKey: HostKey,
-        ): Boolean {
-            val fingerprint = computeFingerprint(hostKey)
-            val storedLine = findHostLine(host, port)
-
-            return if (storedLine == null) {
-                // 首次连接：TOFU - 保存并接受
-                saveHostKey(host, port, hostKey)
-                true
-            } else {
-                // 验证指纹匹配
-                val storedFingerprint = extractFingerprint(storedLine)
-                storedFingerprint == fingerprint
-            }
-        }
+        /** known_hosts 文件路径（HostKeyRepository.getKnownHostsRepositoryID 用）。 */
+        val repositoryId: String
+            get() = knownHostsFile.absolutePath
 
         /**
          * 保存主机密钥到 known_hosts 文件
@@ -104,9 +89,9 @@ class KnownHostsManager
         ) {
             val fingerprint = computeFingerprint(hostKey)
             val keyType = hostKey.getType()
-            // JSch HostKey.getKey() 返回 OpenSSH 公钥字符串
+            // JSch HostKey.getKey() 返回公钥 base64 字符串
             val keyBytes = hostKey.getKey().toByteArray()
-            val keyBlob = Base64.encodeToString(keyBytes, Base64.NO_WRAP)
+            val keyBlob = Base64.getEncoder().encodeToString(keyBytes)
             val line = "$host,$port $keyType $keyBlob $fingerprint\n"
 
             synchronized(lock) {
@@ -152,6 +137,25 @@ class KnownHostsManager
             return line?.let { extractFingerprint(it) }
         }
 
+        /**
+         * 读取已存主机密钥，供 HostKeyRepository.getHostKey 的 @revoked 检查；行损坏返回 null。
+         * 行内 key 字段为 base64(base64(blob)) 双重编码（历史格式），解两次还原原始 blob。
+         */
+        fun getStoredHostKey(
+            host: String,
+            port: Int,
+        ): HostKey? {
+            val line = findHostLine(host, port) ?: return null
+            val parts = line.split(" ")
+            if (parts.size < 3) return null
+            return try {
+                val blob = Base64.getDecoder().decode(Base64.getDecoder().decode(parts[2]))
+                HostKey(host, blob)
+            } catch (_: Exception) {
+                null
+            }
+        }
+
         private fun findHostLine(
             host: String,
             port: Int,
@@ -162,6 +166,109 @@ class KnownHostsManager
             return line.split(" ").last()
         }
     }
+
+/**
+ * JSch HostKeyRepository 适配器：主机密钥校验发生在 KEX 内、userauth 之前
+ * （Session.checkHost，StrictHostKeyChecking=yes 时校验不过 connect() 直接失败）。
+ *
+ * - 构造时绑定 (host, port)：JSch 对非 22 端口传入 "[host]:port" 形式的 chost，
+ *   绑定值规避解析歧义，与 KnownHostsManager 的 "host,port" 键一致。
+ * - shkc=yes 下 JSch 对 NOT_INCLUDED 直接抛异常、不会自动 add——TOFU 保存必须在 check() 内完成。
+ * - 配置了 hostKeyFingerprint 时指纹为权威比对（匹配才 OK，否则 CHANGED）。
+ */
+internal class KnownHostsHostKeyRepository(
+    private val knownHosts: KnownHostsManager,
+    private val host: String,
+    private val port: Int,
+    private val expectedFingerprint: String?,
+    private val onFirstTrust: (fingerprint: String) -> Unit = {},
+) : HostKeyRepository {
+    override fun check(
+        chost: String,
+        key: ByteArray,
+    ): Int {
+        val fingerprint = fingerprintOf(key) ?: return HostKeyRepository.NOT_INCLUDED
+        val expected = expectedFingerprint
+        if (!expected.isNullOrEmpty()) {
+            return if (expected == fingerprint) HostKeyRepository.OK else HostKeyRepository.CHANGED
+        }
+        val stored = knownHosts.getStoredFingerprint(host, port)
+        if (stored == null) {
+            // TOFU：首连保存并信任；JSch 不会代为 add，必须在本函数内落盘
+            saveTofu(key, fingerprint)
+            return HostKeyRepository.OK
+        }
+        return if (stored == fingerprint) HostKeyRepository.OK else HostKeyRepository.CHANGED
+    }
+
+    override fun add(
+        hostkey: HostKey,
+        ui: UserInfo?,
+    ) {
+        val (h, p) = parseChost(hostkey.getHost())
+        knownHosts.saveHostKey(h, p, hostkey)
+    }
+
+    override fun remove(
+        chost: String,
+        type: String,
+    ) {
+        knownHosts.removeHostKey(host, port)
+    }
+
+    override fun remove(
+        chost: String,
+        type: String,
+        key: ByteArray?,
+    ) {
+        knownHosts.removeHostKey(host, port)
+    }
+
+    override fun getKnownHostsRepositoryID(): String = knownHosts.repositoryId
+
+    override fun getHostKey(): Array<HostKey> {
+        val key = knownHosts.getStoredHostKey(host, port) ?: return emptyArray()
+        return arrayOf(key)
+    }
+
+    override fun getHostKey(
+        chost: String?,
+        type: String?,
+    ): Array<HostKey> {
+        val key = knownHosts.getStoredHostKey(host, port) ?: return emptyArray()
+        return if (type == null || key.getType() == type) arrayOf(key) else emptyArray()
+    }
+
+    private fun fingerprintOf(key: ByteArray): String? =
+        try {
+            computeFingerprint(HostKey(host, HostKey.GUESS, key))
+        } catch (_: Exception) {
+            null
+        }
+
+    private fun saveTofu(
+        key: ByteArray,
+        fingerprint: String,
+    ) {
+        try {
+            knownHosts.saveHostKey(host, port, HostKey(host, HostKey.GUESS, key))
+            onFirstTrust(fingerprint)
+        } catch (e: Exception) {
+            Log.w("KnownHosts", "TOFU save failed for $host:$port: ${e.message}")
+        }
+    }
+
+    /** chost 可能为 "[host]:port"（非 22 端口）——剥壳取裸 host/port，裸名回退绑定端口。 */
+    private fun parseChost(chost: String): Pair<String, Int> {
+        if (chost.startsWith("[")) {
+            val sep = chost.indexOf("]:")
+            if (sep > 1) {
+                chost.substring(sep + 2).toIntOrNull()?.let { return chost.substring(1, sep) to it }
+            }
+        }
+        return chost to port
+    }
+}
 
 /**
  * SSH session pool wrapper: one SSH session + its own keepalive + health tracking
@@ -180,6 +287,7 @@ class JschSshClient
     constructor(
         private val keyManager: SshKeyManager,
         private val knownHostsManager: KnownHostsManager,
+        private val serverDao: ServerDao,
     ) : SshChannelFactory,
         RemoteCommandExecutor {
         companion object {
@@ -188,6 +296,34 @@ class JschSshClient
             private const val CHANNEL_WINDOW_SIZE = 8 * 1024 * 1024
             private const val CHANNEL_SEND_MAX_PACKET_SIZE = 64 * 1024
             private const val CHANNEL_CONNECT_TIMEOUT_MS = 10000
+
+            // S7 算法白名单。注意 JSch 0.2.x 的 session 配置键是 kex/server_host_key/cipher.c2s/mac.c2s,
+            // 写 KexAlgorithms/HostKeyAlgorithms/Cipher/MAC 不会被 Session 读取 (静默 no-op)。
+            internal const val KEX_ALGORITHMS =
+                "curve25519-sha256,curve25519-sha256@libssh.org," +
+                    "diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256"
+            internal const val HOST_KEY_ALGORITHMS =
+                "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521," +
+                    "rsa-sha2-512,rsa-sha2-256,ssh-rsa"
+            internal const val PUBKEY_ACCEPTED_ALGORITHMS =
+                "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521," +
+                    "rsa-sha2-512,rsa-sha2-256,ssh-rsa"
+            internal const val CIPHER_ALGORITHMS =
+                "aes128-gcm@openssh.com,aes256-gcm@openssh.com,aes128-ctr,aes256-ctr"
+            internal const val MAC_ALGORITHMS =
+                "hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256"
+
+            /** KEX/主机密钥/公钥/Cipher/MAC 白名单 (createSession 与 execSingleShot 共用)。 */
+            internal fun applyAlgorithmWhitelist(s: Session) {
+                s.setConfig("kex", KEX_ALGORITHMS)
+                s.setConfig("server_host_key", HOST_KEY_ALGORITHMS)
+                s.setConfig("PubkeyAcceptedAlgorithms", PUBKEY_ACCEPTED_ALGORITHMS)
+                // GCM(AEAD)优先, 兼容旧服务器用 CTR; 不含 CBC (无认证加密, BEAST 类攻击面)
+                s.setConfig("cipher.c2s", CIPHER_ALGORITHMS)
+                s.setConfig("cipher.s2c", CIPHER_ALGORITHMS)
+                s.setConfig("mac.c2s", MAC_ALGORITHMS)
+                s.setConfig("mac.s2c", MAC_ALGORITHMS)
+            }
 
             /**
              * JSch Channel 的窗口/包大小 setter 为包内可见, 只能反射调用。
@@ -272,8 +408,9 @@ class JschSshClient
         private fun createSession(
             config: ServerConfig,
             index: Int,
-        ): PooledSession? =
-            try {
+        ): PooledSession? {
+            var session: Session? = null
+            return try {
                 val jsch = JSch()
                 // JSch.setLogger 是全局静态，只设置一次
                 synchronized(JSch::class.java) {
@@ -310,6 +447,7 @@ class JschSshClient
                 }
 
                 val s = jsch.getSession(config.username, config.host, config.port)
+                session = s
                 if (!config.password.isNullOrEmpty()) {
                     val passwordBytes = config.password.toByteArray(Charsets.UTF_8)
                     try {
@@ -319,32 +457,28 @@ class JschSshClient
                         java.util.Arrays.fill(passwordBytes, 0)
                     }
                 }
-                // 先连接，获取主机密钥，然后验证
-                s.setConfig("StrictHostKeyChecking", "no") // 临时禁用，手动验证
+                // 主机密钥校验在 KEX 内完成（认证前拦截）；TOFU 首次保存后指纹落库，下次连接即强校验
+                s.setHostKeyRepository(
+                    KnownHostsHostKeyRepository(
+                        knownHostsManager,
+                        config.host,
+                        config.port,
+                        config.hostKeyFingerprint,
+                    ) { fp ->
+                        persistFingerprint(config, fp)
+                    },
+                )
+                s.setConfig("StrictHostKeyChecking", "yes")
                 s.setConfig("TCPNoDelay", "yes") // 禁用 Nagle, 降低 SSH 小包 (ACK/交互) 的 RTT
                 s.setConfig("PreferredAuthentications", "publickey,password")
                 s.setConfig("PubkeyAuthentication", "yes")
                 s.setConfig("PasswordAuthentication", "yes")
-                // 仅保留安全算法：移除 diffie-hellman-group1-sha1 (1024-bit, 已被攻破) 和 ssh-dss (DSA)
-                s.setConfig(
-                    "KexAlgorithms",
-                    "curve25519-sha256,curve25519-sha256@libssh.org," +
-                        "diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256",
-                )
-                s.setConfig(
-                    "HostKeyAlgorithms",
-                    "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,ssh-rsa",
-                )
-                s.setConfig(
-                    "PubkeyAcceptedAlgorithms",
-                    "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,ssh-rsa",
-                )
+                // KEX/主机密钥/Cipher/MAC 白名单 (移除 group1-sha1/ssh-dss/CBC/hmac-sha1)
+                applyAlgorithmWhitelist(s)
                 s.setTimeout(config.connectTimeout)
 
                 connectionState.value = ConnectionState.Authenticating
                 s.connect()
-
-                verifyHostKey(config, s.getHostKey())
 
                 val sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
                 val pooled = PooledSession(session = s, scope = sessionScope)
@@ -352,32 +486,26 @@ class JschSshClient
 
                 pooled
             } catch (e: Exception) {
+                // 校验/连接失败的 Session 必须断开，否则 socket + 线程泄漏
+                try {
+                    session?.disconnect()
+                } catch (_: Exception) {
+                }
                 android.util.Log.w(TAG, "createSession[$index] failed: ${e.message}")
                 null
             }
+        }
 
-        private fun verifyHostKey(
+        /** TOFU 首次保存后指纹落库（id=0 的临时 config 如 provisioning 跳过）。 */
+        private fun persistFingerprint(
             config: ServerConfig,
-            hostKey: HostKey?,
+            fingerprint: String,
         ) {
-            checkNotNull(hostKey) { "SSH 服务器未提供主机密钥" }
-
-            // 如果配置中已有预期指纹，优先验证
-            if (!config.hostKeyFingerprint.isNullOrEmpty()) {
-                val expectedFingerprint = config.hostKeyFingerprint!!
-                val actualFingerprint = computeFingerprint(hostKey)
-                check(expectedFingerprint == actualFingerprint) {
-                    "主机密钥指纹不匹配! 预期: $expectedFingerprint, 实际: $actualFingerprint. 可能遭受中间人攻击!"
-                }
-                Log.d(TAG, "Host key verified against configured fingerprint: $expectedFingerprint")
-            } else {
-                // TOFU 模式：使用 KnownHostsManager 验证/保存
-                val verified = knownHostsManager.verifyHostKey(config.host, config.port, hostKey)
-                check(verified) {
-                    "主机密钥已变更! 可能遭受中间人攻击! Host: ${config.host}:${config.port}"
-                }
-                // 更新当前配置中的指纹（首次连接时保存）
-                currentConfig = currentConfig?.copy(hostKeyFingerprint = computeFingerprint(hostKey))
+            if (config.id <= 0) return
+            try {
+                serverDao.updateHostKeyFingerprint(config.id, fingerprint)
+            } catch (e: Exception) {
+                Log.w(TAG, "updateHostKeyFingerprint failed: ${e.message}")
             }
         }
 
@@ -631,6 +759,8 @@ class JschSshClient
                         keyManager.createJSchIdentity(jsch, target.keyAlias)
                     }
                     val s = jsch.getSession(target.username, target.host, target.port)
+                    // 尽早赋值：connect/后续任何一步抛异常都由 finally 兜底 disconnect（修 Session 泄漏）
+                    session = s
                     if (!target.password.isNullOrEmpty()) {
                         val passwordBytes = target.password.toByteArray(Charsets.UTF_8)
                         try {
@@ -639,29 +769,24 @@ class JschSshClient
                             java.util.Arrays.fill(passwordBytes, 0)
                         }
                     }
-                    s.setConfig("StrictHostKeyChecking", "no")
+                    s.setHostKeyRepository(
+                        KnownHostsHostKeyRepository(
+                            knownHostsManager,
+                            config.host,
+                            config.port,
+                            config.hostKeyFingerprint,
+                        ) { fp ->
+                            persistFingerprint(config, fp)
+                        },
+                    )
+                    s.setConfig("StrictHostKeyChecking", "yes")
                     s.setConfig("PreferredAuthentications", "publickey,password")
                     s.setConfig("PubkeyAuthentication", "yes")
                     s.setConfig("PasswordAuthentication", "yes")
-                    s.setConfig(
-                        "KexAlgorithms",
-                        "curve25519-sha256,curve25519-sha256@libssh.org," +
-                            "diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256",
-                    )
-                    s.setConfig(
-                        "HostKeyAlgorithms",
-                        "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,ssh-rsa",
-                    )
-                    s.setConfig(
-                        "PubkeyAcceptedAlgorithms",
-                        "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,ssh-rsa",
-                    )
+                    applyAlgorithmWhitelist(s)
                     s.setTimeout(config.connectTimeout)
                     s.connect()
 
-                    verifyHostKey(config, s.getHostKey())
-
-                    session = s
                     val exec = s.openChannel("exec") as ChannelExec
                     channel = exec
                     exec.setCommand(command)

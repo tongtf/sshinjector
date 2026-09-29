@@ -4,6 +4,7 @@ import cn.srv0.sshinjector.data.local.dao.ServerDao
 import cn.srv0.sshinjector.data.local.dao.WhitelistDao
 import cn.srv0.sshinjector.data.local.entity.ServerEntity
 import cn.srv0.sshinjector.data.local.entity.WhitelistAppEntity
+import cn.srv0.sshinjector.data.remote.ssh.AesGcmCipher
 import cn.srv0.sshinjector.data.remote.ssh.CredentialCrypto
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.model.WhitelistApp
@@ -97,7 +98,8 @@ class ServerRepository
 
         /**
          * 编辑合并：以既有实体为基底，仅覆盖表单可编辑字段。密码仅在提供时重新加密，
-         * 否则原样保留已加密密文（字节稳定）；keyAlgorithm/keyPassphrase/hostKeyFingerprint/
+         * 否则原样保留已加密密文（字节稳定）；存量明文（无 enc:v1: 前缀）在下次保存时惰性重加密，
+         * 读端仍兼容明文。keyAlgorithm/keyPassphrase/hostKeyFingerprint/
          * dnsMode/remoteDnsServer/allowedPackages/excludedRoutes/createdAt 全部沿用既有值。
          */
         private fun mergeForEdit(
@@ -114,7 +116,10 @@ class ServerRepository
                 mtu = incoming.mtu,
                 keepAliveInterval = incoming.keepAliveInterval,
                 socksPort = incoming.socksPort,
-                password = incoming.password?.let { credentialCrypto.encrypt(it) } ?: existing.password,
+                password =
+                    incoming.password?.let { credentialCrypto.encrypt(it) }
+                        ?: existing.password?.takeIf { it.startsWith(AesGcmCipher.ENCRYPTED_PREFIX) }
+                        ?: existing.password?.let { credentialCrypto.encrypt(it) },
                 updatedAt = Date(),
             )
 

@@ -160,4 +160,36 @@ class ServerRepositoryTest {
             assertEquals("wiz", captor.firstValue.name)
             verify(serverDao, never()).setActive(any())
         }
+
+    @Test
+    fun `legacy plaintext password is re-encrypted on save without new password`() =
+        runTest {
+            Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+            whenever(serverDao.getByIdBlocking(7)).thenReturn(
+                ServerEntity(id = 7, name = "x", host = "h", username = "u", keyAlias = "k", password = "legacy-plain"),
+            )
+
+            repository.saveServerEdit(7, config(id = 7), setAsDefault = false)
+
+            val captor = argumentCaptor<ServerEntity>()
+            verify(serverDao).update(captor.capture())
+            assertEquals("enc:v1:legacy-plain", captor.firstValue.password)
+        }
+
+    @Test
+    fun `encrypt failure aborts save and never writes plaintext`() =
+        runTest {
+            Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+            whenever(credentialCrypto.encrypt(any())).thenThrow(RuntimeException("keystore down"))
+
+            val thrown =
+                runCatching {
+                    repository.saveServerEdit(-1L, config(password = "secret"), setAsDefault = false)
+                }.exceptionOrNull()
+
+            assertEquals("keystore down", thrown?.message)
+            verify(serverDao, never()).insert(any())
+            verify(serverDao, never()).update(any())
+            verify(serverDao, never()).setActive(any())
+        }
 }

@@ -15,7 +15,6 @@ import java.io.File
 /**
  * KnownHostsManager 的 TOFU 记录增删逻辑测试。
  * 用 mock Context 指向临时目录，不依赖 Android 运行时。
- * 注意：android.util.Base64 在 JVM 单测中返回 null，因此指纹断言仅校验行前缀存在。
  */
 class KnownHostsManagerTest {
     @get:Rule
@@ -67,7 +66,7 @@ class KnownHostsManagerTest {
     }
 
     @Test
-    fun `new host key accepted again after removal (re-TOFU)`() {
+    fun `saveHostKey writes record again after removal (re-TOFU)`() {
         writeKnownHosts("host.example,22 ecdsa-sha2-nistp256 AAAA SHA256:old")
         manager.removeHostKey("host.example", 22)
 
@@ -76,8 +75,10 @@ class KnownHostsManagerTest {
         whenever(hostKey.getKey()).thenReturn(freshKey)
         whenever(hostKey.type).thenReturn("ssh-ed25519")
 
-        // 无记录时 verifyHostKey 走 TOFU：保存并返回 true
-        assertTrue(manager.verifyHostKey("host.example", 22, hostKey))
-        assertTrue(knownHostsFile().readText().contains("host.example,22 "))
+        // 删除后可重新保存（TOFU 重签）
+        manager.saveHostKey("host.example", 22, hostKey)
+        val content = knownHostsFile().readText()
+        assertTrue(content.contains("host.example,22 "))
+        assertFalse(content.contains("SHA256:old"))
     }
 }

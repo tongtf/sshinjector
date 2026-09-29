@@ -115,7 +115,13 @@ class ServerEditViewModel
             setAsDefault: Boolean = false,
         ) {
             viewModelScope.launch {
-                serverRepository.saveServerEdit(serverId, config, setAsDefault)
+                try {
+                    serverRepository.saveServerEdit(serverId, config, setAsDefault)
+                } catch (e: Exception) {
+                    // 加密失败不降级为明文——保存中止并提示重试，绝不落明文
+                    _error.tryEmit("加密失败，请重试: ${e.message}")
+                    return@launch
+                }
                 _saved.value = true
                 onDone()
             }
