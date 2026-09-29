@@ -153,8 +153,13 @@ jobs:
       - name: Grant execute permission
         run: chmod +x ./gradlew
       
-      - name: Build Release APK & AAB
-        run: ./gradlew assembleRelease bundleRelease
+      - name: Build Release APK (ABI splits)
+        run: ./gradlew assembleRelease
+      
+      # AAB 构建必须禁掉 ABI split — AGP 9 下 splits+shrinkResources 与 bundleRelease
+      # 冲突 (issuetracker.google.com/402800800)。AAB 在 Play 侧本就按 ABI 自动分发。
+      - name: Build Release AAB (no APK splits)
+        run: ./gradlew bundleRelease -PforBundle
       
       - name: Upload Release Artifacts
         uses: actions/upload-artifact@v5

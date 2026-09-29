@@ -66,10 +66,13 @@ android {
         }
     }
 
-    // 按平台 (ABI) 拆分 APK, 减小安装包体积; x86 已无 Android 14+ 设备, 不打包
+    // 按平台 (ABI) 拆分 APK, 减小安装包体积; x86 已无 Android 14+ 设备, 不打包。
+    // -PforBundle 时禁用: AGP 9 下 splits+shrinkResources 与 bundleRelease 冲突
+    // (issuetracker 402800800 — buildReleasePreBundle 收到多份 per-ABI shrunk resources)。
+    // AAB 在 Play 侧本就按 ABI 自动分发, 不需要 APK splits。
     splits {
         abi {
-            isEnable = true
+            isEnable = !project.hasProperty("forBundle")
             reset()
             include("arm64-v8a", "armeabi-v7a", "x86_64")
             isUniversalApk = false

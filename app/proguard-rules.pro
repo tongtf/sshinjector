@@ -43,7 +43,7 @@
 -keepnames class * extends java.lang.Enum
 
 # L1: release 剥离 debug/info 日志 (保留 e/w 便于线上排查)
--assumenosideeffects android.util.Log {
+-assumenosideeffects class android.util.Log {
     public static int d(...);
     public static int i(...);
 }
