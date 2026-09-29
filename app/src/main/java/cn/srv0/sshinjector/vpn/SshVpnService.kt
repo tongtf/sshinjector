@@ -84,6 +84,12 @@ class SshVpnService : VpnService() {
         startId: Int,
     ): Int {
         when (intent?.action) {
+            null -> {
+                // F12-f: 系统回收后 START_STICKY 重启传 null intent —— 无 action 不做事,
+                // 立即 stopSelf 防止空转重启 (也避免未 startForeground 的 5s 超时)
+                stopSelf()
+                return START_NOT_STICKY
+            }
             ACTION_CONNECT -> {
                 // 必须立即启动前台服务，否则会崩溃
                 val notification =
@@ -114,7 +120,8 @@ class SshVpnService : VpnService() {
 
     override fun onRevoke() {
         android.util.Log.d("SshVpnService", "onRevoke called")
-        scope.launch { disconnect() }
+        // 系统回收 VPN (非用户意图): 保留 lastServerId, 重启后仍可续连
+        scope.launch { disconnect(userInitiated = false) }
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -158,7 +165,10 @@ class SshVpnService : VpnService() {
             val config: ServerConfig =
                 serverRepository.getServerById(serverId)
                     ?: throw IllegalArgumentException("Server not found")
-            currentServer = mergeGlobalSettings(config)
+            // 合并全局设置 (mtu/keepAlive/enableIPv6 全局优先) — 初次连接也必须用合并后的配置,
+            // 否则全局覆盖只在重建/重连路径生效 (S5 的 IPv6 路由依赖它)
+            val merged = mergeGlobalSettings(config)
+            currentServer = merged
 
             val dnsMode = settingsDataStore.dnsMode.first()
             val allowedPackages =
@@ -168,31 +178,31 @@ class SshVpnService : VpnService() {
                     emptyList()
                 }
 
-            // 记录连接配置日志
-
             // 启动前台服务
-            startForegroundWithNotification(config)
+            startForegroundWithNotification(merged)
 
             // 建立 VPN 接口
-            val fd = establishVpnInterface(config, allowedPackages, dnsMode)
+            val fd = establishVpnInterface(merged, allowedPackages, dnsMode)
             vpnController.setVpnInterface(fd)
 
             // 设置 VPN 保护函数 (用于 SYSTEM 模式 DNS 绕过)
             vpnController.setProtectFunction { socket ->
                 this.protect(socket)
             }
+            // F1: TCP 用户态直连的 protect (必须在 connect 前注入, 否则直连流量回环进 TUN)
+            vpnController.setProtectTcpFunction { socket -> this.protect(socket) }
 
             // 连接 VPN 控制器
-            val result = vpnController.connect(config, config.password)
+            val result = vpnController.connect(merged, merged.password)
             if (result.isFailure) {
                 throw result.exceptionOrNull() ?: Exception("Connection failed")
             }
 
-            serviceVpnState.value = DomainVpnState(status = DomainVpnState.VpnStatus.Connected, server = config)
+            serviceVpnState.value = DomainVpnState(status = DomainVpnState.VpnStatus.Connected, server = merged)
             serverRepository.setActiveServer(serverId)
             // 记录最后连接的服务器, 供开机自启 (BootReceiver) 使用
             settingsDataStore.setLastServerId(serverId)
-            updateNotification(config)
+            updateNotification(merged)
             startWhitelistObserver()
         } catch (e: Exception) {
             lastError.value = e.message
@@ -201,7 +211,7 @@ class SshVpnService : VpnService() {
                     status = DomainVpnState.VpnStatus.Failed,
                     error = e.message,
                 )
-            disconnect()
+            disconnect(userInitiated = false)
         }
     }
 
@@ -329,9 +339,8 @@ class SshVpnService : VpnService() {
             0 -> {
                 // REMOTE 模式: 全部流量走 VPN 隧道
                 builder.addRoute("0.0.0.0", 0)
-                if (config.enableIPv6) {
-                    builder.addRoute("::", 0)
-                }
+                // S5: IPv6 关闭也捕获 ::/0 后在 TUN 内丢弃 —— 关闭 = 不用 IPv6, 而非逃逸物理网卡
+                builder.addRoute("::", 0)
             }
             1 -> {
                 // SYSTEM 模式: 不添加路由，所有流量走物理网卡
@@ -342,9 +351,7 @@ class SshVpnService : VpnService() {
                 // 因此只有白名单非空时才添加全量路由。
                 if (allowedPackages.isNotEmpty()) {
                     builder.addRoute("0.0.0.0", 0)
-                    if (config.enableIPv6) {
-                        builder.addRoute("::", 0)
-                    }
+                    builder.addRoute("::", 0)
                 }
             }
             3 -> {
@@ -352,6 +359,9 @@ class SshVpnService : VpnService() {
                 builder.addRoute("198.18.0.0", 15)
                 if (config.enableIPv6) {
                     builder.addRoute("fd00::", 8)
+                } else {
+                    // S5: 关闭 IPv6 → 捕获全部 v6 后丢弃 (无 fd00 假 IP 时真实 v6 不得逃逸)
+                    builder.addRoute("::", 0)
                 }
                 builder.addRoute(VpnNetwork.TUN_IP, 32)
             }
@@ -443,17 +453,24 @@ class SshVpnService : VpnService() {
             .build()
     }
 
-    private suspend fun disconnect() {
-        android.util.Log.d("SshVpnService", "Starting disconnect...")
+    /**
+     * @param userInitiated true = 用户主动断开 (ACTION_DISCONNECT/onTaskRemoved):
+     *   清除激活状态与 lastServerId, 开机自启不再触发。false = 连接失败/系统回收等
+     *   非用户意图的清理, 保留 lastServerId 供重启后 BootReceiver 续连。
+     */
+    private suspend fun disconnect(userInitiated: Boolean = true) {
+        android.util.Log.d("SshVpnService", "Starting disconnect... userInitiated=$userInitiated")
 
         // 0. 停止白名单观察者
         whitelistObserverJob?.cancel()
         whitelistObserverJob = null
 
-        // 0. 清除所有服务器的激活状态
-        serverRepository.deactivateAllServers()
-        // 用户主动断开: 清除最后连接记录, 开机自启不再触发
-        settingsDataStore.setLastServerId(0)
+        if (userInitiated) {
+            // 0. 清除所有服务器的激活状态
+            serverRepository.deactivateAllServers()
+            // 用户主动断开: 清除最后连接记录, 开机自启不再触发
+            settingsDataStore.setLastServerId(0)
+        }
 
         // 1. 断开 VPN 控制器 (如果正在运行)
         if (vpnController.isVpnRunning()) {
@@ -632,6 +649,7 @@ class SshVpnService : VpnService() {
             val fd = establishVpnInterface(config, allowedPackages, dnsMode)
             vpnController.setVpnInterface(fd)
             vpnController.setProtectFunction { socket -> this.protect(socket) }
+            vpnController.setProtectTcpFunction { socket -> this.protect(socket) }
 
             val result = vpnController.connect(config, config.password)
             if (result.isFailure) {
@@ -649,7 +667,7 @@ class SshVpnService : VpnService() {
                     status = DomainVpnState.VpnStatus.Failed,
                     error = e.message,
                 )
-            disconnect()
+            disconnect(userInitiated = false)
         } finally {
             isReconnecting = false
         }
