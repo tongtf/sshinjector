@@ -28,7 +28,7 @@ ACCT_HOME=/home/${ACCT}
 SSHD_CONFIG=/etc/ssh/sshd_config
 SSHD_CONFIG_BAK=${SSHD_CONFIG}.sshinjector.bak
 DROPBEAR_DIR=/etc/dropbear
-DROPBEAR_AUTHKEYS=${DROPBEAR_DIR}/authorized_keys
+DROPBEAR_AUTHKEYS=/root/.ssh/authorized_keys
 DROPBEAR_MARKER=${DROPBEAR_DIR}/sshinjector.configured
 
 # Login shell for the tunnel account (BusyBox/OpenWrt has no /usr/sbin/nologin).
@@ -181,11 +181,14 @@ EOF
 configure_dropbear() {
     ensure_account
 
-    # dropbear global authorized_keys + account-level fallback (dropbear reads
-    # both depending on its AUTHORIZED_KEYS setting).
-    mkdir -p "${DROPBEAR_DIR}" "${ACCT_HOME}/.ssh"
+    # root authorized_keys (dropbear resolves ~/.ssh/authorized_keys per login
+    # user) + account-level fallback (dropbear reads both depending on its
+    # AUTHORIZED_KEYS setting). Never write the shared /etc/dropbear store.
+    mkdir -p "${DROPBEAR_DIR}" "${ACCT_HOME}/.ssh" /root/.ssh
     chown root:root "${DROPBEAR_DIR}"
     chmod 700 "${DROPBEAR_DIR}"
+    chown root:root /root/.ssh
+    chmod 700 /root/.ssh
     chown -R "${ACCT}:${ACCT}" "${ACCT_HOME}/.ssh"
     chmod 700 "${ACCT_HOME}/.ssh"
 

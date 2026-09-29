@@ -25,7 +25,9 @@ import javax.inject.Singleton
 
 private val IS_DEBUG = android.util.Log.isLoggable("Socks5Proxy", android.util.Log.DEBUG)
 private const val TIMEOUT_CHECK_INTERVAL_MS = 5000L
-private const val SSH_SEND_QUEUE_CAPACITY = 256
+
+// L4: 2MB/连接出向队列 (64×32KB) — BDP 足够, OOM 面比 256×32KB 缩 4 倍
+private const val SSH_SEND_QUEUE_CAPACITY = 64
 private typealias TunCallback = (ByteArray, Int, Int) -> Unit
 
 /**

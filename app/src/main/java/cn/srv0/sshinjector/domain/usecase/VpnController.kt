@@ -10,7 +10,6 @@ import cn.srv0.sshinjector.domain.model.VpnState
 import cn.srv0.sshinjector.domain.vpn.CidrRoute
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
 import cn.srv0.sshinjector.domain.vpn.PacketProcessor
-import cn.srv0.sshinjector.domain.vpn.VpnNetwork
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelConfig
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -29,6 +28,7 @@ import kotlinx.coroutines.launch
 import java.io.FileDescriptor
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 import java.net.InetAddress
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -60,6 +60,9 @@ class VpnController
         private var tunGeneration = 0L
         private val readBuffer = ByteBuffer.allocate(32768).order(ByteOrder.BIG_ENDIAN)
 
+        // F12-i: TUN 读连续失败计数 (成功读取即清零), 防止死流 fd 的无退避忙循环
+        @Volatile private var consecutiveReadFailures = 0
+
         // 热点路径只累加原子计数, 由 statsFlushLoop 节流发布到 connectionStats
         private val bytesSentCounter =
             java.util.concurrent.atomic
@@ -85,7 +88,7 @@ class VpnController
             packetProcessor.setTcpBypass(::shouldBypassTcp) { socket -> protectTcpSocket?.invoke(socket) ?: false }
         }
 
-        fun setProtectTcpFunction(protectSocket: (java.net.Socket) -> Boolean) {
+        fun setProtectTcpFunction(protectSocket: ((java.net.Socket) -> Boolean)?) {
             addLog(">>> [VpnController] setProtectTcpFunction 被调用", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
             protectTcpSocket = protectSocket
         }
@@ -104,9 +107,10 @@ class VpnController
         private var transportMode: DnsInterceptor.DnsTransport = DnsInterceptor.DnsTransport.REMOTE
 
         // 用于 SYSTEM 模式 DNS 转发的线程池
-        private val executor = Executors.newCachedThreadPool()
+        // R5: daemon 线程, 进程退出不被 DNS bypass 任务挂住
+        private val executor = Executors.newCachedThreadPool { r -> Thread(r, "dns-bypass").apply { isDaemon = true } }
 
-        fun setProtectFunction(protectDatagramChannel: (java.net.DatagramSocket) -> Boolean) {
+        fun setProtectFunction(protectDatagramChannel: ((java.net.DatagramSocket) -> Boolean)?) {
             addLog(">>> [VpnController] setProtectFunction 被调用", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
             this.protectDatagramChannel = protectDatagramChannel
         }
@@ -307,6 +311,9 @@ class VpnController
          * 断开 VPN 连接
          */
         suspend fun disconnect() {
+            // F12-j: 释放对 VpnService 的 lambda 引用 (早退路径也必须清)
+            setProtectFunction(null)
+            setProtectTcpFunction(null)
             if (!isRunning) return
 
             addLog("正在断开 VPN 连接...", cn.srv0.sshinjector.ui.viewmodel.LogLevel.WARNING)
@@ -414,6 +421,9 @@ class VpnController
          * 强制重置状态 (超时后调用)
          */
         fun forceReset() {
+            // F12-j: 释放对 VpnService 的 lambda 引用
+            setProtectFunction(null)
+            setProtectTcpFunction(null)
             isRunning = false
             try {
                 coroutineContext.cancelChildren()
@@ -478,21 +488,38 @@ class VpnController
             while (isRunning && inputStream != null && generation == tunGeneration) {
                 try {
                     val bytesRead = inputStream!!.read(readBuffer.array())
-                    if (bytesRead <= 0) continue
+                    // EOF 不忙循环: 转异常走 catch 的连续失败计数 + backoff
+                    if (bytesRead < 0) throw IOException("TUN read EOF")
+                    // 空读不 continue — detekt LoopWithTooManyJumpStatements: loop 内只留 catch 的 break
+                    if (bytesRead > 0) {
+                        consecutiveReadFailures = 0
+                        bytesReceivedCounter.addAndGet(bytesRead.toLong())
+                        packetsReceivedCounter.incrementAndGet()
 
-                    bytesReceivedCounter.addAndGet(bytesRead.toLong())
-                    packetsReceivedCounter.incrementAndGet()
+                        readBuffer.limit(bytesRead)
+                        readBuffer.position(0)
 
-                    readBuffer.limit(bytesRead)
-                    readBuffer.position(0)
+                        processPacket(readBuffer)
 
-                    processPacket(readBuffer)
-
-                    readBuffer.clear()
+                        readBuffer.clear()
+                    }
                 } catch (e: Exception) {
                     if (isRunning) {
-                        android.util.Log.e("VpnController", "packetLoop error: ${e.message}")
+                        consecutiveReadFailures++
+                        android.util.Log.e("VpnController", "packetLoop error ($consecutiveReadFailures): ${e.message}")
+                        if (consecutiveReadFailures >= 20) {
+                            // F12-i 兜底: 连续失败说明 TUN 已死 (如断开竞态), 停止忙循环并上报 Failed,
+                            // 由 SshVpnService 观察到后执行完整清理 (保留 lastServerId 供重连)。
+                            // 不在此置 isRunning=false — 否则 disconnect 的资源清理链在
+                            // isVpnRunning() 检查处短路, SSH tunnel 会泄漏
+                            android.util.Log.e("VpnController", "packetLoop failing continuously, stopping")
+                            updateState {
+                                it.copy(status = VpnState.VpnStatus.Failed, error = e.message)
+                            }
+                            break
+                        }
                         updateState { it.copy(error = e.message) }
+                        Thread.sleep(100)
                     }
                 }
             }
@@ -681,10 +708,10 @@ class VpnController
 
         private fun writeDnsResponse(response: DnsInterceptor.DnsResponse) {
             try {
-                val vpnIp = InetAddress.getByName(VpnNetwork.TUN_IP)
+                // F10: 源 IP 跟随响应本身 (查询的目标 DNS), 不再硬编码 TUN_IP
                 val packet =
                     packetProcessor.buildUdpResponsePacket(
-                        srcIp = vpnIp.address,
+                        srcIp = response.srcIp.address,
                         dstIp = response.dstIp.address,
                         srcPort = 53,
                         dstPort = response.dstPort,
@@ -845,10 +872,10 @@ class VpnController
                         srcPort = 53
                     }
 
-                    val vpnIp = InetAddress.getByName(VpnNetwork.TUN_IP)
+                    // F10: 源 IP = 被查询的 DNS 服务器 (入参 dstIp), 非 TUN_IP
                     val responsePkt =
                         packetProcessor.buildUdpResponsePacket(
-                            srcIp = vpnIp.address,
+                            srcIp = dstIp.address,
                             dstIp = srcIp.address,
                             srcPort = 53,
                             dstPort = srcPort,

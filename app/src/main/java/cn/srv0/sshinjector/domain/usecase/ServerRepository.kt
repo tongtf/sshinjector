@@ -11,6 +11,7 @@ import cn.srv0.sshinjector.domain.model.WhitelistApp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -30,15 +31,20 @@ class ServerRepository
                 serverDao.getAllBlocking().map { it.toDomain(credentialCrypto) }
             }
 
+        // F12-k: map 内含 Keystore 解密 — flowOn 把上游执行移出 Main
         val allServersFlow: Flow<List<ServerConfig>> =
-            serverDao.getAll().map {
-                it.map { it.toDomain(credentialCrypto) }
-            }
+            serverDao
+                .getAll()
+                .map {
+                    it.map { it.toDomain(credentialCrypto) }
+                }.flowOn(Dispatchers.IO)
 
         val activeServerFlow: Flow<ServerConfig?> =
-            serverDao.getActive().map {
-                it?.toDomain(credentialCrypto)
-            }
+            serverDao
+                .getActive()
+                .map {
+                    it?.toDomain(credentialCrypto)
+                }.flowOn(Dispatchers.IO)
 
         suspend fun getServerById(id: Long): ServerConfig? =
             withContext(Dispatchers.IO) {
@@ -80,20 +86,20 @@ class ServerRepository
             setAsDefault: Boolean = false,
         ): Long =
             withContext(Dispatchers.IO) {
-                val id =
-                    if (existingId == -1L) {
-                        serverDao.insert(incoming.toEntity(credentialCrypto).copy(isActive = false))
-                    } else {
-                        val existing = serverDao.getByIdBlocking(existingId) ?: return@withContext existingId
-                        val originalIsActive = existing.isActive
-                        val merged = mergeForEdit(existing, incoming)
-                        serverDao.update(merged.copy(isActive = if (setAsDefault) false else originalIsActive))
-                        existingId
-                    }
-                if (setAsDefault) {
-                    serverDao.setActive(id)
+                val entity: cn.srv0.sshinjector.data.local.entity.ServerEntity
+                val baseId: Long
+                if (existingId == -1L) {
+                    entity = incoming.toEntity(credentialCrypto).copy(isActive = false)
+                    baseId = -1L
+                } else {
+                    val existing = serverDao.getByIdBlocking(existingId) ?: return@withContext existingId
+                    entity =
+                        mergeForEdit(existing, incoming)
+                            .copy(isActive = if (setAsDefault) false else existing.isActive)
+                    baseId = existingId
                 }
-                id
+                // L7: 写入 + 激活单事务 — 中途失败不会留下"存了但没激活"的半状态
+                serverDao.insertOrUpdateAndActivate(entity, baseId, setAsDefault)
             }
 
         /**

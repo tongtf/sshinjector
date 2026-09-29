@@ -31,6 +31,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import cn.srv0.sshinjector.domain.model.VpnState as DomainVpnState
 
@@ -58,6 +60,10 @@ class SshVpnService : VpnService() {
     @Volatile private var isReconnecting = false
 
     @Volatile private var lastNetworkId: Long = -1
+
+    // F11: 上次观测到的默认网络 id — onLost 时 activeNetwork 可能已切换,
+    // 用它兜住"默认网络自己丢失"的事件
+    @Volatile private var lastActiveNetworkId: Long = -1
 
     @Volatile private var lastEventWasLost = false
 
@@ -153,65 +159,71 @@ class SshVpnService : VpnService() {
         super.onDestroy()
     }
 
+    // F12-g: ACTION_CONNECT 串行化, 消除 isVpnRunning 检查与建立之间的 TOCTOU。
+    // 死锁警告: connect 的 catch 会调 disconnect — disconnect 绝不能也拿此锁 (Mutex 不可重入)
+    private val connectMutex = Mutex()
+
     private suspend fun connect(serverId: Long) {
-        android.util.Log.d("SshVpnService", "Connecting to server $serverId")
-        if (vpnController.isVpnRunning()) {
-            android.util.Log.w("SshVpnService", "VPN already running")
-            return
-        }
-        serviceVpnState.value = DomainVpnState(status = DomainVpnState.VpnStatus.Connecting)
+        connectMutex.withLock {
+            android.util.Log.d("SshVpnService", "Connecting to server $serverId")
+            if (vpnController.isVpnRunning()) {
+                android.util.Log.w("SshVpnService", "VPN already running")
+                return
+            }
+            serviceVpnState.value = DomainVpnState(status = DomainVpnState.VpnStatus.Connecting)
 
-        try {
-            val config: ServerConfig =
-                serverRepository.getServerById(serverId)
-                    ?: throw IllegalArgumentException("Server not found")
-            // 合并全局设置 (mtu/keepAlive/enableIPv6 全局优先) — 初次连接也必须用合并后的配置,
-            // 否则全局覆盖只在重建/重连路径生效 (S5 的 IPv6 路由依赖它)
-            val merged = mergeGlobalSettings(config)
-            currentServer = merged
+            try {
+                val config: ServerConfig =
+                    serverRepository.getServerById(serverId)
+                        ?: throw IllegalArgumentException("Server not found")
+                // 合并全局设置 (mtu/keepAlive/enableIPv6 全局优先) — 初次连接也必须用合并后的配置,
+                // 否则全局覆盖只在重建/重连路径生效 (S5 的 IPv6 路由依赖它)
+                val merged = mergeGlobalSettings(config)
+                currentServer = merged
 
-            val dnsMode = settingsDataStore.dnsMode.first()
-            val allowedPackages =
-                if (dnsMode == 2) {
-                    whitelistDao.getEnabledPackageNames()
-                } else {
-                    emptyList()
+                val dnsMode = settingsDataStore.dnsMode.first()
+                val allowedPackages =
+                    if (dnsMode == 2) {
+                        whitelistDao.getEnabledPackageNames()
+                    } else {
+                        emptyList()
+                    }
+
+                // 启动前台服务
+                startForegroundWithNotification(merged)
+
+                // 建立 VPN 接口
+                val fd = establishVpnInterface(merged, allowedPackages, dnsMode)
+                vpnController.setVpnInterface(fd)
+
+                // 设置 VPN 保护函数 (用于 SYSTEM 模式 DNS 绕过)
+                vpnController.setProtectFunction { socket ->
+                    this.protect(socket)
+                }
+                // F1: TCP 用户态直连的 protect (必须在 connect 前注入, 否则直连流量回环进 TUN)
+                vpnController.setProtectTcpFunction { socket -> this.protect(socket) }
+
+                // 连接 VPN 控制器
+                val result = vpnController.connect(merged, merged.password)
+                if (result.isFailure) {
+                    throw result.exceptionOrNull() ?: Exception("Connection failed")
                 }
 
-            // 启动前台服务
-            startForegroundWithNotification(merged)
-
-            // 建立 VPN 接口
-            val fd = establishVpnInterface(merged, allowedPackages, dnsMode)
-            vpnController.setVpnInterface(fd)
-
-            // 设置 VPN 保护函数 (用于 SYSTEM 模式 DNS 绕过)
-            vpnController.setProtectFunction { socket ->
-                this.protect(socket)
+                serviceVpnState.value = DomainVpnState(status = DomainVpnState.VpnStatus.Connected, server = merged)
+                serverRepository.setActiveServer(serverId)
+                // 记录最后连接的服务器, 供开机自启 (BootReceiver) 使用
+                settingsDataStore.setLastServerId(serverId)
+                updateNotification(merged)
+                startWhitelistObserver()
+            } catch (e: Exception) {
+                lastError.value = e.message
+                serviceVpnState.value =
+                    DomainVpnState(
+                        status = DomainVpnState.VpnStatus.Failed,
+                        error = e.message,
+                    )
+                disconnect(userInitiated = false)
             }
-            // F1: TCP 用户态直连的 protect (必须在 connect 前注入, 否则直连流量回环进 TUN)
-            vpnController.setProtectTcpFunction { socket -> this.protect(socket) }
-
-            // 连接 VPN 控制器
-            val result = vpnController.connect(merged, merged.password)
-            if (result.isFailure) {
-                throw result.exceptionOrNull() ?: Exception("Connection failed")
-            }
-
-            serviceVpnState.value = DomainVpnState(status = DomainVpnState.VpnStatus.Connected, server = merged)
-            serverRepository.setActiveServer(serverId)
-            // 记录最后连接的服务器, 供开机自启 (BootReceiver) 使用
-            settingsDataStore.setLastServerId(serverId)
-            updateNotification(merged)
-            startWhitelistObserver()
-        } catch (e: Exception) {
-            lastError.value = e.message
-            serviceVpnState.value =
-                DomainVpnState(
-                    status = DomainVpnState.VpnStatus.Failed,
-                    error = e.message,
-                )
-            disconnect(userInitiated = false)
         }
     }
 
@@ -236,15 +248,27 @@ class SshVpnService : VpnService() {
         dnsMode: Int,
     ): java.io.FileDescriptor {
         val builder = buildVpnBuilder(config, allowedPackages, dnsMode)
-        val newVpnInterface = builder.establish()
-        // 关闭旧接口 (重建场景), 避免 fd 泄漏
+        // F12-i: 先判 establish 结果再换 — 失败时旧 TUN 必须保留,
+        // 否则 VpnController 的 inputStream 指向已关闭 fd → packetLoop 忙循环
+        val newVpnInterface =
+            builder.establish() ?: throw RuntimeException("Failed to establish VPN interface")
+        val newFd =
+            newVpnInterface.fileDescriptor
+                ?: run {
+                    try {
+                        newVpnInterface.close()
+                    } catch (_: Exception) {
+                    }
+                    throw RuntimeException("Failed to establish VPN interface")
+                }
+        // 成功才关闭旧接口 (重建场景), 避免 fd 泄漏
         try {
             vpnInterface?.close()
         } catch (_: Exception) {
         }
         vpnInterface = newVpnInterface
-        tunFd = vpnInterface?.fileDescriptor
-        return tunFd ?: throw RuntimeException("Failed to establish VPN interface")
+        tunFd = newFd
+        return newFd
     }
 
     /**
@@ -508,6 +532,11 @@ class SshVpnService : VpnService() {
             vpnController.vpnState.collect { state ->
                 serviceVpnState.value = state
                 state.error?.let { lastError.value = it }
+                // F12-i 兜底: packetLoop 连续读失败已退出 (状态 Failed) → 完整清理资源;
+                // disconnect(false) 保留 lastServerId 供重连。幂等, 与 connect catch 不冲突
+                if (state.status == DomainVpnState.VpnStatus.Failed) {
+                    disconnect(userInitiated = false)
+                }
             }
         }
         scope.launch {
@@ -559,10 +588,23 @@ class SshVpnService : VpnService() {
                     .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
                     .build()
             connectivityManager?.registerNetworkCallback(request, networkCallback)
+            // F11: 注册时对已存在的网络会立即回调 onAvailable — 预置去重键与默认网络 id,
+            // 抑制首个自触发事件
+            val initialId = currentActiveNetworkId()
+            lastActiveNetworkId = initialId
+            lastNetworkId = initialId
+            lastEventWasLost = false
         } catch (e: Exception) {
             android.util.Log.e("SshVpnService", "Failed to register network callback: ${e.message}")
         }
     }
+
+    private fun currentActiveNetworkId(): Long =
+        try {
+            connectivityManager?.activeNetwork?.networkHandle ?: -1L
+        } catch (_: Exception) {
+            -1L
+        }
 
     private val networkCallback =
         object : ConnectivityManager.NetworkCallback() {
@@ -599,6 +641,11 @@ class SshVpnService : VpnService() {
             "Network event: id=$id lost=$isLost last=$lastNetworkId lastLost=$lastEventWasLost " +
                 "running=${vpnController.isVpnRunning()}, reconnecting=$isReconnecting",
         )
+        // F11: 仅默认网络的事件才触发重连 — WiFi+蜂窝并存时, 副网络上下线不应全量重连。
+        // onLost 时 activeNetwork 可能已切换到新默认, 用 lastActiveNetworkId 兜住旧默认的丢失。
+        val activeId = currentActiveNetworkId()
+        if (id != activeId && id != lastActiveNetworkId) return
+        if (activeId != -1L) lastActiveNetworkId = activeId
         // 同一网络 + 同一事件类型的重复事件不触发 (去抖已覆盖时序)
         if (id == lastNetworkId && isLost == lastEventWasLost) return
         lastNetworkId = id

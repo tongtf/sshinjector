@@ -1,6 +1,8 @@
 package cn.srv0.sshinjector.ui.screen.dashboard
 
+import android.Manifest
 import android.app.Activity
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
@@ -95,12 +97,33 @@ fun DashboardScreen(
                 state.pendingConnectServerId?.let { serverId ->
                     viewModel.onVpnPermissionGranted(serverId)
                 }
+            } else {
+                // F12-h: 拒绝/取消后清 intent, 否则 LaunchedEffect key 不变会反复弹授权框
+                viewModel.clearVpnPermissionRequest()
+            }
+        }
+
+    // L5: 连接前先申请通知权限(13+), 串行避免两个授权 UI 叠加;
+    // 拒绝时通知不可见属可接受降级。已授权/"不再询问"时系统直接回调, 不弹框。
+    var pendingVpnIntent by remember { mutableStateOf<android.content.Intent?>(null) }
+    val notificationPermissionLauncher =
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestPermission(),
+        ) {
+            pendingVpnIntent?.let { intent ->
+                pendingVpnIntent = null
+                vpnPermissionLauncher.launch(intent)
             }
         }
 
     LaunchedEffect(state.vpnPermissionIntent) {
         state.vpnPermissionIntent?.let { intent ->
-            vpnPermissionLauncher.launch(intent)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pendingVpnIntent = intent
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                vpnPermissionLauncher.launch(intent)
+            }
         }
     }
 

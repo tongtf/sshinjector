@@ -351,7 +351,7 @@ val socksChannel = conn.socksChannel ?: return false   // 判空后置
 | L5 | `POST_NOTIFICATIONS` 未申请 | Dashboard 连接前 `rememberLauncherForActivityResult(RequestPermission)`，Android 13+ 才请求；拒绝时通知不可见属可接受降级（文档标注） |
 | L6 | 备份规则缺 files 域 | `data_extraction_rules.xml` + `backup_rules.xml` 各补 `<exclude domain="file" path="." />`（现被 allowBackup=false 挡住，属纵深防御） |
 | L7 | `saveServerEdit` 非事务 | `Daos.kt` 加 `@Transaction suspend fun updateWithActive(...)` 或用 `room.withTransaction { ... }` 包 `mergeForEdit+update+setActive`；顺带删死代码 `insertAndSetActive`（`:42-47`） |
-| L8 | 缺 MIGRATION_1_2 | 对比 `schemas/1.json` vs `2.json` 补 `MIGRATION_1_2` SQL；加 `MigrationTestHelper` 测试（当前迁移零覆盖）；**若确认 v1 从未发布可改为 waived**（见 P3，实现前先 `git log --oneline -- app/schemas` 核实发布历史） |
+| L8 | 缺 MIGRATION_1_2 | 对比 `schemas/1.json` vs `2.json` 补 `MIGRATION_1_2` SQL；加 `MigrationTestHelper` 测试（当前迁移零覆盖）；**若确认 v1 从未发布可改为 waived**（见 P3，实现前先 `git log --oneline -- app/schemas` 核实发布历史）——**已核实：v1.0.0 tag 的 AppDatabase version=4，schema 1-3 从未随发布版运行 → waived（见 P3/L8）** |
 | L9 | 依赖校验缺失 | `./gradlew --write-verification-metadata sha256` 生成 `gradle/verification-metadata.xml` 提交（一次性成本 + 后续加依赖需同步维护）；jitpack 兜底可移除（jsch 0.2.17 在 Maven Central）——**列为可选，非阻塞** |
 | L10 | SynReceived 死代码清理 | `TcpStateMachine.kt`：删枚举值 `SynReceived`（`:70`）、删分支 `else if (syn && ack) { conn.state = SynReceived }`（`:133-134`）与内层检查 `if (state == SynReceived)`（`:136-138`）。删除后 syn+ack 包落入下方纯 ACK/载荷处理，语义正确。全仓引用已核实仅此一处文件、测试零引用 |
 
@@ -368,6 +368,8 @@ val socksChannel = conn.socksChannel ?: return false   // 判空后置
 | W5 | ProGuard keep 范围偏宽 | 有反射/Room 理由，非缺陷；收紧需专门回归，不在本轮 |
 | F9（审计后移入） | OP_WRITE RMW "竞态" | **读码核实不存在跨线程路径**：handleWrite/sendReply 均已在 backpressureLock 内（原审查行号过期）；唯一未加锁的 sendTunResponse 仅 eventLoop 单点调用且被 F12-c 移除。详见 P1 节审计记录 |
 | R6（审计后移入） | SshIoDispatcher CallerRunsPolicy TOCTOU → AbortPolicy | **AbortPolicy 会破坏协程语义**：拒绝在 kotlinx 的 `dispatch` 内部处理（按版本为取消任务或降级执行），**不会从 `scope.launch` 抛出** → 调用点捕不到 RejectedExecutionException，connect/relay 协程无 close() 死亡，连接挂死至 300s + socket 泄漏，严格劣于现状。现有 `isSaturated()` 预检（`Socks5ProxyServer.kt:601`）+ CallerRunsPolicy 是 AGENTS.md 记录的既有设计取舍；残留风险仅为极端 TOCTOU 窗口内至多一次 ≤5s 的 eventLoop 内联阻塞。按路径处理拒绝需把所有 dispatcher launch 改 raw executor.submit，收益不成比例 |
+| L8（已核实后移入） | 缺 MIGRATION_1_2 | `git ls-tree v1.0.0` + `git show v1.0.0:.../AppDatabase.kt` 核实：**v1.0.0 首发时 DB version=4**，schema `1.json`~`3.json` 均为开发期产物、从未随任何发布版以 version 1/2/3 运行；正式渠道不存在需要 1→2 迁移的存量用户 |
+| L9（可选项） | Gradle verification-metadata | spec 自标"一次性成本 + 后续加依赖需同步维护，列为可选非阻塞"——决定不生成：jitpack 依赖（jsch）仍需运行时校验策略，半套元数据比没有更误导；加依赖频率低，收益不成比例 |
 
 ---
 

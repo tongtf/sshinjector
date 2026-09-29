@@ -13,6 +13,7 @@ import android.os.Debug
 import android.telephony.TelephonyManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import cn.srv0.sshinjector.BuildConfig
 import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
@@ -21,6 +22,7 @@ import cn.srv0.sshinjector.vpn.SshVpnService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
@@ -171,11 +173,13 @@ class MainViewModel
 
         private fun loadNetworkInfo() {
             viewModelScope.launch {
-                val ipv4 = getDeviceIpv4()
-                val ipv6 = getDeviceIpv6()
+                // F12-k: NetworkInterface/系统服务查询不进 Main
+                val (ipv4, ipv6, networkDisplay) =
+                    withContext(Dispatchers.IO) {
+                        Triple(getDeviceIpv4(), getDeviceIpv6(), getNetworkDisplay())
+                    }
                 val dnsModeValue = settingsDataStore.dnsMode.first()
                 val dnsModeText = dnsModeLabel(dnsModeValue, context)
-                val networkDisplay = getNetworkDisplay()
 
                 _uiState.update {
                     it.copy(
@@ -365,7 +369,7 @@ class MainViewModel
             }
             viewModelScope.launch {
                 while (true) {
-                    kotlinx.coroutines.delay(1000)
+                    kotlinx.coroutines.delay(CONNECTED_DURATION_TICK_MS)
                     val vpn = vpnController.vpnState.value
                     val connected =
                         vpn.status == cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Connected
@@ -377,17 +381,19 @@ class MainViewModel
 
         private fun startResourceMonitoring() {
             viewModelScope.launch {
-                android.util.Log.d("MainViewModel", "startResourceMonitoring started")
+                if (BuildConfig.DEBUG) android.util.Log.d("MainViewModel", "startResourceMonitoring started")
                 while (true) {
-                    kotlinx.coroutines.delay(1000)
+                    kotlinx.coroutines.delay(RESOURCE_MONITOR_TICK_MS)
                     withContext(Dispatchers.IO) {
                         val cpu = readProcessCpuUsage()
                         readProcessMemory()
-                        android.util.Log.d(
-                            "MainViewModel",
-                            "Resource monitoring: cpu=$cpu javaHeap=${_uiState.value.javaHeapUsage} " +
-                                "nativeHeap=${_uiState.value.nativeHeapUsage}",
-                        )
+                        if (BuildConfig.DEBUG) {
+                            android.util.Log.d(
+                                "MainViewModel",
+                                "Resource monitoring: cpu=$cpu javaHeap=${_uiState.value.javaHeapUsage} " +
+                                    "nativeHeap=${_uiState.value.nativeHeapUsage}",
+                            )
+                        }
                         _uiState.update { it.copy(cpuUsage = cpu) }
                     }
                 }
@@ -442,6 +448,10 @@ class MainViewModel
             private const val RATIO_LOW = 0.5f
             private const val RATIO_HIGH = 1.0f
             private const val NETWORK_TIMEOUT_MS = 5000
+
+            // L1: 刷屏节奏 — connectedDuration 与资源监控均降频到 5s
+            private const val CONNECTED_DURATION_TICK_MS = 5000L
+            private const val RESOURCE_MONITOR_TICK_MS = 5000L
 
             @JvmStatic
             fun formatMemorySize(bytes: Long): String =
@@ -515,55 +525,60 @@ class MainViewModel
             }
         }
 
+        // R4: 诊断任务互斥 — 重复触发先取消旧任务, 避免并发跑与结果互相覆盖
+        private var diagnosticsJob: Job? = null
+
         fun runDiagnostics() {
-            viewModelScope.launch {
-                _uiState.update { it.copy(diagnostics = DnsDiagnostics(isRunning = true)) }
+            diagnosticsJob?.cancel()
+            diagnosticsJob =
+                viewModelScope.launch {
+                    _uiState.update { it.copy(diagnostics = DnsDiagnostics(isRunning = true)) }
 
-                val dnsMode = settingsDataStore.dnsMode.first()
-                val testCount = 5
+                    val dnsMode = settingsDataStore.dnsMode.first()
+                    val testCount = 5
 
-                val dnsResults =
-                    withContext(kotlinx.coroutines.Dispatchers.IO) {
-                        (1..testCount).map { testDnsResolution(dnsMode) }
+                    val dnsResults =
+                        withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            (1..testCount).map { testDnsResolution(dnsMode) }
+                        }
+                    val dnsSuccessCount = dnsResults.count { it.second }
+                    val dnsAvgLatency =
+                        dnsResults
+                            .filter { it.second && it.first != null }
+                            .mapNotNull { it.first }
+                            .takeIf { it.isNotEmpty() }
+                            ?.let { list -> list.sum() / list.size }
+
+                    val httpResults =
+                        withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            (1..testCount).map { testHttpConnectivity() }
+                        }
+                    val httpSuccessCount = httpResults.count { it.second }
+                    val httpAvgLatency =
+                        httpResults
+                            .filter { it.second && it.first != null }
+                            .mapNotNull { it.first }
+                            .takeIf { it.isNotEmpty() }
+                            ?.let { list -> list.sum() / list.size }
+                    val lastHttpCode = httpResults.lastOrNull { it.second }?.third ?: 0
+
+                    _uiState.update {
+                        it.copy(
+                            diagnostics =
+                                DnsDiagnostics(
+                                    dnsLatencyMs = dnsAvgLatency,
+                                    dnsSuccess = dnsSuccessCount > 0,
+                                    dnsSuccessCount = dnsSuccessCount,
+                                    httpLatencyMs = httpAvgLatency,
+                                    httpSuccess = httpSuccessCount > 0,
+                                    httpSuccessCount = httpSuccessCount,
+                                    httpStatusCode = lastHttpCode,
+                                    isRunning = false,
+                                    lastTestTime = System.currentTimeMillis(),
+                                ),
+                        )
                     }
-                val dnsSuccessCount = dnsResults.count { it.second }
-                val dnsAvgLatency =
-                    dnsResults
-                        .filter { it.second && it.first != null }
-                        .mapNotNull { it.first }
-                        .takeIf { it.isNotEmpty() }
-                        ?.let { list -> list.sum() / list.size }
-
-                val httpResults =
-                    withContext(kotlinx.coroutines.Dispatchers.IO) {
-                        (1..testCount).map { testHttpConnectivity() }
-                    }
-                val httpSuccessCount = httpResults.count { it.second }
-                val httpAvgLatency =
-                    httpResults
-                        .filter { it.second && it.first != null }
-                        .mapNotNull { it.first }
-                        .takeIf { it.isNotEmpty() }
-                        ?.let { list -> list.sum() / list.size }
-                val lastHttpCode = httpResults.lastOrNull { it.second }?.third ?: 0
-
-                _uiState.update {
-                    it.copy(
-                        diagnostics =
-                            DnsDiagnostics(
-                                dnsLatencyMs = dnsAvgLatency,
-                                dnsSuccess = dnsSuccessCount > 0,
-                                dnsSuccessCount = dnsSuccessCount,
-                                httpLatencyMs = httpAvgLatency,
-                                httpSuccess = httpSuccessCount > 0,
-                                httpSuccessCount = httpSuccessCount,
-                                httpStatusCode = lastHttpCode,
-                                isRunning = false,
-                                lastTestTime = System.currentTimeMillis(),
-                            ),
-                    )
                 }
-            }
         }
 
         private fun testDnsResolution(dnsMode: Int): Pair<Long?, Boolean> =
@@ -573,95 +588,98 @@ class MainViewModel
                     0, 2 -> {
                         val url = java.net.URL("https://dns.alidns.com/dns-query")
                         val connection = url.openConnection() as javax.net.ssl.HttpsURLConnection
-                        connection.requestMethod = "POST"
-                        connection.doOutput = true
-                        connection.connectTimeout = NETWORK_TIMEOUT_MS
-                        connection.readTimeout = NETWORK_TIMEOUT_MS
-                        connection.setRequestProperty("Content-Type", "application/dns-message")
-                        connection.setRequestProperty("Accept", "application/dns-message")
-                        val query =
-                            byteArrayOf(
-                                0x00,
-                                0x01,
-                                0x01,
-                                0x00,
-                                0x00,
-                                0x01,
-                                0x00,
-                                0x00,
-                                0x00,
-                                0x00,
-                                0x00,
-                                0x00,
-                                0x06,
-                                0x67,
-                                0x6F,
-                                0x6F,
-                                0x67,
-                                0x6C,
-                                0x65,
-                                0x03,
-                                0x63,
-                                0x6F,
-                                0x6D,
-                                0x00,
-                                0x00,
-                                0x01,
-                                0x00,
-                                0x01,
-                            )
-                        connection.outputStream.write(query)
-                        connection.outputStream.flush()
-                        val responseCode = connection.responseCode
-                        val elapsed = System.currentTimeMillis() - start
-                        connection.disconnect()
-                        Pair(elapsed, responseCode == 200)
+                        try {
+                            connection.requestMethod = "POST"
+                            connection.doOutput = true
+                            connection.connectTimeout = NETWORK_TIMEOUT_MS
+                            connection.readTimeout = NETWORK_TIMEOUT_MS
+                            connection.setRequestProperty("Content-Type", "application/dns-message")
+                            connection.setRequestProperty("Accept", "application/dns-message")
+                            val query =
+                                byteArrayOf(
+                                    0x00,
+                                    0x01,
+                                    0x01,
+                                    0x00,
+                                    0x00,
+                                    0x01,
+                                    0x00,
+                                    0x00,
+                                    0x00,
+                                    0x00,
+                                    0x00,
+                                    0x00,
+                                    0x06,
+                                    0x67,
+                                    0x6F,
+                                    0x6F,
+                                    0x67,
+                                    0x6C,
+                                    0x65,
+                                    0x03,
+                                    0x63,
+                                    0x6F,
+                                    0x6D,
+                                    0x00,
+                                    0x00,
+                                    0x01,
+                                    0x00,
+                                    0x01,
+                                )
+                            connection.outputStream.write(query)
+                            connection.outputStream.flush()
+                            val responseCode = connection.responseCode
+                            val elapsed = System.currentTimeMillis() - start
+                            Pair(elapsed, responseCode == 200)
+                        } finally {
+                            // R4: 异常路径也必须断开, 否则连接槽泄漏
+                            connection.disconnect()
+                        }
                     }
-                    1 -> {
-                        val socket = java.net.DatagramSocket()
-                        socket.soTimeout = NETWORK_TIMEOUT_MS
-                        val query =
-                            byteArrayOf(
-                                0x00,
-                                0x01,
-                                0x01,
-                                0x00,
-                                0x00,
-                                0x01,
-                                0x00,
-                                0x00,
-                                0x00,
-                                0x00,
-                                0x00,
-                                0x00,
-                                0x06,
-                                0x67,
-                                0x6F,
-                                0x6F,
-                                0x67,
-                                0x6C,
-                                0x65,
-                                0x03,
-                                0x63,
-                                0x6F,
-                                0x6D,
-                                0x00,
-                                0x00,
-                                0x01,
-                                0x00,
-                                0x01,
-                            )
-                        val addr = java.net.InetAddress.getByName("8.8.8.8")
-                        val packet = java.net.DatagramPacket(query, query.size, addr, 53)
-                        socket.send(packet)
-                        val buf = ByteArray(512)
-                        val respPacket = java.net.DatagramPacket(buf, buf.size)
-                        socket.receive(respPacket)
-                        socket.close()
-                        val elapsed = System.currentTimeMillis() - start
-                        val rcode = buf[3].toInt() and 0x0F
-                        Pair(elapsed, rcode == 0)
-                    }
+                    1 ->
+                        java.net.DatagramSocket().use { socket ->
+                            socket.soTimeout = NETWORK_TIMEOUT_MS
+                            val query =
+                                byteArrayOf(
+                                    0x00,
+                                    0x01,
+                                    0x01,
+                                    0x00,
+                                    0x00,
+                                    0x01,
+                                    0x00,
+                                    0x00,
+                                    0x00,
+                                    0x00,
+                                    0x00,
+                                    0x00,
+                                    0x06,
+                                    0x67,
+                                    0x6F,
+                                    0x6F,
+                                    0x67,
+                                    0x6C,
+                                    0x65,
+                                    0x03,
+                                    0x63,
+                                    0x6F,
+                                    0x6D,
+                                    0x00,
+                                    0x00,
+                                    0x01,
+                                    0x00,
+                                    0x01,
+                                )
+                            val addr = java.net.InetAddress.getByName("8.8.8.8")
+                            val packet = java.net.DatagramPacket(query, query.size, addr, 53)
+                            socket.send(packet)
+                            val buf = ByteArray(512)
+                            val respPacket = java.net.DatagramPacket(buf, buf.size)
+                            socket.receive(respPacket)
+                            val elapsed = System.currentTimeMillis() - start
+                            val rcode = buf[3].toInt() and 0x0F
+                            Pair(elapsed, rcode == 0)
+                        }
                     else -> Pair(null, false)
                 }
             } catch (e: Exception) {
@@ -705,6 +723,12 @@ class MainViewModel
         fun onVpnPermissionGranted(serverId: Long) {
             _uiState.update { it.copy(vpnPermissionIntent = null, pendingConnectServerId = null) }
             startVpnService(serverId)
+        }
+
+        // F12-h: 授权被拒/取消 — 清除 intent 防止 LaunchedEffect 反复重弹,
+        // 保留 pendingConnectServerId 供用户重试
+        fun clearVpnPermissionRequest() {
+            _uiState.update { it.copy(vpnPermissionIntent = null) }
         }
 
         private fun startVpnService(serverId: Long) {
@@ -758,8 +782,11 @@ class MainViewModel
 
         fun refreshNetworkInfo() {
             viewModelScope.launch {
-                val ipv4 = getDeviceIpv4()
-                val ipv6 = getDeviceIpv6()
+                // F12-k: NetworkInterface 查询不进 Main
+                val (ipv4, ipv6) =
+                    withContext(Dispatchers.IO) {
+                        Pair(getDeviceIpv4(), getDeviceIpv6())
+                    }
                 val dnsModeValue = settingsDataStore.dnsMode.first()
                 val dnsModeText = dnsModeLabel(dnsModeValue, context)
 

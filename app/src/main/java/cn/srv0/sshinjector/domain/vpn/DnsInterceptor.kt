@@ -11,7 +11,6 @@ import org.xbill.DNS.Section
 import java.net.InetAddress
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -69,7 +68,17 @@ class DnsInterceptor
             enableIPv6 = enable
         }
 
-        private val executor = Executors.newFixedThreadPool(2)
+        // R5: daemon + 空闲回收 — 等价 newFixedThreadPool(2), 进程退出不被探测线程挂住
+        private val executor =
+            java.util.concurrent
+                .ThreadPoolExecutor(
+                    2,
+                    2,
+                    60L,
+                    java.util.concurrent.TimeUnit.SECONDS,
+                    java.util.concurrent.LinkedBlockingQueue(),
+                    { r -> Thread(r, "dns-probe").apply { isDaemon = true } },
+                ).apply { allowCoreThreadTimeOut(true) }
         private val pendingQueries = ConcurrentHashMap<Int, DnsPendingQuery>()
         private val dnsCache = ConcurrentHashMap<String, CacheEntry>()
 
@@ -123,10 +132,10 @@ class DnsInterceptor
             java.util.concurrent.atomic
                 .AtomicLong(0)
 
-        // 定期清理过期待查
+        // 定期清理过期待查 (R5: daemon, 不挂进程退出)
         private val cleanupScheduler =
             java.util.concurrent.Executors
-                .newSingleThreadScheduledExecutor()
+                .newSingleThreadScheduledExecutor { r -> Thread(r, "dns-cleanup").apply { isDaemon = true } }
 
         init {
             cleanupScheduler.scheduleAtFixedRate({
@@ -324,7 +333,15 @@ class DnsInterceptor
                 val cached = dnsCache[cacheKey]
                 if (cached != null && cached.expireAt > System.currentTimeMillis()) {
                     cacheHits.incrementAndGet()
-                    sendCachedResponse(question, cached.records, originalQueryId, srcIp, srcPort)
+                    // F10: 源 IP = 本次查询的目标 DNS 服务器, 目的 = 客户端
+                    pendingResponses.trySend(
+                        DnsResponse(
+                            srcIp = dstIp,
+                            dstIp = srcIp,
+                            dstPort = srcPort,
+                            data = sendCachedResponse(question, cached.records, originalQueryId).toWire(),
+                        ),
+                    )
                     return true
                 }
 
@@ -345,7 +362,7 @@ class DnsInterceptor
 
                 // 走隧道: 不做真实 DNS 解析, 分配假 IP, CONNECT 时用域名让 SSH 服务器解析
                 if (!useSystemDns) {
-                    return handleRemoteDnsFakery(question, originalQueryId, srcIp, srcPort)
+                    return handleRemoteDnsFakery(question, originalQueryId, srcIp, dstIp, srcPort)
                 }
 
                 // 系统 DNS 模式: 正常 DNS 解析
@@ -519,6 +536,7 @@ class DnsInterceptor
             question: Record,
             originalQueryId: Int,
             srcIp: InetAddress,
+            dstIp: InetAddress,
             srcPort: Int,
         ): Boolean {
             val qname = question.name.toString(true)
@@ -539,7 +557,7 @@ class DnsInterceptor
                         originalQueryId = originalQueryId,
                         srcIp = srcIp,
                         srcPort = srcPort,
-                        dstIp = null,
+                        dstIp = dstIp,
                         dstPort = 53,
                         question = question,
                     )
@@ -613,10 +631,10 @@ class DnsInterceptor
                 ),
             )
 
-            // 发送响应 (DNS 服务器 IP 用假 IP 作为 srcIp, 不影响)
+            // F10: 源 IP = 查询的目标地址 (客户端实际查询的 VPN DNS), 非假 IP
             pendingResponses.trySend(
                 DnsResponse(
-                    srcIp = fakeInetAddress,
+                    srcIp = dstIp,
                     dstIp = srcIp,
                     dstPort = srcPort,
                     data = response.toWire(),
@@ -631,9 +649,7 @@ class DnsInterceptor
             question: Record,
             records: List<Record>,
             originalId: Int,
-            srcIp: InetAddress,
-            srcPort: Int,
-        ) {
+        ): Message {
             val response = Message(originalId)
             response.header.setFlag(Flags.QR.toInt())
             response.header.setFlag(Flags.RD.toInt())
@@ -641,16 +657,7 @@ class DnsInterceptor
             response.header.setRcode(Rcode.NOERROR)
             response.addRecord(question, Section.QUESTION)
             records.forEach { response.addRecord(it, Section.ANSWER) }
-
-            // 缓存响应没有特定的源 DNS IP，使用默认
-            pendingResponses.trySend(
-                DnsResponse(
-                    srcIp = InetAddress.getByName("8.8.8.8"),
-                    dstIp = srcIp,
-                    dstPort = srcPort,
-                    data = response.toWire(),
-                ),
-            )
+            return response
         }
 
         private fun sendErrorResponse(

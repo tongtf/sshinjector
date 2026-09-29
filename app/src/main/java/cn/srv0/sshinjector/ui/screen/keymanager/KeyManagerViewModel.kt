@@ -10,12 +10,14 @@ import cn.srv0.sshinjector.data.remote.ssh.KeyKind
 import cn.srv0.sshinjector.data.remote.ssh.SshKeyManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 data class KeyInfo(
@@ -45,22 +47,26 @@ class KeyManagerViewModel
         val error = _error.asSharedFlow()
 
         fun refresh() {
-            val aliases = keyManager.listKeyAliases()
-            val list =
-                aliases.mapNotNull { alias ->
-                    try {
-                        val publicKey = keyManager.getPublicKey(alias)
-                        val algo = keyManager.getKeyAlgorithm(alias)
-                        val createdAt = keyManager.getKeyCreationDate(alias)
-                        val kind = keyManager.getKeyKind(alias)
-                        val bio = kind == KeyKind.GENERATED && keyManager.isBiometricProtected(alias)
-                        KeyInfo(alias, algo, createdAt, publicKey, kind, bio)
-                    } catch (e: Exception) {
-                        null
+            viewModelScope.launch {
+                // F12-k: Keystore/证书查询是阻塞 IO, 不进 Main
+                val list =
+                    withContext(Dispatchers.IO) {
+                        keyManager.listKeyAliases().mapNotNull { alias ->
+                            try {
+                                val publicKey = keyManager.getPublicKey(alias)
+                                val algo = keyManager.getKeyAlgorithm(alias)
+                                val createdAt = keyManager.getKeyCreationDate(alias)
+                                val kind = keyManager.getKeyKind(alias)
+                                val bio = kind == KeyKind.GENERATED && keyManager.isBiometricProtected(alias)
+                                KeyInfo(alias, algo, createdAt, publicKey, kind, bio)
+                            } catch (e: Exception) {
+                                null
+                            }
+                        }
                     }
-                }
-            _keys.value = list
-            _activeKey.value = _keys.value.firstOrNull()
+                _keys.value = list
+                _activeKey.value = _keys.value.firstOrNull()
+            }
         }
 
         fun generateKeyPair(

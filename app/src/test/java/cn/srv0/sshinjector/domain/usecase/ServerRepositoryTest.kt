@@ -18,8 +18,10 @@ import org.junit.Before
 import org.junit.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
+import org.mockito.kotlin.doSuspendableAnswer
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
+import org.mockito.kotlin.stub
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import java.util.Date
@@ -44,6 +46,25 @@ class ServerRepositoryTest {
         credentialCrypto = mock()
         whenever(credentialCrypto.encrypt(any())).thenAnswer { inv ->
             inv.getArgument<String?>(0)?.let { "enc:v1:$it" }
+        }
+        // L7: 事务方法在测试里执行真实 DAO 语义, 使 verify(insert/update/setActive) 继续生效
+        serverDao.stub {
+            onBlocking { insertOrUpdateAndActivate(any(), any(), any()) } doSuspendableAnswer { inv ->
+                val server = inv.getArgument<ServerEntity>(0)
+                val existingId = inv.getArgument<Long>(1)
+                val activate = inv.getArgument<Boolean>(2)
+                val id =
+                    if (existingId == -1L) {
+                        serverDao.insert(server)
+                    } else {
+                        serverDao.update(server)
+                        existingId
+                    }
+                if (activate) {
+                    serverDao.setActive(id)
+                }
+                id
+            }
         }
         repository = ServerRepository(serverDao, whitelistDao, credentialCrypto)
     }
