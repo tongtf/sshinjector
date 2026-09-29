@@ -27,6 +27,12 @@ interface TunnelPlugin {
 
     val localSocksPort: Int get() = 0
 
+    /**
+     * 本地 SOCKS5 认证凭据 (RFC 1929, 用户名/密码)。
+     * null = 未提供认证能力; 服务端 fail-closed 拒绝一切连接, 客户端也会拒绝发起。
+     */
+    val socksAuth: Pair<String, String>? get() = null
+
     fun sendUdp(
         dstHost: String,
         dstPort: Int,

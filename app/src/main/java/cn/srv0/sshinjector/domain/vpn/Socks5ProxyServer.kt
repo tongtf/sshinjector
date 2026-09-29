@@ -17,6 +17,7 @@ import java.nio.channels.SelectionKey
 import java.nio.channels.Selector
 import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
@@ -46,6 +47,16 @@ class Socks5ProxyServer
         private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         private val connections = ConcurrentHashMap<Int, Socks5Connection>()
         private val connectionIdCounter = AtomicLong(0)
+
+        /** RFC 1929 期望凭据；由插件在 start() 前设置。null = 拒绝一切认证（fail-closed，不降级无认证）。 */
+        @Volatile private var expectedAuth: Pair<String, String>? = null
+
+        fun setExpectedAuth(
+            user: String,
+            password: String,
+        ) {
+            expectedAuth = user to password
+        }
 
         val serverState = MutableStateFlow<ServerState>(ServerState(ServerState.Status.Stopped))
         val boundPort = MutableStateFlow<Int?>(null)
@@ -212,6 +223,7 @@ class Socks5ProxyServer
                     },
                     onDataFromTarget = null,
                     ipToDomainLookup = { dnsInterceptor.ipToDomain[it] },
+                    expectedAuth = expectedAuth,
                 )
 
             // 延迟查找回调: relayFromTarget 首次使用前从 pendingTunCallbacks 获取
@@ -265,6 +277,7 @@ class Socks5ProxyServer
  * 单个 SOCKS5 连接处理 (状态机)
  * 通过 SSH 隧道 (TunnelChannel) 转发流量到目标服务器
  */
+@Suppress("LongParameterList") // 连接级回调+工厂汇聚成一个对象, 拆分需引入 config 包装类
 private class Socks5Connection(
     val id: Long,
     val channel: SocketChannel,
@@ -275,6 +288,7 @@ private class Socks5Connection(
     private val onClosed: () -> Unit,
     var onDataFromTarget: ((ByteArray, Int, Int) -> Unit)? = null,
     private val ipToDomainLookup: ((String) -> String?)? = null,
+    private val expectedAuth: Pair<String, String>? = null,
 ) {
     private val buffer = ByteBuffer.allocateDirect(32768)
 
@@ -333,7 +347,7 @@ private class Socks5Connection(
                 return
             }
 
-            buffer.clear()
+            // 不 clear: 上次未消费的半包留在 buffer 开头, 本次 read 追加其后
             val read = channel.read(buffer)
 
             if (read == -1) {
@@ -346,13 +360,13 @@ private class Socks5Connection(
             lastActivity = System.currentTimeMillis()
             onDataReceived(read.toLong())
 
-            // 循环处理 buffer 中所有可用数据
+            // 循环处理 buffer 中所有可用数据; 各 process 返回 false = 半包等待续传/已关闭, 停止空转
             var keepProcessing = true
             while (keepProcessing && buffer.hasRemaining() && state != SocksState.Closed) {
                 when (state) {
-                    SocksState.Handshake -> processHandshake()
-                    SocksState.AuthMethods -> processAuthMethods()
-                    SocksState.Request -> processRequest()
+                    SocksState.Handshake -> keepProcessing = processHandshake()
+                    SocksState.AuthMethods -> keepProcessing = processAuthMethods()
+                    SocksState.Request -> keepProcessing = processRequest()
                     SocksState.Connecting -> keepProcessing = false
                     SocksState.Relaying -> {
                         enqueueToSsh()
@@ -361,6 +375,8 @@ private class Socks5Connection(
                     SocksState.Closed -> keepProcessing = false
                 }
             }
+            // 半包保留: 未消费字节移到 buffer 开头等待下次 read (Relaying/Connecting 已 clear, compact 无害)
+            if (state != SocksState.Closed) buffer.compact()
         } catch (e: Exception) {
             android.util.Log.e("Socks5Proxy", "[conn=$id] handleRead exception: ${e.message}", e)
             close()
@@ -411,140 +427,121 @@ private class Socks5Connection(
         }
     }
 
-    private fun processHandshake() {
+    /** @return true 可继续处理; false = 半包待续传或已关闭。整条记录齐备前不消费任何字节。 */
+    private fun processHandshake(): Boolean {
         // SOCKS5 握手: VER(1) NMETHODS(1) METHODS(*)
-        if (buffer.remaining() < 2) return
+        if (buffer.remaining() < 2) return false
 
-        val ver = buffer.get().toInt() and 0xFF
-        val nMethods = buffer.get().toInt() and 0xFF
-
+        val pos = buffer.position()
+        val ver = buffer.get(pos).toInt() and 0xFF
         if (ver != 0x05) {
             close()
-            return
+            return false
+        }
+        val nMethods = buffer.get(pos + 1).toInt() and 0xFF
+        if (buffer.remaining() < 2 + nMethods) return false
+
+        val methods = ByteArray(nMethods)
+        buffer.position(pos + 2)
+        buffer.get(methods)
+
+        // 仅接受用户名/密码认证 (RFC 1929, 0x02); 无凭据或客户端不支持一律拒绝, 不留无认证口子
+        val auth = expectedAuth
+        if (auth == null || methods.none { (it.toInt() and 0xFF) == 0x02 }) {
+            sendReplyAndClose(byteArrayOf(0x05, 0xFF.toByte()))
+            return false
         }
 
-        // 跳过方法列表
-        val methodsToSkip = minOf(nMethods, buffer.remaining())
-        buffer.position(buffer.position() + methodsToSkip)
+        sendReply(byteArrayOf(0x05, 0x02))
+        state = SocksState.AuthMethods
+        return true
+    }
 
-        // 回复: 版本 5, 无认证 (0x00)
-        sendReply(byteArrayOf(0x05, 0x00))
+    /** @return true 可继续处理; false = 半包待续传或已关闭。 */
+    private fun processAuthMethods(): Boolean {
+        // RFC 1929: VER(1) ULEN(1) USER(ULEN) PLEN(1) PASS(PLEN)
+        if (buffer.remaining() < 2) return false
+
+        val pos = buffer.position()
+        val ver = buffer.get(pos).toInt() and 0xFF
+        val userLen = buffer.get(pos + 1).toInt() and 0xFF
+        if (ver != 0x01 || userLen == 0) {
+            sendReplyAndClose(byteArrayOf(0x01, 0x01))
+            return false
+        }
+        // RFC 1929 报文 = VER + ULEN + USER + PLEN + PASS = 3 + userLen + passLen
+        if (buffer.remaining() < 3 + userLen) return false
+        val passLen = buffer.get(pos + 2 + userLen).toInt() and 0xFF
+        if (buffer.remaining() < 3 + userLen + passLen) return false
+
+        buffer.position(pos + 2)
+        val user = ByteArray(userLen)
+        buffer.get(user)
+        buffer.get() // PLEN
+        val pass = ByteArray(passLen)
+        buffer.get(pass)
+
+        val auth = expectedAuth
+        val ok =
+            auth != null &&
+                MessageDigest.isEqual(auth.first.toByteArray(Charsets.UTF_8), user) &&
+                MessageDigest.isEqual(auth.second.toByteArray(Charsets.UTF_8), pass)
+        if (!ok) {
+            sendReplyAndClose(byteArrayOf(0x01, 0x01))
+            return false
+        }
+
+        sendReply(byteArrayOf(0x01, 0x00))
         state = SocksState.Request
+        return true
     }
 
-    private fun processAuthMethods() {
-        // 已在握手时处理，无认证直接进入 Request
-        state = SocksState.Request
+    /** @return true 可继续处理; false = 半包待续传或已关闭。 */
+    private fun processRequest(): Boolean {
+        // SOCKS5 请求: VER(1) CMD(1) RSV(1) ATYP(1) DST.ADDR(*) DST.PORT(2) — 齐备前不消费
+        if (buffer.remaining() < 4) return false
+
+        val pos = buffer.position()
+        val cmd = buffer.get(pos + 1).toInt() and 0xFF
+        val atyp = buffer.get(pos + 3).toInt() and 0xFF
+
+        if (cmd != 0x01) {
+            // 仅支持 CONNECT; UDP ASSOCIATE 与其他命令立即拒绝 (本地代理仅转发 TCP)
+            sendReplyAndClose(byteArrayOf(0x05, 0x07, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
+            return false
+        }
+
+        // 按 ATYP 计算地址+端口段最小长度
+        val addrLen =
+            when (atyp) {
+                0x01 -> 6 // IPv4 + Port
+                0x04 -> 18 // IPv6 + Port
+                0x03 -> {
+                    if (buffer.remaining() < 5) return false // 差 1 字节拿不到域名长度
+                    3 + (buffer.get(pos + 4).toInt() and 0xFF) // len 字节 + 域名 + Port
+                }
+                else -> {
+                    sendReplyAndClose(byteArrayOf(0x05, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
+                    return false
+                }
+            }
+        if (buffer.remaining() < 4 + addrLen) return false
+        buffer.position(pos + 4) // 头部已齐, 交给 parse* 消费地址段
+
+        val (host, port) =
+            when (atyp) {
+                0x01 -> parseIpv4()
+                0x03 -> parseDomain()
+                else -> parseIpv6()
+            }
+        remoteHost = host
+        remotePort = port
+
+        // 异步连接目标 (通过 SSH 隧道)
+        state = SocksState.Connecting
+        connectToTarget()
+        return true
     }
-
-    private fun processRequest() {
-        // SOCKS5 请求: VER(1) CMD(1) RSV(1) ATYP(1) DST.ADDR(*) DST.PORT(2)
-        if (buffer.remaining() < 4) {
-            android.util.Log.w("Socks5Proxy", "[conn=$id] processRequest: not enough data (${buffer.remaining()} < 4)")
-            return
-        }
-
-        val ver = buffer.get().toInt() and 0xFF
-        val cmd = buffer.get().toInt() and 0xFF
-        buffer.get() // RSV，必须为 0
-        val atyp = buffer.get().toInt() and 0xFF
-
-        when (cmd) {
-            0x01 -> { // CONNECT
-                // 解析目标地址
-                val (host, port) =
-                    when (atyp) {
-                        0x01 -> parseIpv4() // IPv4
-                        0x03 -> parseDomain() // 域名
-                        0x04 -> parseIpv6() // IPv6
-                        else -> {
-                            sendErrorReply(0x08) // Address type not supported
-                            close()
-                            return
-                        }
-                    }
-
-                remoteHost = host
-                remotePort = port
-
-                // 异步连接目标 (通过 SSH 隧道)
-                state = SocksState.Connecting
-                connectToTarget()
-            }
-            0x03 -> { // UDP ASSOCIATE
-                // UDP ASSOCIATE: 客户端告知 UDP relay 地址
-                // 解析客户端的 UDP 地址 (用于后续 UDP 转发)
-                val (clientHost, clientPort) =
-                    when (atyp) {
-                        0x01 -> parseIpv4()
-                        0x03 -> parseDomain()
-                        0x04 -> parseIpv6()
-                        else -> {
-                            // 全零表示客户端尚不知道自己的地址
-                            skipAddressAndPort(atyp)
-                            "0.0.0.0" to 0
-                        }
-                    }
-
-                // 回复成功，告知 UDP relay 地址
-                sendTunResponse(buildUdpTunResponse(clientHost, clientPort))
-                // 注意: UDP ASSOCIATE 连接保持打开直到 TCP 连接关闭
-                // 实际的 UDP 数据转发由 PacketProcessor 处理
-            }
-            else -> {
-                sendErrorReply(0x07) // Command not supported
-                close()
-            }
-        }
-    }
-
-    private fun skipAddressAndPort(atyp: Int) {
-        when (atyp) {
-            0x01 -> buffer.position(buffer.position() + 4 + 2) // IPv4 + Port
-            0x04 -> buffer.position(buffer.position() + 16 + 2) // IPv6 + Port
-            0x03 -> {
-                val len = buffer.get().toInt() and 0xFF
-                buffer.position(buffer.position() + len + 2) // Domain + Port
-            }
-        }
-    }
-
-    fun sendTunResponse(response: ByteArray) {
-        try {
-            if (selectionKey != null && selectionKey!!.isValid) {
-                // 统一使用 pendingWrites 队列
-                pendingWrites.add(ByteBuffer.wrap(response))
-                selectionKey!!.interestOps(selectionKey!!.interestOps() or SelectionKey.OP_WRITE)
-            } else {
-                // 备用 - 使用 channel.write (direct write)
-                channel.write(ByteBuffer.wrap(response))
-            }
-        } catch (e: Exception) {
-            close()
-        }
-    }
-
-    private fun buildTunResponse(
-        ignoredBindHost: String,
-        bindPort: Int,
-    ): ByteArray =
-        ByteArray(10).apply {
-            this[0] = 0x05 // VER: 5
-            this[1] = 0x00 // REP: Success
-            this[2] = 0x00 // RSV: 0
-            this[3] = 0x01 // ATYP: IPv4
-            this[4] = 0x00
-            this[5] = 0x00
-            this[6] = 0x00
-            this[7] = 0x00 // BND.ADDR: 0.0.0.0
-            this[8] = (bindPort shr 8).toByte()
-            this[9] = bindPort.toByte() // BND.PORT: 0
-        }
-
-    private fun buildUdpTunResponse(
-        ignoredBindHost: String,
-        bindPort: Int,
-    ): ByteArray = buildTunResponse(ignoredBindHost, bindPort)
 
     private fun parseIpv4(): Pair<String, Int> {
         val bytes = ByteArray(4)
@@ -726,6 +723,7 @@ private class Socks5Connection(
                         break
                     }
                     if (read > 0) {
+                        lastActivity = System.currentTimeMillis()
                         if (IS_DEBUG) {
                             android.util.Log.d(
                                 "Socks5Proxy",
@@ -736,12 +734,15 @@ private class Socks5Connection(
                         callback?.invoke(readBuffer.array(), 0, read)
                         onDataReceived(read.toLong())
                         if (callback == null) {
-                            sendReply(readBuffer.array(), 0, read)
+                            // 快照后入队: wrap 是共享 readBuffer.array() 的视图, 异步写出前下轮 read 会覆写它
+                            sendReply(readBuffer.array().copyOf(read))
                         }
                     }
                 }
             } catch (e: Exception) {
                 android.util.Log.e("Socks5Connection", "[conn=$id] relayFromTarget error: ${e.message}", e)
+                // 回程异常 = 隧道已坏, 不关闭则客户端永远等不到 EOF
+                this@Socks5Connection.close()
             } finally {
                 if (IS_DEBUG) android.util.Log.d("Socks5Connection", "[conn=$id] relayFromTarget coroutine exiting")
             }
@@ -786,6 +787,20 @@ private class Socks5Connection(
 
     private fun sendReply(reply: ByteArray) {
         sendReply(reply, 0, reply.size)
+    }
+
+    /**
+     * 最终拒绝回复 + 关闭: 必须同步写出。
+     * 走 sendReply 排队的话, 紧接着的 close() 会 cancel selectionKey, pendingWrites 被丢弃,
+     * 客户端只看到 EOF 而收不到 0xFF/0x01 等明确拒绝码。
+     * 仅在 eventLoop 线程调用 (协议解析路径), 字节数 ≤ 18, 非阻塞 write 在 loopback 上必然写完。
+     */
+    private fun sendReplyAndClose(reply: ByteArray) {
+        try {
+            channel.write(ByteBuffer.wrap(reply))
+        } catch (_: Exception) {
+        }
+        close()
     }
 
     private fun sendReply(

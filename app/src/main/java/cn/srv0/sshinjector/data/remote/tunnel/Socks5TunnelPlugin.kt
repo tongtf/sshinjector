@@ -71,6 +71,9 @@ class Socks5TunnelPlugin
         private var socksServer: Socks5ProxyServer? = null
         private var startTime: Long = 0
 
+        private var _socksAuth: Pair<String, String>? = null
+        override val socksAuth: Pair<String, String>? get() = _socksAuth
+
         override val localSocksPort: Int
             get() = socksServer?.boundPort?.value ?: 0
 
@@ -96,6 +99,10 @@ class Socks5TunnelPlugin
                 if (!result.success) throw Exception(result.error ?: "SSH connection failed")
 
                 val proxy = Socks5ProxyServer(jschClient, dnsInterceptor, sshIoDispatcher)
+                // 每次连接生成新凭据 (RFC 1929); 必须在 start() 前设置, 否则先到的连接会 fail-closed 被拒
+                val auth = generateSocksAuth()
+                proxy.setExpectedAuth(auth.first, auth.second)
+                _socksAuth = auth
                 val proxyResult = proxy.start(c.socksPort, "127.0.0.1")
                 if (proxyResult.isFailure) throw proxyResult.exceptionOrNull()!!
 
@@ -121,8 +128,24 @@ class Socks5TunnelPlugin
             } catch (_: Exception) {
             }
             socksServer = null
+            _socksAuth = null
             startTime = 0
             _state.value = TunnelState()
+        }
+
+        /** 16 字节随机 → URL-safe Base64 (22 字符, ≤ RFC 1929 的 255 上限), 每次连接新生成。 */
+        private fun generateSocksAuth(): Pair<String, String> {
+            val rnd = java.security.SecureRandom()
+
+            fun token(): String {
+                val bytes = ByteArray(16)
+                rnd.nextBytes(bytes)
+                return java.util.Base64
+                    .getUrlEncoder()
+                    .withoutPadding()
+                    .encodeToString(bytes)
+            }
+            return token() to token()
         }
 
         override fun openTcpChannel(
