@@ -95,8 +95,10 @@ class UdpRelay(
             val dnsPayloadLen = dnsBuffer.remaining()
             dnsBuffer.limit(dnsPayloadLen)
 
-            // 委托 DnsInterceptor 处理
-            interceptor.processDnsQuery(dnsBuffer, srcIp, dstIp, srcPort, dstPort)
+            // 委托 DnsInterceptor 处理 — false = 未拦截/解析失败 → 丢弃 (回注是黑洞, 无透传语义)
+            if (!interceptor.processDnsQuery(dnsBuffer, srcIp, dstIp, srcPort, dstPort)) {
+                return false
+            }
             stats.addPacket(dnsPayloadLen.toLong())
             return true
         } catch (e: Exception) {

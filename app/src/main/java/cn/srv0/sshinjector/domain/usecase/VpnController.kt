@@ -77,6 +77,19 @@ class VpnController
         // 用于 SYSTEM 模式 DNS 绕过的 socket 保护函数
         private var protectDatagramChannel: ((java.net.DatagramSocket) -> Boolean)? = null
 
+        // F1: TCP 用户态直连的 protect (必须在 connect 前调用, 由 SshVpnService 注入)
+        @Volatile private var protectTcpSocket: ((java.net.Socket) -> Boolean)? = null
+
+        init {
+            // TCP bypass 策略实时读 excludedRoutes/transportMode (无需随配置变化重挂)
+            packetProcessor.setTcpBypass(::shouldBypassTcp) { socket -> protectTcpSocket?.invoke(socket) ?: false }
+        }
+
+        fun setProtectTcpFunction(protectSocket: (java.net.Socket) -> Boolean) {
+            addLog(">>> [VpnController] setProtectTcpFunction 被调用", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
+            protectTcpSocket = protectSocket
+        }
+
         val vpnState = MutableStateFlow<VpnState>(VpnState())
         val connectionStats = MutableStateFlow<ConnectionStats>(ConnectionStats())
 
@@ -107,13 +120,41 @@ class VpnController
 
         companion object {
             private const val TAG = "VpnController"
-            private const val IPPROTO_TCP = 6
             private const val IPPROTO_UDP = 17
             private const val DNS_PORT = 53
             private const val SOCKET_TIMEOUT_MS = 5000
             private const val CONNECTION_CLEANUP_INTERVAL_MS = 60000L
             private const val STALE_CONNECTION_TIMEOUT_MS = 300000L
             private const val STATS_FLUSH_INTERVAL_MS = 100L
+
+            /**
+             * 纯策略函数 (可单测): 排除路由命中 → 直连; DOMAIN_SPLIT 非假 IP → 直连。
+             * UDP 不走此判定 (UDP 已降级, 非 53 丢弃计数)。
+             */
+            internal fun computeShouldBypassTcp(
+                dstIp: InetAddress,
+                excludedRoutes: List<CidrRoute>,
+                transportMode: DnsInterceptor.DnsTransport,
+            ): Boolean {
+                if (excludedRoutes.any { CidrRoute.matches(dstIp, it) }) return true
+                return transportMode == DnsInterceptor.DnsTransport.DOMAIN_SPLIT && !isFakeIp(dstIp)
+            }
+
+            /**
+             * 判定 IP 是否为 DnsInterceptor 分配的假 IP (198.18.0.0/15, fd00::/8)。
+             */
+            internal fun isFakeIp(ip: InetAddress): Boolean {
+                val bytes = ip.address
+                if (bytes.size == 4) {
+                    val b0 = bytes[0].toInt() and 0xFF
+                    val b1 = bytes[1].toInt() and 0xFF
+                    return b0 == 198 && (b1 == 18 || b1 == 19)
+                }
+                if (bytes.size == 16) {
+                    return (bytes[0].toInt() and 0xFF) == 0xFD
+                }
+                return false
+            }
         }
 
         /**
@@ -147,6 +188,9 @@ class VpnController
 
                 // 3. 设置 DNS 拦截器
                 packetProcessor.setDnsInterceptor(dnsInterceptor)
+                // S5: IPv6 开关联动 — TUN 侧丢弃 v6 包 + DNS AAAA 回空应答
+                packetProcessor.setEnableIPv6(server.enableIPv6)
+                dnsInterceptor.setEnableIPv6(server.enableIPv6)
                 val dnsModeValue = settingsDataStore.dnsMode.first()
                 this.transportMode =
                     when (dnsModeValue) {
@@ -277,6 +321,9 @@ class VpnController
 
             // 排空 DNS 残留响应, 避免旧会话数据泄漏到下一次连接
             dnsInterceptor.clearPendingResponses()
+
+            // 清空 TCP 连接表, 跨会话残留不复用 (F6-4)
+            packetProcessor.resetTcpState()
 
             // 断开 SSH 连接
             // 停止所有隧道插件
@@ -513,56 +560,33 @@ class VpnController
                     }
                 }
 
-                // 提取目标 IP 以检查排除路由 (无排除路由且非域名分流时短路, 避免每包分配)
-                val needDstIp =
-                    excludedRoutes.isNotEmpty() ||
-                        transportMode == DnsInterceptor.DnsTransport.DOMAIN_SPLIT
+                // 排除路由/域名分流: 不再 writeToTun 回注 —— 包已进 TUN, 用户态无法塞回物理网卡,
+                // 回注 = ip_forward 黑洞或 0/0 路由读写死循环 (F1)。
+                // 仅 SYSTEM 模式 DNS(UDP:53) 走 protected socket 直接转发 (对 UDP 有效, 非回注);
+                // TCP 落入 PacketProcessor → forwardSynToTunnel → shouldBypassTcp → 用户态直连;
+                // UDP 非 53 由 UdpRelay 丢弃计数。
+                val needDstIp = excludedRoutes.isNotEmpty()
                 val dstIp = if (needDstIp) extractDstIp(workBuffer, workVersion) else null
-                if (dstIp != null && shouldBypassVpn(dstIp)) {
-                    if (transportMode == DnsInterceptor.DnsTransport.SYSTEM) {
-                        forwardDnsBypassPacket(readBuffer, dstIp, workVersion)
-                    } else {
-                        writeToTun(readBuffer.array().copyOfRange(0, readBuffer.limit()))
-                    }
+                val isSystemDnsUdp53 =
+                    transportMode == DnsInterceptor.DnsTransport.SYSTEM &&
+                        extractProtocol(workBuffer, workVersion) == IPPROTO_UDP &&
+                        extractDstPort(workBuffer, workVersion) == DNS_PORT
+                if (dstIp != null &&
+                    shouldBypassVpn(dstIp) &&
+                    isSystemDnsUdp53
+                ) {
+                    forwardDnsBypassPacket(readBuffer, dstIp, workVersion)
                     return
-                }
-
-                // 域名分流: 命中列表域名拿到假 IP(198.18.x.x / fd00::x)走隧道,
-                // 未命中域名拿到真实 IP, 该 TCP/非 53 UDP 直连透传回 TUN。
-                // DNS(UDP:53) 与 ICMP 放行给 DnsInterceptor/系统处理, 保证 DNS 拦截与 IPv6 ND 正常。
-                if (transportMode == DnsInterceptor.DnsTransport.DOMAIN_SPLIT && dstIp != null && !isFakeIp(dstIp)) {
-                    val proto = extractProtocol(workBuffer, workVersion)
-                    val dstPort = extractDstPort(workBuffer, workVersion)
-                    val direct =
-                        when (proto) {
-                            IPPROTO_TCP -> true
-                            IPPROTO_UDP -> dstPort != DNS_PORT
-                            else -> false
-                        }
-                    if (direct) {
-                        val data = ByteArray(workBuffer.remaining())
-                        workBuffer.duplicate().get(data)
-                        addLog(
-                            "域名分流直连: proto=$proto dst=${dstIp.hostAddress}:$dstPort",
-                            cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG,
-                        )
-                        writeToTun(data)
-                        return
-                    }
                 }
 
                 when (workVersion) {
                     4 -> {
-                        val processed = packetProcessor.processIpv4Packet(workBuffer)
-                        if (!processed) {
-                            writeToTun(readBuffer.array().copyOfRange(0, readBuffer.limit()))
-                        }
+                        // F12-e: false = 未处理 → 丢弃计数已在 PacketProcessor 内完成;
+                        // 不 writeToTun 回注 —— 包已进 TUN, 回注是黑洞或读写死循环 (F1 同类)
+                        packetProcessor.processIpv4Packet(workBuffer)
                     }
                     6 -> {
-                        val processed = packetProcessor.processIpv6Packet(workBuffer)
-                        if (!processed) {
-                            writeToTun(readBuffer.array().copyOfRange(0, readBuffer.limit()))
-                        }
+                        packetProcessor.processIpv6Packet(workBuffer)
                     }
                     else -> {
                         addLog(
@@ -635,22 +659,6 @@ class VpnController
                 -1
             }
 
-        /**
-         * 判定 IP 是否为 DnsInterceptor 分配的假 IP (198.18.0.0/15, fd00::/8)。
-         */
-        private fun isFakeIp(ip: InetAddress): Boolean {
-            val bytes = ip.address
-            if (bytes.size == 4) {
-                val b0 = bytes[0].toInt() and 0xFF
-                val b1 = bytes[1].toInt() and 0xFF
-                return b0 == 198 && (b1 == 18 || b1 == 19)
-            }
-            if (bytes.size == 16) {
-                return (bytes[0].toInt() and 0xFF) == 0xFD
-            }
-            return false
-        }
-
         private fun shouldBypassVpn(dstIp: InetAddress): Boolean {
             val result = excludedRoutes.any { CidrRoute.matches(dstIp, it) }
             if (result) {
@@ -661,6 +669,15 @@ class VpnController
             }
             return result
         }
+
+        /**
+         * F1: TCP 是否走用户态直连 (不经隧道)。
+         * 排除路由命中, 或 DOMAIN_SPLIT 模式下未命中域名列表 (拿到真实 IP 而非假 IP)。
+         */
+        fun shouldBypassTcp(
+            dstIp: InetAddress,
+            @Suppress("UNUSED_PARAMETER") dstPort: Int,
+        ): Boolean = computeShouldBypassTcp(dstIp, excludedRoutes, transportMode)
 
         private fun writeDnsResponse(response: DnsInterceptor.DnsResponse) {
             try {

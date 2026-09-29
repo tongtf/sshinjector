@@ -110,7 +110,7 @@ class Icmpv6Responder(
         packet.putInt(IPV6_HEADER_WORD)
         packet.putShort(icmpLen.toShort()) // Payload length
         packet.put(58.toByte()) // Next Header: ICMPv6
-        packet.put(64.toByte()) // Hop Limit
+        packet.put(255.toByte()) // Hop Limit: RFC 4861 要求 ND 消息必须 255, Linux ndisc_rcv 非 255 即丢
         packet.put(srcIp)
         packet.put(dstIp)
 

@@ -62,9 +62,23 @@ class DnsInterceptor
             domainListManager = manager
         }
 
+        // S5: IPv6 总开关 (connect 时注入); 关闭时 AAAA 回空应答, TUN 侧丢弃 v6 包
+        @Volatile private var enableIPv6 = true
+
+        fun setEnableIPv6(enable: Boolean) {
+            enableIPv6 = enable
+        }
+
         private val executor = Executors.newFixedThreadPool(2)
         private val pendingQueries = ConcurrentHashMap<Int, DnsPendingQuery>()
         private val dnsCache = ConcurrentHashMap<String, CacheEntry>()
+
+        // F12-d: DNS 缓存/假 IP 映射键的唯一构造 — Name.toString(true) 无尾点 + "." + 类型;
+        // 读 (查询命中) 与写 (真实响应/假 IP 两处) 必须一致, 否则缓存永远 miss
+        private fun dnsCacheKey(
+            q: org.xbill.DNS.Name,
+            type: Int,
+        ) = "${q.toString(true)}.$type"
 
         private fun cacheDns(
             key: String,
@@ -246,7 +260,7 @@ class DnsInterceptor
 
         /**
          * 处理 DNS 查询包
-         * @return true 表示已拦截，false 表示透传
+         * @return true 表示已拦截，false 表示丢弃（未拦截/解析失败；回注是黑洞，无透传语义）
          */
         fun processDnsQuery(
             buffer: java.nio.ByteBuffer,
@@ -284,8 +298,29 @@ class DnsInterceptor
                 val originalQueryId = message.header.id
                 queriesIntercepted.incrementAndGet()
 
+                // S5: IPv6 关闭 → AAAA 一律回空应答 (不分配/不读缓存/不真实解析 fd00 假 IP)。
+                // 应用回落 A 记录走 IPv4; 若超时式丢弃, getaddrinfo 会卡到解析超时
+                if (question.type == org.xbill.DNS.Type.AAAA && !enableIPv6) {
+                    val response = Message(originalQueryId)
+                    response.header.setFlag(Flags.QR.toInt())
+                    response.header.setFlag(Flags.RD.toInt())
+                    response.header.setFlag(Flags.RA.toInt())
+                    response.header.setRcode(Rcode.NOERROR)
+                    response.addRecord(question, Section.QUESTION)
+                    pendingResponses.trySend(
+                        DnsResponse(
+                            srcIp = dstIp,
+                            dstIp = srcIp,
+                            dstPort = srcPort,
+                            data = response.toWire(),
+                        ),
+                    )
+                    queriesResolved.incrementAndGet()
+                    return true
+                }
+
                 // 检查缓存
-                val cacheKey = "${question.name}.${question.type}"
+                val cacheKey = dnsCacheKey(question.name, question.type)
                 val cached = dnsCache[cacheKey]
                 if (cached != null && cached.expireAt > System.currentTimeMillis()) {
                     cacheHits.incrementAndGet()
@@ -429,7 +464,7 @@ class DnsInterceptor
                 val records = response.getSection(Section.ANSWER)
 
                 // 缓存结果
-                val cacheKey = "${pending.question.name}.${pending.question.type}"
+                val cacheKey = dnsCacheKey(pending.question.name, pending.question.type)
                 val minTtl = records.map { it.ttl }.minOrNull() ?: 300
                 cacheDns(
                     cacheKey,
@@ -516,7 +551,7 @@ class DnsInterceptor
             }
 
             // 同一域名+类型返回相同假IP (key 包含类型, A 和 AAAA 独立分配)
-            val cacheKey = "$qname.$qtype"
+            val cacheKey = dnsCacheKey(question.name, qtype)
             val existingIp = domainToIp[cacheKey]
             val fakeIp: String
             val fakeInetAddress: InetAddress
