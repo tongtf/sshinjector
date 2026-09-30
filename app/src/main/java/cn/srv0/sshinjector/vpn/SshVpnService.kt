@@ -4,7 +4,10 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -82,6 +85,39 @@ class SshVpnService : VpnService() {
         observeVpnControllerState()
         observeJschConnectionState()
         registerNetworkCallback()
+        registerUnlockReconnectReceiver()
+    }
+
+    /**
+     * 监听系统解锁广播:用户通过生物识别/锁屏密码鉴权后,若 SSH 连接已断
+     * (hasUnhealthySession),立即触发一次重连。
+     * 解决『锁屏期 Keystore 拒签导致重连失败』后的即时恢复 —— 无需等待 keepAlive 周期，
+     * 也绕过 isConnectedFlag 在假连接状态下不会置 false、UI 一直显示已连接的问题。
+     */
+    private val unlockReconnectReceiver =
+        object : BroadcastReceiver() {
+            override fun onReceive(
+                context: Context?,
+                intent: Intent?,
+            ) {
+                if (intent?.action != Intent.ACTION_USER_PRESENT) return
+                try {
+                    if (jschSshClient.hasUnhealthySession()) {
+                        android.util.Log.d("SshVpnService", "ACTION_USER_PRESENT: ssh unhealthy, reconnecting")
+                        scope.launch { autoReconnect() }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("SshVpnService", "ACTION_USER_PRESENT handler failed", e)
+                }
+            }
+        }
+
+    private fun registerUnlockReconnectReceiver() {
+        try {
+            registerReceiver(unlockReconnectReceiver, IntentFilter(Intent.ACTION_USER_PRESENT))
+        } catch (e: Exception) {
+            android.util.Log.e("SshVpnService", "Failed to register ACTION_USER_PRESENT receiver", e)
+        }
     }
 
     override fun onStartCommand(
@@ -137,6 +173,10 @@ class SshVpnService : VpnService() {
 
     override fun onDestroy() {
         connectivityManager?.unregisterNetworkCallback(networkCallback)
+        try {
+            unregisterReceiver(unlockReconnectReceiver)
+        } catch (_: Exception) {
+        }
         whitelistObserverJob?.cancel()
         reconnectJob?.cancel()
         scope.cancel()
@@ -202,7 +242,6 @@ class SshVpnService : VpnService() {
                 }
                 // F1: TCP 用户态直连的 protect (必须在 connect 前注入, 否则直连流量回环进 TUN)
                 vpnController.setProtectTcpFunction { socket -> this.protect(socket) }
-
                 // 连接 VPN 控制器
                 val result = vpnController.connect(merged, merged.password)
                 if (result.isFailure) {
@@ -359,6 +398,7 @@ class SshVpnService : VpnService() {
             builder.addDisallowedApplication(packageName)
         }
 
+        android.util.Log.d("SshVpnService", "buildVpnBuilder: dnsMode=$dnsMode allowedPackages=${allowedPackages.size}")
         when (dnsMode) {
             0 -> {
                 // REMOTE 模式: 全部流量走 VPN 隧道
@@ -697,7 +737,6 @@ class SshVpnService : VpnService() {
             vpnController.setVpnInterface(fd)
             vpnController.setProtectFunction { socket -> this.protect(socket) }
             vpnController.setProtectTcpFunction { socket -> this.protect(socket) }
-
             val result = vpnController.connect(config, config.password)
             if (result.isFailure) {
                 throw result.exceptionOrNull() ?: Exception("Reconnect failed")

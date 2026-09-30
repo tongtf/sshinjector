@@ -491,7 +491,8 @@ class JschSshClient
                     session?.disconnect()
                 } catch (_: Exception) {
                 }
-                android.util.Log.w(TAG, "createSession[$index] failed: ${e.message}")
+                // 带堆栈记录：暴露 JSch KEX/主机密钥/鉴权的真实异常链，便于区分握手阶段失败原因
+                android.util.Log.e(TAG, "createSession[$index] failed: ${e.message}", e)
                 null
             }
         }
@@ -620,6 +621,13 @@ class JschSshClient
         }
 
         fun isConnected(): Boolean = isConnectedFlag.get() && pool.any { it.session.isConnected }
+
+        /**
+         * 连接池中是否有 session 已被标记为不健康 (断线已被 keepAlive/重连检测到)。
+         * 供外部 (解锁后自动重连) 判断是否需要恢复, 比 isConnected() 更敏感:
+         * isConnected() 只对『全部 session 都断开』才返回 false, 而死 socket 可能仍 isConnected=true。
+         */
+        fun hasUnhealthySession(): Boolean = pool.any { !it.healthy }
 
         /**
          * 创建直连通道 - 从 session 池中轮询选择健康的 session
@@ -785,6 +793,7 @@ class JschSshClient
                     s.setConfig("PasswordAuthentication", "yes")
                     applyAlgorithmWhitelist(s)
                     s.setTimeout(config.connectTimeout)
+
                     s.connect()
 
                     val exec = s.openChannel("exec") as ChannelExec
