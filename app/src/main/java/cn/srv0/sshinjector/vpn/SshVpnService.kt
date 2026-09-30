@@ -18,10 +18,14 @@ import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.data.local.dao.WhitelistDao
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
 import cn.srv0.sshinjector.domain.model.ConnectionStats
+import cn.srv0.sshinjector.domain.model.HealthStep
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import cn.srv0.sshinjector.domain.usecase.VpnController
+import cn.srv0.sshinjector.domain.vpn.ConnectivityProber
+import cn.srv0.sshinjector.domain.vpn.HealthTracker
 import cn.srv0.sshinjector.domain.vpn.VpnNetwork
+import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -50,6 +54,8 @@ class SshVpnService : VpnService() {
     @Inject lateinit var settingsDataStore: SettingsDataStore
 
     @Inject lateinit var jschSshClient: cn.srv0.sshinjector.data.remote.ssh.JschSshClient
+
+    @Inject lateinit var tunnelManager: TunnelManager
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private var tunFd: java.io.FileDescriptor? = null
@@ -102,6 +108,8 @@ class SshVpnService : VpnService() {
             ) {
                 if (intent?.action != Intent.ACTION_USER_PRESENT) return
                 try {
+                    // 解锁后先补一次端到端探测 (锁屏期隧道可能已死但未被 keepAlive 发现)
+                    triggerHealthProbeNow()
                     if (jschSshClient.hasUnhealthySession()) {
                         android.util.Log.d("SshVpnService", "ACTION_USER_PRESENT: ssh unhealthy, reconnecting")
                         scope.launch { autoReconnect() }
@@ -117,6 +125,89 @@ class SshVpnService : VpnService() {
             registerReceiver(unlockReconnectReceiver, IntentFilter(Intent.ACTION_USER_PRESENT))
         } catch (e: Exception) {
             android.util.Log.e("SshVpnService", "Failed to register ACTION_USER_PRESENT receiver", e)
+        }
+    }
+
+    // ---- 连通性健康监测 (spec: 2026-09-30-connectivity-health) ----
+
+    private var healthJob: Job? = null
+    private val healthTracker = HealthTracker()
+
+    /**
+     * 连接刚建立 → 未验证 (UI 显示"网络验证中"): 立即探测 + 15s 周期循环。
+     * 探测失败只降级显示 (spec D3), 自动重连仍走解锁/网络切换/keepAlive 既有钩子。
+     */
+    private fun startHealthMonitor(config: ServerConfig) {
+        stopHealthMonitor()
+        healthTracker.reset()
+        vpnController.reportHealth(verified = false, failedStep = null)
+        healthJob =
+            scope.launch {
+                while (true) {
+                    runHealthProbe(config)
+                    delay(HEALTH_PROBE_INTERVAL_MS)
+                }
+            }
+    }
+
+    private fun stopHealthMonitor() {
+        healthJob?.cancel()
+        healthJob = null
+    }
+
+    /** 事件触发 (网络切换/解锁): 立即补一次探测, 不打断周期循环、不重置计数。 */
+    private fun triggerHealthProbeNow() {
+        val config = currentServer ?: return
+        if (healthJob?.isActive != true) return
+        scope.launch { runHealthProbe(config) }
+    }
+
+    private suspend fun runHealthProbe(config: ServerConfig) {
+        try {
+            val endpoint = settingsDataStore.probeUrl.first() ?: ConnectivityProber.DEFAULT_ENDPOINT
+            val prober =
+                ConnectivityProber(
+                    socksPort = config.socksPort,
+                    socksAuth = tunnelManager.getActiveOrFallback().socksAuth,
+                    endpointUrl = endpoint,
+                )
+            val result = prober.probe()
+            // SSH 池已知不健康是直接事实: 首败即降级并归因到 SSH, 不必等探测连败凑次数
+            val sshOk = jschSshClient.isConnected() && !jschSshClient.hasUnhealthySession()
+            when (result) {
+                is ConnectivityProber.Result.Ok -> {
+                    healthTracker.onSuccess()
+                    android.util.Log.d("SshVpnService", "health probe ok (verified)")
+                }
+                is ConnectivityProber.Result.Failed -> {
+                    val step = if (!sshOk) HealthStep.SSH else result.step
+                    healthTracker.onFailure(step, immediate = !sshOk)
+                    android.util.Log.w("SshVpnService", "health probe failed: step=$step reason=${result.reason}")
+                }
+            }
+            vpnController.reportHealth(healthTracker.verified, healthTracker.failedStep)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // 探测自身异常 (如读配置失败) 不影响连接, 只记日志
+            android.util.Log.e("SshVpnService", "health probe error: ${e.message}")
+        }
+    }
+
+    /** 连接期失败 → 步骤归因 (spec D4): 按异常消息映射, 与运行期探测共用 HealthStep。 */
+    private fun mapConnectFailureToStep(message: String?): HealthStep {
+        val m = message ?: return HealthStep.SSH
+        return when {
+            m.contains("Auth fail", ignoreCase = true) -> HealthStep.AUTH
+            m.contains("establish", ignoreCase = true) ||
+                m.contains("interface", ignoreCase = true) ||
+                m.contains("tun", ignoreCase = true) -> HealthStep.TUN
+            m.contains("proxy", ignoreCase = true) ||
+                m.contains("socks", ignoreCase = true) ||
+                m.contains("in use", ignoreCase = true) ->
+                HealthStep.PROXY
+            m.contains("dns", ignoreCase = true) -> HealthStep.DNS
+            else -> HealthStep.SSH
         }
     }
 
@@ -252,7 +343,8 @@ class SshVpnService : VpnService() {
                 serverRepository.setActiveServer(serverId)
                 // 记录最后连接的服务器, 供开机自启 (BootReceiver) 使用
                 settingsDataStore.setLastServerId(serverId)
-                updateNotification(merged)
+                startHealthMonitor(merged)
+                updateNotification(merged, "网络验证中")
                 startWhitelistObserver()
             } catch (e: Exception) {
                 lastError.value = e.message
@@ -262,6 +354,8 @@ class SshVpnService : VpnService() {
                         error = e.message,
                     )
                 disconnect(userInitiated = false)
+                // 断开清理不抹健康字段 (controller 侧保留), 失败归因在断开后补写, 供 UI 显示"连接失败 · <步骤>"
+                vpnController.reportHealth(verified = false, failedStep = mapConnectFailureToStep(e.message))
             }
         }
     }
@@ -467,9 +561,30 @@ class SshVpnService : VpnService() {
         startForeground(NOTIFICATION_ID, notification)
     }
 
-    private fun updateNotification(config: ServerConfig) {
-        val notification = buildNotification(config, "已连接")
+    private fun updateNotification(
+        config: ServerConfig,
+        status: String = "已连接",
+    ) {
+        val notification = buildNotification(config, status)
         notificationManager?.notify(NOTIFICATION_ID, notification)
+    }
+
+    /** 健康状态变化 → 通知栏文案跟随 (已连接/网络验证中/连接异常 · <步骤>)。 */
+    private fun updateHealthNotification(state: DomainVpnState) {
+        if (!vpnController.isVpnRunning()) return
+        val config = currentServer ?: return
+        val label =
+            when (state.status) {
+                DomainVpnState.VpnStatus.Connected ->
+                    when {
+                        state.failedStep != null -> "连接异常 · ${state.failedStep?.label}"
+                        !state.verified -> "网络验证中"
+                        else -> "已连接"
+                    }
+                DomainVpnState.VpnStatus.Connecting -> "连接中..."
+                else -> return
+            }
+        updateNotification(config, label)
     }
 
     private fun buildNotification(
@@ -525,11 +640,14 @@ class SshVpnService : VpnService() {
     private suspend fun disconnect(userInitiated: Boolean = true) {
         android.util.Log.d("SshVpnService", "Starting disconnect... userInitiated=$userInitiated")
 
-        // 0. 停止白名单观察者
+        // 0. 停止白名单观察者与健康监测; 用户主动断开时清除健康归因
+        //    (失败路径的归因由调用方在 disconnect 返回后补写, 不在此抹掉)
         whitelistObserverJob?.cancel()
         whitelistObserverJob = null
+        stopHealthMonitor()
 
         if (userInitiated) {
+            vpnController.reportHealth(verified = false, failedStep = null)
             // 0. 清除所有服务器的激活状态
             serverRepository.deactivateAllServers()
             // 用户主动断开: 清除最后连接记录, 开机自启不再触发
@@ -572,6 +690,7 @@ class SshVpnService : VpnService() {
             vpnController.vpnState.collect { state ->
                 serviceVpnState.value = state
                 state.error?.let { lastError.value = it }
+                updateHealthNotification(state)
                 // F12-i 兜底: packetLoop 连续读失败已退出 (状态 Failed) → 完整清理资源;
                 // disconnect(false) 保留 lastServerId 供重连。幂等, 与 connect catch 不冲突
                 if (state.status == DomainVpnState.VpnStatus.Failed) {
@@ -690,6 +809,8 @@ class SshVpnService : VpnService() {
         if (id == lastNetworkId && isLost == lastEventWasLost) return
         lastNetworkId = id
         lastEventWasLost = isLost
+        // 网络事件 → 立即补一次健康探测 (切换瞬间的可用性; 下面的重连成功后会重启监测循环)
+        if (vpnController.isVpnRunning()) triggerHealthProbeNow()
         // 仅在 VPN 运行且未在重连时, 网络切换触发去抖重连
         if (!vpnController.isVpnRunning() || isReconnecting) return
         reconnectJob?.cancel()
@@ -742,7 +863,8 @@ class SshVpnService : VpnService() {
                 throw result.exceptionOrNull() ?: Exception("Reconnect failed")
             }
             serviceVpnState.value = DomainVpnState(status = DomainVpnState.VpnStatus.Connected, server = config)
-            updateNotification(config)
+            startHealthMonitor(config)
+            updateNotification(config, "网络验证中")
             startWhitelistObserver()
             lastError.value = null
             android.util.Log.d("SshVpnService", "Auto reconnect succeeded to ${config.name}")
@@ -754,6 +876,7 @@ class SshVpnService : VpnService() {
                     error = e.message,
                 )
             disconnect(userInitiated = false)
+            vpnController.reportHealth(verified = false, failedStep = mapConnectFailureToStep(e.message))
         } finally {
             isReconnecting = false
         }
@@ -768,5 +891,6 @@ class SshVpnService : VpnService() {
         private const val NOTIFICATION_ID = 1
         private const val NETWORK_RECONNECT_DEBOUNCE_MS = 2000L
         private const val POOL_FAIL_RECONNECT_BACKOFF_MS = 10_000L
+        private const val HEALTH_PROBE_INTERVAL_MS = 15_000L
     }
 }

@@ -31,6 +31,7 @@ class SettingsDataStore
             private val KEY_KEEP_ALIVE = intPreferencesKey("keep_alive")
             private val KEY_ENABLE_IPV6 = booleanPreferencesKey("enable_ipv6")
             private val KEY_DNS_MODE = intPreferencesKey("dns_mode")
+            private val KEY_PROBE_URL = stringPreferencesKey("probe_url")
             private val KEY_DOMAIN_LIST_URL = stringPreferencesKey("domain_list_url")
             private val KEY_DOMAIN_LIST_LAST_UPDATE = longPreferencesKey("domain_list_last_update")
             private val KEY_LANGUAGE = stringPreferencesKey("language")
@@ -68,6 +69,11 @@ class SettingsDataStore
             context.dataStore.data
                 .map { it[KEY_DNS_MODE] ?: 0 } // 默认远程代理模式
 
+        /** 连通性探测端点; null/未设置 = ConnectivityProber.DEFAULT_ENDPOINT。 */
+        val probeUrl: Flow<String?> =
+            context.dataStore.data
+                .map { it[KEY_PROBE_URL]?.takeIf { url -> url.isNotBlank() } }
+
         val domainListUrl: Flow<String> =
             context.dataStore.data
                 .map { it[KEY_DOMAIN_LIST_URL] ?: DEFAULT_DOMAIN_LIST_URL }
@@ -102,6 +108,17 @@ class SettingsDataStore
 
         suspend fun setDnsMode(mode: Int) {
             context.dataStore.edit { it[KEY_DNS_MODE] = mode }
+        }
+
+        /** 传 null/空串 = 恢复默认探测端点。 */
+        suspend fun setProbeUrl(url: String?) {
+            context.dataStore.edit {
+                if (url.isNullOrBlank()) {
+                    it.remove(KEY_PROBE_URL)
+                } else {
+                    it[KEY_PROBE_URL] = url.trim()
+                }
+            }
         }
 
         suspend fun setDomainListUrl(url: String) {
