@@ -92,9 +92,10 @@
 
     <!-- notes -->
     <text x="60" y="470" fill="#73777f" font-size="11" font-family="'Geist Mono',monospace">
-* → Failed  on SSH/隧道连接失败（SshVpnService:189-193 · autoReconnect catch :632-637）
-* → Disconnected  on 断开 3s 超时兜底 forceReset（MainViewModel:686）
-* SSH 会话池全失败 → observeJschConnectionState（SshVpnService:501）触发整体 autoReconnect（:590）
+* → Failed  on SSH/隧道连接失败（SshVpnService:349-357 · autoReconnect catch :871-878）
+* → Disconnected  on 断开 3s 超时兜底 forceReset（MainViewModel:787）
+* SSH 会话池全失败 → observeJschConnectionState（SshVpnService:712）触发整体 autoReconnect（:830）
+* VpnState 叠加 verified/failedStep（DomainModels.kt:75-77）：Connected 展示分 已连接 / 网络验证中 / 连接异常·步骤（MainViewModel.buildStatusDisplay）
     </text>
 
     <!-- legend -->
@@ -108,7 +109,7 @@
     <text x="416" y="513" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">成功路径</text>
   </svg>
   </div>
-  <p class="foot">SSHInjector · VpnStatus 枚举于 DomainModels.kt:57-63 · 转移事实来自 VpnController.kt / SshVpnService.kt</p>
+  <p class="foot">SSHInjector · VpnStatus 枚举于 DomainModels.kt:79-85 · 转移事实来自 VpnController.kt / SshVpnService.kt</p>
 </div>
 </body>
 </html>

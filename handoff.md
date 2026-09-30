@@ -1,61 +1,66 @@
 # Handoff — SSHInjector Session Summary
 
 **Date:** 2026-09-30 (CST)
-**Branch:** `main` | **HEAD:** `3a066a8`（origin/main 落后 8+ commits, push 被 pre-push 钩子阻塞）
-**Working tree:** ⚠️ **dirty** — 状态检测功能已实现且 6 门禁全绿, **未提交**（见下）
-**Device:** Redmi K50 Pro `TCEIPN4DVWRSNNRK`, adb `/opt/android-sdk/platform-tools/adb`, release 包 `cn.srv0.sshinjector`
+**Branch:** `main` | **HEAD:** `28e488a` + 本次文档提交 | **Version:** `1.0.7` (versionCode 7)
+**Working tree:** 本次文档提交后 clean；**push 被 pre-push 钩子阻塞**（12+ 提交缺 `#N` issue ref，forgejo 不可用，用户已知）
+**Device:** Redmi K50 Pro `TCEIPN4DVWRSNNRK`, adb `/opt/android-sdk/platform-tools/adb`, release 包 `cn.srv0.sshinjector`（已装 1.0.7）
 
-## Session Goal
+## Session Goal（本批次）
 
-1. ~~修复「VPN 已连接但无法访问网络」~~ ✅ 已修+真机验证（用户: "可以联网了"）
-2. **状态检测功能**（dev-workflow: explore → brainstorm → spec → implement → **audit 待做**）：
-   UI 仅在真正可用时显示 Connected；失败时显示断在哪一步（SSH/认证/本地代理/隧道/DNS/远端/虚拟网卡）
-3. 门禁全绿后提交、真机验证、（forgejo 恢复后）push
+1. ~~修复「VPN 已连接但无法访问网络」~~ ✅ Bug A/B 已修+真机验证（`99c13a5`/`1011824`）
+2. **状态检测功能 connectivity-health** ✅ 实现+审计+全量文档更新，按层拆分 7 提交
+3. 版本升级 1.0.7 ✅（`28e488a`）
 
-## What Is Done ✅（已提交, 4 commits）
+## What Is Done ✅
 
-- `99c13a5` fix(vpn): Bug B — read buffer 毒化（`handleRead` 尾部 compact-after-clear）+ 回归测试
-- `1011824` fix(vpn): Bug A — SOCKS5 应答 readFully 半包修复 + `Socks5ClientReadTest`
-- `ec51240` feat(vpn): 解锁自动重连（`hasUnhealthySession()` + `ACTION_USER_PRESENT`）
-- `3a066a8` chore(release): proguard 仅剥离 `Log.d`
-- 真机日志核验: `remaining=32768` / `channel is broken` 归零, 23× TCP established, 7× 正常 EOF
+### 已提交（本批次 8 个提交）
 
-## 状态检测功能（工作区, 未提交, 6 门禁全绿）
-
-**规格**: `docs/specs/2026-09-30-connectivity-health-spec.md`（D1 端点可配置 / D2 15s+连败2才降级 / D3 仅展示不杀连接 / D4 连接期失败同归因）
-
-| 文件 | 内容 |
+| Commit | 内容 |
 |---|---|
-| `domain/model/DomainModels.kt` | 新 `HealthStep` 枚举(label); `VpnState` +`verified` +`failedStep` |
-| `domain/vpn/ConnectivityProber.kt`（新） | 手写 SOCKS5 0x02 握手 + CONNECT 域名类型 0x03 + http/https; 阶段归因: 握手→PROXY, CONNECT 等待超时→TUNNEL, rep≠0/HTTP 失败→REMOTE; 默认端点 `connect.rom.miui.com/generate_204` |
-| `domain/vpn/HealthTracker.kt`（新） | 连败 2 次才降级, 1 成即恢复, `immediate`(SSH 池不健康)首败即降级 |
-| `domain/usecase/VpnController.kt` | `reportHealth()`; connect 重置; packetLoop TUN 失败归因 `HealthStep.TUN` |
-| `vpn/SshVpnService.kt` | 15s 探测循环(`startHealthMonitor`/`runHealthProbe`), 解锁/网络切换触发即测, `mapConnectFailureToStep`, 通知栏文案跟随(已连接/网络验证中/连接异常·步骤) |
-| `ui/viewmodel/MainViewModel.kt` | `UiState.statusDisplay`（两处收集器）; serverConnectionStatus `Degraded` |
-| `ui/screen/dashboard/DashboardScreen.kt` | 状态文字 → `state.statusDisplay` |
-| `ui/screen/settings/*` | 探测地址 OutlinedTextField + `probeUrl`（DataStore 可配置, 空=默认） |
-| `data/local/preferences/SettingsDataStore.kt` | `KEY_PROBE_URL` / `probeUrl` / `setProbeUrl` |
-| strings ×4（values/en/ru/zh-rCN） | `settings_probe_url(_hint)` 翻译齐 |
-| 测试（新 15 个, 全过） | `HealthTrackerTest`(7) 降级节奏; `ConnectivityProberTest`(8) 真实 Socks5ProxyServer+假隧道: Ok/凭据错/代理拒连/无通道 rep≠0/静默 CONNECT→TUNNEL/垃圾响应/非法 URL |
+| `99c13a5` | fix(vpn): Bug B — read buffer 毒化（compact-after-clear）+ 回归测试 |
+| `1011824` | fix(vpn): Bug A — SOCKS5 应答 readFully + `Socks5ClientReadTest` |
+| `ec51240` | feat(vpn): 解锁自动重连（hasUnhealthySession + ACTION_USER_PRESENT） |
+| `3a066a8` | chore(release): proguard 仅剥离 Log.d |
+| `e552665` | feat(model): HealthStep 枚举 + VpnState.verified/failedStep |
+| `12b7f8b` | feat(domain): ConnectivityProber + HealthTracker + 16 测试 |
+| `a7ffa20` | feat(vpn): VpnController.reportHealth + TUN 归因 + connect 重置 |
+| `8130d0c` | feat(vpn): SshVpnService 探测循环/事件触发/连接期归因/通知 + probeUrl |
+| `6b76645` | feat(ui): statusDisplay/Degraded 配色/设置项/4 语言/VM 映射测试 |
+| `c22bf14` | docs: spec + AGENTS + evidence + env-check + handoff |
+| `28e488a` | chore: bump version to 1.0.7 |
+| (本次) | docs: README×3 / USER_GUIDE / vpn-state 图 / optimization-todo / todo-plan |
 
-**门禁**: `testDebugUnitTest`(165 全过) + `ktlintCheck` + `detekt` + `lint` + `assembleDebug` + `assembleRelease` ✅（audit 后复跑）
+拆分原则：依赖顺序 model→domain→controller→service→ui→docs→chore，**每个提交点可独立编译**（已 checkout 验证最重的 `8130d0c`）。
 
-**audit 已完成**（`docs/audit-report.md`）: 0 严重 / 4 中等已修（HealthTracker @Synchronized、buildStatusDisplay 迁 companion+4 测试、Degraded 消费方、spec 5 处对齐）/ 5 低影响已处理（EOF 用例、CancellationException rethrow、todo-plan 勾销、AGENTS.md、文件长度留债）。判定: **通过, 可进 grill**。
+### 质量门（audit 后复跑，全绿）
 
-**关键实现注意**:
-- 探测走 loopback→SSH（不经 TUN, 任何分流模式路径一致）; CONNECT 用域名交远端解析, 不依赖本地 DNS
-- `runHealthProbe` 里 JschSshClient 用**注入实例** `jschSshClient.xxx()`（FQN 直呼 companion 成员编译不过）
-- `disconnect(userInitiated=true)` 清健康归因; 失败路径 `disconnect(false)` 后由调用方补写归因（顺序不能反）
-- 探测失败**只降级显示**, 不杀连接（D3）; 自动重连仍走解锁/网络切换/keepAlive 既有钩子
+`testDebugUnitTest`(165) + `ktlintCheck` + `detekt` + `lint` + `assembleDebug` + `assembleRelease`
 
-## What Is Pending ⏳（按序）
+### audit（`docs/audit-report.md`，本地不入库）
 
-1. ~~**dev-workflow audit**~~ ✅ `docs/audit-report.md` 判定通过
-2. **grill**（人工复核, ≤30 问题只沟通重大问题——本次审计无严重问题, 预期快过）→ 或用户直接放行
-3. **真机验证**: 装 release（`adb install -r` + **force-stop**）, 验证四种显示: 已连接 / 网络验证中 / 连接异常·步骤 / 连接失败·步骤（故障注入: 杀远端 sshd、断网、改错 socksPort）
-4. **提交**: 建议 `feat(vpn): end-to-end connectivity health probe with step attribution`（含 docs/ 规格文档要不要一并提交由用户定）
-5. **Push 阻塞（用户: "forgejo不可用, 先不管这个"）**: pre-push 钩子要求 `#N`, forgejo `code.srv0.cn` 不可用
-6. 残留（不阻塞）: Keystore 300s 窗口根本解法=导入软件 Ed25519 key, 用户尚未操作; 探测端点真机首次验证(默认端点可达性)
+判定通过：0 严重 / 4 中等已修（HealthTracker @Synchronized、buildStatusDisplay 迁 companion 可测、Degraded 无消费方断链、spec 5 处漂移）/ 5 低影响已处理。
+
+## What Is Pending ⏳
+
+1. **Push 解阻**：pre-push 钩子要求每个提交含 `#N`。选项：forgejo 恢复后补 ref / 用户授权 `--no-verify`。解阻后：
+   ```bash
+   git push origin main
+   git tag v1.0.7 && git push origin v1.0.7   # 触发 CI build-release (APK/AAB + GitHub Release)
+   ```
+2. **真机四态验证**（T3/T4 验收未闭环）：已连接 / 网络验证中 / 连接异常·步骤 / 连接失败·步骤。
+   - 1.0.7 已装（`adb install -r` + force-stop 完成）；**adb 模拟点击被 MIUI 禁用（INJECT_EVENTS），`am startservice` 被 BIND_VPN_SERVICE 拦** → 需要**手点**播放按钮发起连接
+   - 连接后可协助核验：`logcat | grep "health probe"`（ok / failed: step=…）
+   - 故障注入建议：飞行模式（→连接异常·SSH 连接）、改错探测地址（设置页）观察降级与恢复
+3. 残留（不阻塞）：Keystore 300s 根本解法=导入软件 Ed25519 key（用户未操作）
+
+## 文档同步记录（本次）
+
+- `README.md` / `README.en.md` / `README.ru.md`：核心功能表 +状态检测行
+- `docs/USER_GUIDE.md`：§6 状态检测四态表+探测节奏+D3 说明；§7 探测地址设置行；§8 排障首条=看步骤
+- `docs/diagrams/vpn-state.html`：file:line 修正（connect catch :349-357 / autoReconnect :830,:871-878 / observeJsch :712 / forceReset MV:787 / VpnStatus 枚举 :79-85）+ verified/failedStep 叠加注记
+- `docs/optimization-todo.md`：追加「v1.0.7 · 状态检测发布」记录
+- `AGENTS.md`：Architecture 区状态检测 bullet（前次提交）
+- `docs/todo-plan.md`（本地不入库）：T1–T7 全勾销
 
 ## Build & Verify Reference
 
@@ -66,15 +71,16 @@ JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew detekt
 JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew lint
 JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew assembleDebug assembleRelease
 ADB=/opt/android-sdk/platform-tools/adb
-$ADB install -r app/build/outputs/apk/release/sshinjector-<ver>-arm64-v8a.apk
+$ADB install -r app/build/outputs/apk/release/app-arm64-v8a-release.apk
 $ADB shell am force-stop cn.srv0.sshinjector   # 必须! 旧进程跑旧代码
-# 探测日志: logcat tag SshVpnService → "health probe ok (verified)" / "health probe failed: step=..."
+$ADB logcat -d | grep "health probe"           # ok (verified) / failed: step=...
 ```
 
-## Key Gotchas（本次新增）
+## Key Gotchas（本批次新增）
 
-- **Kotlin FQN 直呼 companion 函数编译不过**（`pkg.Obj.func()` → Unresolved）: 用注入实例或先 import 类名
-- **`SSLSocketFactory.getDefault()` 返回 `javax.net.SocketFactory`**（无 4 参 createSocket）: 需 `as SSLSocketFactory` 收窄
-- ktlint: 构造参数/多行表达式必须换行; `else if` 嵌套表达式改 `when`; 声明前注释需空行
-- 新增 string 必须同步 en/ru/zh-rCN, 否则 `lint` MissingTranslation 挂
-- 测试里 wait/notify 要 `java.lang.Object()`（`Any()` 没有 wait, 编译警告可忽略）
+- **Kotlin FQN 直呼 companion 函数编译不过**（`pkg.Obj.func()` → Unresolved）：用注入实例或先 import 类名
+- **`SSLSocketFactory.getDefault()` 返回 `javax.net.SocketFactory`**（无 4 参 createSocket）：需 `as SSLSocketFactory` 收窄
+- **MIUI 禁 adb 模拟点击**（INJECT_EVENTS SecurityException）、**shell 起 Service 被 `BIND_VPN_SERVICE` 签名权限拦**——真机 UI 自动化不可行，需手点
+- 新增 string 必须同步 en/ru/zh-rCN，否则 `lint` MissingTranslation 挂
+- 测试里 wait/notify 要 `java.lang.Object()`（`Any()` 没有 wait）
+- `ByteBuffer.compact()` 在 `clear()` 之后 = 毒化（Bug B 根因，已修+回归测试）

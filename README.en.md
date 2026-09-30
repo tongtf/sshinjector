@@ -36,6 +36,7 @@
 | **Remote DNS** | Intercepts UDP:53 and sends it over the SSH tunnel to a remote resolver, preventing leaks |
 | **Connection stats** | Connection status, traffic, session time (in-process real-time stats) |
 | **Auto-reconnect** | Auto-reconnect on network switch (WiFi↔5G, 2s debounce); SSH session-level linear backoff |
+| **Connectivity health** | End-to-end probe every 15s (established != verified); failures attributed per step: degraded/failed · &lt;step&gt; |
 | **Material 3 UI** | Dashboard, server management, whitelist, settings, key management |
 
 ---
