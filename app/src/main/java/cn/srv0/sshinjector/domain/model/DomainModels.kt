@@ -75,6 +75,8 @@ data class VpnState(
     val verified: Boolean = false,
     /** 当前故障步骤; null = 无故障或未归因。 */
     val failedStep: HealthStep? = null,
+    /** 隧道出口 IP (IP 回显获取, 会话级缓存); null = 未取回。 */
+    val exitIp: String? = null,
 ) {
     enum class VpnStatus {
         Disconnected,

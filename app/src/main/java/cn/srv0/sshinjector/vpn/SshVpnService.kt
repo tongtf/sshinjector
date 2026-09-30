@@ -177,6 +177,13 @@ class SshVpnService : VpnService() {
             when (result) {
                 is ConnectivityProber.Result.Ok -> {
                     healthTracker.onSuccess()
+                    // 出口 IP: 探测成功说明通道可用, 未取回时顺带回显取一次 (会话级, 成功后不再发请求)
+                    if (vpnController.vpnState.value.exitIp == null) {
+                        prober.fetchExitIp()?.let { ip ->
+                            vpnController.reportExitIp(ip)
+                            android.util.Log.d("SshVpnService", "exit ip: $ip")
+                        }
+                    }
                     android.util.Log.d("SshVpnService", "health probe ok (verified)")
                 }
                 is ConnectivityProber.Result.Failed -> {

@@ -132,18 +132,7 @@ class ConnectivityProber(
         endpoint: Endpoint,
     ): Result {
         phase = PHASE_HTTP
-        var input: InputStream = socket.getInputStream()
-        var output: OutputStream = socket.getOutputStream()
-        if (endpoint.tls) {
-            // getDefault() 静态返回类型是 javax.net.SocketFactory (无 4 参重载), 需收窄
-            val ssl =
-                (SSLSocketFactory.getDefault() as SSLSocketFactory)
-                    .createSocket(socket, endpoint.host, endpoint.port, true) as SSLSocket
-            ssl.soTimeout = readTimeoutMs
-            ssl.startHandshake()
-            input = ssl.getInputStream()
-            output = ssl.getOutputStream()
-        }
+        val (input, output) = openHttpStreams(socket, endpoint)
         val request =
             "GET ${endpoint.path} HTTP/1.1\r\n" +
                 "Host: ${endpoint.host}\r\n" +
@@ -157,6 +146,101 @@ class ConnectivityProber(
         } else {
             Result.Failed(HealthStep.REMOTE, "no http status line: ${statusLine.take(32)}")
         }
+    }
+
+    /**
+     * 经隧道请求 IP 回显端点并返回出口 IP (互联网视角的代理出口地址)。
+     * 任何失败返回 null — 仅影响显示, 不参与健康归因、不重试风暴
+     * (调用方在探测成功且未取回时才重试)。
+     */
+    fun fetchExitIp(endpointUrl: String = DEFAULT_EXIT_IP_ENDPOINT): String? {
+        val endpoint =
+            try {
+                parseEndpoint(endpointUrl)
+            } catch (_: Exception) {
+                return null
+            }
+        phase = PHASE_CONNECT
+        val socket = Socket()
+        return try {
+            socket.connect(InetSocketAddress("127.0.0.1", socksPort), connectTimeoutMs)
+            socket.soTimeout = readTimeoutMs
+            if (socksHandshake(socket, endpoint) != null) return null
+            readIpBody(socket, endpoint)
+        } catch (_: Exception) {
+            null
+        } finally {
+            runCatching { socket.close() }
+        }
+    }
+
+    /** 读状态行 + 头部 (取 Content-Length) + 正文, 解析 IP 回显。 */
+    private fun readIpBody(
+        socket: Socket,
+        endpoint: Endpoint,
+    ): String? {
+        phase = PHASE_HTTP
+        val (input, output) = openHttpStreams(socket, endpoint)
+        val request =
+            "GET ${endpoint.path} HTTP/1.1\r\n" +
+                "Host: ${endpoint.host}\r\n" +
+                "Accept: text/plain, application/json\r\n" +
+                "Connection: close\r\n" +
+                "User-Agent: sshinjector-exit-ip\r\n\r\n"
+        output.write(request.toByteArray(Charsets.US_ASCII))
+        output.flush()
+        if (!readLine(input).startsWith("HTTP/1.")) return null
+        var contentLength = -1
+        var headerLines = 0
+        while (headerLines < MAX_HEADER_LINES) {
+            val line = readLine(input)
+            headerLines++
+            if (line.isEmpty()) break
+            if (line.startsWith("Content-Length:", ignoreCase = true)) {
+                contentLength = line.substringAfter(':').trim().toIntOrNull() ?: -1
+            }
+        }
+        val raw =
+            when {
+                contentLength == 0 -> return null
+                contentLength in 1..MAX_IP_BODY -> String(readFully(input, contentLength), Charsets.UTF_8)
+                else -> readUntilEof(input, MAX_IP_BODY)
+            }
+        return parseIpBody(raw)
+    }
+
+    /**
+     * 回显正文 -> IP: 优先取 JSON 的 "ip" 值, 否则整段;
+     * 须含 '.' 或 ':' (排除裸 chunk-size/纯词) 且仅 IPv4/IPv6 字面量字符。
+     */
+    private fun parseIpBody(raw: String): String? {
+        val candidate = (JSON_IP.find(raw)?.groupValues?.get(1) ?: raw).trim()
+        val looksLikeIp =
+            candidate.isNotEmpty() &&
+                candidate.length <= MAX_IP_LENGTH &&
+                candidate.any { it == '.' || it == ':' } &&
+                candidate.all { it.isDigit() || it in ".:abcdefABCDEF" }
+        return candidate.takeIf { looksLikeIp }
+    }
+
+    /** TLS 握手 (如需) 并返回读写流。 */
+    private fun openHttpStreams(
+        socket: Socket,
+        endpoint: Endpoint,
+    ): Pair<InputStream, OutputStream> {
+        var input: InputStream = socket.getInputStream()
+        var output: OutputStream = socket.getOutputStream()
+        if (endpoint.tls) {
+            // getDefault() 静态返回类型是 javax.net.SocketFactory (无 4 参重载), 需收窄
+            val ssl =
+                (SSLSocketFactory.getDefault() as SSLSocketFactory)
+                    .createSocket(socket, endpoint.host, endpoint.port, true) as SSLSocket
+            ssl.soTimeout = readTimeoutMs
+            ssl.startHandshake()
+            input = ssl.getInputStream()
+            output = ssl.getOutputStream()
+        }
+        return input to output
     }
 
     private fun phaseToStep(phase: String): HealthStep =
@@ -191,6 +275,21 @@ class ConnectivityProber(
         return sb.toString()
     }
 
+    /** 读到 EOF 为止, 上限 max 字节 (无 Content-Length 时的兜底)。 */
+    private fun readUntilEof(
+        input: InputStream,
+        max: Int,
+    ): String {
+        val buf = ByteArray(max)
+        var n = 0
+        while (n < max) {
+            val r = input.read(buf, n, max - n)
+            if (r < 0) break
+            n += r
+        }
+        return String(buf, 0, n, Charsets.UTF_8)
+    }
+
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
     private fun parseEndpoint(url: String): Endpoint {
@@ -215,10 +314,17 @@ class ConnectivityProber(
         /** 默认探测端点: 国内可达的 204 端点; 收到任意 HTTP 状态行都算可用 (可配置覆盖)。 */
         const val DEFAULT_ENDPOINT = "http://connect.rom.miui.com/generate_204"
 
+        /** 默认出口 IP 回显端点 (JSON body {"ip":"..."}; 失败仅显示占位符, 不影响健康状态)。 */
+        const val DEFAULT_EXIT_IP_ENDPOINT = "https://api.ipify.org/?format=json"
+
+        private val JSON_IP = Regex("\"ip\"\\s*:\\s*\"([^\"]+)\"")
         private const val DEFAULT_CONNECT_TIMEOUT_MS = 5000
         private const val DEFAULT_READ_TIMEOUT_MS = 5000
         private const val SOCKS_REPLY_MIN = 10
         private const val MAX_STATUS_LINE = 512
+        private const val MAX_HEADER_LINES = 64
+        private const val MAX_IP_BODY = 256
+        private const val MAX_IP_LENGTH = 45
         private const val PHASE_CONNECT = "connect"
         private const val PHASE_GREET = "greet"
         private const val PHASE_AUTH = "auth"

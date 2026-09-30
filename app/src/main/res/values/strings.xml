@@ -26,6 +26,7 @@
     <string name="dashboard_refresh_info">刷新网络信息</string>
     <string name="dashboard_ipv4">IPv4</string>
     <string name="dashboard_ipv6">IPv6</string>
+    <string name="dashboard_exit_ip">出口 IP</string>
     <string name="dashboard_mode">模式</string>
     <string name="dashboard_network">网络</string>
     <string name="dashboard_cpu">CPU</string>

@@ -120,6 +120,8 @@ class MainViewModel
             // 网络信息
             val deviceIpv4: String = "-",
             val deviceIpv6: String = "-",
+            /** 隧道出口 IP (IP 回显, 会话级); "-" = 未取回/未连接。 */
+            val exitIp: String = "-",
             val dnsMode: String = "默认",
             val proxyAddress: String = "-",
             val networkType: String = "-",
@@ -355,6 +357,7 @@ class MainViewModel
                                 currentServerUser = state.server?.username ?: "",
                                 connectionStatus = status,
                                 proxyAddress = if (isConnected) "127.0.0.1:${state.server?.socksPort ?: 1080}" else "-",
+                                exitIp = if (isConnected) state.exitIp ?: "-" else "-",
                                 serverConnectionStatus = newServerStatus,
                             )
                         }
@@ -864,6 +867,7 @@ class MainViewModel
                         currentServerUser = state.server?.username ?: "",
                         connectionStatus = status,
                         proxyAddress = if (isConnected) "127.0.0.1:${state.server?.socksPort ?: 1080}" else "-",
+                        exitIp = if (isConnected) state.exitIp ?: "-" else "-",
                         serverConnectionStatus = newServerStatus,
                     )
                 }

@@ -26,6 +26,7 @@
     <string name="dashboard_refresh_info">Refresh info</string>
     <string name="dashboard_ipv4">IPv4</string>
     <string name="dashboard_ipv6">IPv6</string>
+    <string name="dashboard_exit_ip">Exit IP</string>
     <string name="dashboard_mode">Mode</string>
     <string name="dashboard_network">Network</string>
     <string name="dashboard_cpu">CPU</string>

@@ -4,6 +4,7 @@ import cn.srv0.sshinjector.domain.model.HealthStep
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -141,6 +142,35 @@ class ConnectivityProberTest {
                 endpointUrl = "ftp://bad",
             )
         assertStep(HealthStep.REMOTE, prober.probe())
+    }
+
+    @Test
+    fun `fetchExitIp parses json ip body`() {
+        fakeTunnel.response = "HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\n{\"ip\":\"203.0.113.7\"}".toByteArray()
+        assertEquals("203.0.113.7", newProber().fetchExitIp("http://echo.test/"))
+    }
+
+    @Test
+    fun `fetchExitIp reads plain body until eof when no content-length`() {
+        fakeTunnel.response = "HTTP/1.1 200 OK\r\n\r\n198.51.100.23".toByteArray()
+        assertEquals("198.51.100.23", newProber().fetchExitIp("http://echo.test/"))
+    }
+
+    @Test
+    fun `fetchExitIp returns null on non-ip body`() {
+        fakeTunnel.response = "HTTP/1.1 200 OK\r\nContent-Length: 17\r\n\r\n<html>oops</html>".toByteArray()
+        assertNull(newProber().fetchExitIp("http://echo.test/"))
+    }
+
+    @Test
+    fun `fetchExitIp returns null on empty body`() {
+        assertNull(newProber().fetchExitIp("http://echo.test/"))
+    }
+
+    @Test
+    fun `fetchExitIp returns null when local proxy unreachable`() {
+        val deadPort = ServerSocket(0).use { it.localPort }
+        assertNull(newProber(socksPort = deadPort).fetchExitIp("http://echo.test/"))
     }
 
     // ---- helpers ------------------------------------------------------------

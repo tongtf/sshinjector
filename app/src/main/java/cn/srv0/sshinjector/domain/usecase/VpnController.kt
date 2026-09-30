@@ -177,9 +177,15 @@ class VpnController
 
             currentServer = server
             isRunning = true
-            // 新一轮连接: 清掉上一次的健康归因, 重新从"未验证"开始
+            // 新一轮连接: 清掉上一次的健康归因与出口 IP, 重新从"未验证"开始
             updateState {
-                it.copy(status = VpnState.VpnStatus.Connecting, server = server, verified = false, failedStep = null)
+                it.copy(
+                    status = VpnState.VpnStatus.Connecting,
+                    server = server,
+                    verified = false,
+                    failedStep = null,
+                    exitIp = null,
+                )
             }
 
             return try {
@@ -970,6 +976,11 @@ class VpnController
             failedStep: HealthStep?,
         ) {
             updateState { it.copy(verified = verified, failedStep = failedStep) }
+        }
+
+        /** 上报隧道出口 IP (探测成功后经 IP 回显取回); UI 断开时自行降级为占位符。 */
+        fun reportExitIp(exitIp: String?) {
+            updateState { it.copy(exitIp = exitIp) }
         }
 
         private fun updateState(block: (VpnState) -> VpnState) {

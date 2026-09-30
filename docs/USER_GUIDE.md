@@ -111,7 +111,7 @@ grep -E '^(AllowTcpForwarding|GatewayPorts)' /etc/ssh/sshd_config
 ## 6. 连接与状态
 
 连接成功后主页显示：
-- 本地 IP / 远程 IP
+- 本机 IPv4 / IPv6、**出口 IP**（经代理回显获取 = 互联网看到的代理出口地址；取回前/未连接显示 “-”）
 - 实时流量图（上传/下载速度、累计流量）
 - 连接时长
 
