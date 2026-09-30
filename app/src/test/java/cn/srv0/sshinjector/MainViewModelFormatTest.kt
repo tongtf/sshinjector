@@ -100,6 +100,12 @@ class MainViewModelFormatTest {
     @Test
     fun `status display shows each connect stage while connecting`() {
         assertEquals(
+            "正在加载服务器配置",
+            MainViewModel.buildStatusDisplay(
+                VpnState(status = VpnState.VpnStatus.Connecting, connectStage = ConnectStage.LOAD),
+            ),
+        )
+        assertEquals(
             "正在创建 VPN 接口",
             MainViewModel.buildStatusDisplay(
                 VpnState(status = VpnState.VpnStatus.Connecting, connectStage = ConnectStage.TUN),
@@ -112,9 +118,15 @@ class MainViewModelFormatTest {
             ),
         )
         assertEquals(
-            "正在配置网络规则",
+            "正在配置 DNS 拦截",
             MainViewModel.buildStatusDisplay(
-                VpnState(status = VpnState.VpnStatus.Connecting, connectStage = ConnectStage.CONFIG),
+                VpnState(status = VpnState.VpnStatus.Connecting, connectStage = ConnectStage.DNS),
+            ),
+        )
+        assertEquals(
+            "正在配置路由规则",
+            MainViewModel.buildStatusDisplay(
+                VpnState(status = VpnState.VpnStatus.Connecting, connectStage = ConnectStage.ROUTES),
             ),
         )
     }

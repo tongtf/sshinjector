@@ -312,6 +312,8 @@ class SshVpnService : VpnService() {
             serviceVpnState.value = DomainVpnState(status = DomainVpnState.VpnStatus.Connecting)
 
             try {
+                // 配置加载段: getServerById/merge/白名单查询都在此阶段 (通知由 currentServer 门保护, 状态卡直接显示)
+                vpnController.reportConnectStage(ConnectStage.LOAD)
                 val config: ServerConfig =
                     serverRepository.getServerById(serverId)
                         ?: throw IllegalArgumentException("Server not found")

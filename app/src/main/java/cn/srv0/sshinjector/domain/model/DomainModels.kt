@@ -70,9 +70,11 @@ enum class HealthStep(
 enum class ConnectStage(
     val label: String,
 ) {
+    LOAD("正在加载服务器配置"),
     TUN("正在创建 VPN 接口"),
     TUNNEL("正在连接 SSH"),
-    CONFIG("正在配置网络规则"),
+    DNS("正在配置 DNS 拦截"),
+    ROUTES("正在配置路由规则"),
 }
 
 data class VpnState(

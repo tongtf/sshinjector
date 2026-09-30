@@ -10,7 +10,7 @@
 1. ~~修复「VPN 已连接但无法访问网络」~~ ✅ Bug A/B 已修+真机验证（`99c13a5`/`1011824`）
 2. **状态检测 connectivity-health** ✅ 实现+审计+文档+7 提交+发布 v1.0.7
 3. **首页出口 IP（隧道回显）** ✅ `756f737`（实现+测试+文档，未 push）
-4. **连接流程状态细化（ConnectStage）** ✅ 本次提交（实现+测试+文档，未 push）
+4. **连接流程状态细化（ConnectStage）** ✅ `3050eae` + 本次提交（每中间步骤独立状态，未 push）
 
 ## What Is Done ✅
 
@@ -34,14 +34,15 @@
 - UI: `UiState.exitIp` 两处 collector 透传（未连接 → `-`）；Dashboard 状态块 IPv6 行下新增「出口 IP」；`dashboard_exit_ip` 4 语言
 - **测试**: prober 新增 5 例（json/无 CL 至 EOF/非 IP/空体/代理不可达）→ 170 绿；**质量门 6/6**（test/ktlint/detekt/lint/assembleDebug；release 未重跑——未 bump 版本）
 
-### 本次提交：连接流程状态细化（ConnectStage）
+### 本次提交：连接流程逐步细化（每步独立状态）
 
 - **需求**: 连接过程只显示「连接中」，需展示流程中每个可能状态
-- `ConnectStage` 枚举: TUN 正在创建 VPN 接口 / TUNNEL 正在连接 SSH（隧道插件含 SSH 握手=最慢阶段）/ CONFIG 正在配置网络规则; `VpnState.connectStage`
-- 推进点: `SshVpnService` establish 前 `reportConnectStage(TUN)`（connect + autoReconnect 两处）→ `VpnController.connect` 入口清阶段 → startPlugin 前 TUNNEL → DNS 配置前 CONFIG → Connected 后由 verified 接管（网络验证中/已连接）
+- `ConnectStage` **5 态**（每个中间步骤独立状态）: LOAD 正在加载服务器配置 → TUN 正在创建 VPN 接口 → TUNNEL 正在连接 SSH（含本地代理启动）→ DNS 正在配置 DNS 拦截 → ROUTES 正在配置路由规则 → Connected 后由 verified 接管（网络验证中/已连接）
+- 推进点: connect() try 首行 LOAD → establish 前 TUN（connect+autoReconnect）→ connect() 入口清阶段 → startPlugin 前 TUNNEL → DNS 段前 DNS → 路由段前 ROUTES
+- 微秒级不设阶段: SecureRandom 代理凭据、协程 launch、状态翻转（StateFlow 合流不可见）; 通知 LOAD 段由 currentServer 门跳过（卡照常）
 - 映射同源: `buildStatusDisplay`（状态卡）+ `updateHealthNotification`（通知）; **Connecting 分支 failedStep 优先** — establish 失败时 controller.disconnect 因 isRunning=false 早退, status 停留 Connecting, 不然卡显阶段文案
 - 通知门由 `isVpnRunning` 改为状态过滤（TUN 阶段在 isRunning=true 之前, 原门会拦掉该阶段通知）
-- 测试 +2（stage 映射、failedStep 优先）→ 172 绿; 6 质量门全绿
+- 测试: stage 5 态断言 + failedStep 优先 → 172 绿; 6 质量门全绿
 
 ## What Is Pending ⏳
 

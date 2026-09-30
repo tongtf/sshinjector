@@ -204,7 +204,7 @@ class VpnController
                 addLog("隧道连接成功: socks5", cn.srv0.sshinjector.ui.viewmodel.LogLevel.SUCCESS)
 
                 // 3. 设置 DNS 拦截器
-                updateState { it.copy(connectStage = ConnectStage.CONFIG) }
+                updateState { it.copy(connectStage = ConnectStage.DNS) }
                 packetProcessor.setDnsInterceptor(dnsInterceptor)
                 // S5: IPv6 开关联动 — TUN 侧丢弃 v6 包 + DNS AAAA 回空应答
                 packetProcessor.setEnableIPv6(server.enableIPv6)
@@ -249,6 +249,7 @@ class VpnController
                 addLog("DNS 拦截器已配置 (模式: $transportMode)", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
 
                 // 4. 解析排除路由 (CIDR)
+                updateState { it.copy(connectStage = ConnectStage.ROUTES) }
                 excludedRoutes = currentServer?.excludedRoutes?.mapNotNull { CidrRoute.parse(it) } ?: emptyList()
 
                 // SYSTEM 模式: 获取 DHCP 分配的 DNS 服务器，添加到绕过列表

@@ -96,7 +96,7 @@
 * → Disconnected  on 断开 3s 超时兜底 forceReset（MainViewModel:787）
 * SSH 会话池全失败 → observeJschConnectionState（SshVpnService:712）触发整体 autoReconnect（:830）
 * VpnState 叠加 verified/failedStep（DomainModels.kt:84-86）：Connected 展示分 已连接 / 网络验证中 / 连接异常·步骤（MainViewModel.buildStatusDisplay:517）
-* Connecting 细分阶段 connectStage（ConnectStage TUN→TUNNEL→CONFIG, DomainModels.kt:70）：establish 前 reportConnectStage(TUN)，connect() 内推 TUNNEL/CONFIG；状态卡+通知同源，failedStep 优先
+* Connecting 细分阶段 connectStage（ConnectStage LOAD→TUN→TUNNEL→DNS→ROUTES, DomainModels.kt:70）：connect() try 首行报 LOAD、establish 前 TUN，connect() 内推 TUNNEL/DNS/ROUTES；状态卡+通知同源，failedStep 优先
     </text>
 
     <!-- legend -->
