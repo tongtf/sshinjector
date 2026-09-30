@@ -50,11 +50,31 @@ data class ConnectionStats(
     val lastUpdate: Date = Date(),
 )
 
+/**
+ * 连接链路健康归因步骤: 运行期端到端探测失败或连接期失败时, 告诉用户是哪一步出了问题。
+ * label 为用户可见文案 (与代码库既有惯例一致, UI 文案在 VM 层硬编码中文)。
+ */
+enum class HealthStep(
+    val label: String,
+) {
+    SSH("SSH 连接"),
+    AUTH("身份认证"),
+    PROXY("本地代理"),
+    TUNNEL("隧道通道"),
+    DNS("DNS 解析"),
+    REMOTE("远端网络"),
+    TUN("虚拟网卡"),
+}
+
 data class VpnState(
     val status: VpnStatus = VpnStatus.Disconnected,
     val server: ServerConfig? = null,
     val stats: ConnectionStats = ConnectionStats(),
     val error: String? = null,
+    /** Connected 且端到端探测通过才为 true (已建立 ≠ 已验证可用)。 */
+    val verified: Boolean = false,
+    /** 当前故障步骤; null = 无故障或未归因。 */
+    val failedStep: HealthStep? = null,
 ) {
     enum class VpnStatus {
         Disconnected,
