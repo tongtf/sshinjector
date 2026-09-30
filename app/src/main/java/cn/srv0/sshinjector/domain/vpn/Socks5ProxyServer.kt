@@ -365,6 +365,12 @@ private class Socks5Connection(
             // 循环处理 buffer 中所有可用数据; 各 process 返回 false = 半包等待续传/已关闭, 停止空转
             var keepProcessing = true
             while (keepProcessing && buffer.hasRemaining() && state != SocksState.Closed) {
+                if (IS_DEBUG) {
+                    android.util.Log.d(
+                        "Socks5Proxy",
+                        "[conn=$id] loop state=$state remaining=${buffer.remaining()}",
+                    )
+                }
                 when (state) {
                     SocksState.Handshake -> keepProcessing = processHandshake()
                     SocksState.AuthMethods -> keepProcessing = processAuthMethods()
@@ -377,8 +383,13 @@ private class Socks5Connection(
                     SocksState.Closed -> keepProcessing = false
                 }
             }
-            // 半包保留: 未消费字节移到 buffer 开头等待下次 read (Relaying/Connecting 已 clear, compact 无害)
-            if (state != SocksState.Closed) buffer.compact()
+            // 半包保留: 未消费字节移到 buffer 开头等待下次 read;全消费 (pos==limit) 则整体重置。
+            // 禁止在 enqueueToSsh/connectToTarget 的 get()/clear() 之后无脑 compact:
+            // clear() 后是 (pos=0, limit=capacity), compact 会把 pos 推到 capacity → 下次 read
+            // 零容量返回 0, flip() 暴露整段陈旧字节 → 事件循环空转 + 把垃圾灌进远端隧道。
+            if (state != SocksState.Closed) {
+                if (buffer.position() == buffer.limit()) buffer.clear() else buffer.compact()
+            }
         } catch (e: Exception) {
             android.util.Log.e("Socks5Proxy", "[conn=$id] handleRead exception: ${e.message}", e)
             close()
@@ -488,6 +499,12 @@ private class Socks5Connection(
             auth != null &&
                 MessageDigest.isEqual(auth.first.toByteArray(Charsets.UTF_8), user) &&
                 MessageDigest.isEqual(auth.second.toByteArray(Charsets.UTF_8), pass)
+        if (IS_DEBUG) {
+            android.util.Log.d(
+                "Socks5Proxy",
+                "[conn=$id] auth: userLen=$userLen passLen=$passLen ok=$ok expected=${auth?.first}",
+            )
+        }
         if (!ok) {
             sendReplyAndClose(byteArrayOf(0x01, 0x01))
             return false
@@ -624,7 +641,8 @@ private class Socks5Connection(
             val remaining = buffer.remaining()
             val data = ByteArray(remaining)
             buffer.get(data)
-            buffer.clear()
+            // get() 已把 pos 推到 limit (全消费), 由 handleRead 尾部统一 clear 重置;
+            // 这里再 clear() 会把状态置为 (0, capacity), 尾部 compact 将毒化 buffer。
             pendingConnectData = data
         }
 
@@ -837,17 +855,16 @@ private class Socks5Connection(
      */
     private fun enqueueToSsh() {
         if (state != SocksState.Relaying) {
-            buffer.clear()
+            buffer.position(buffer.limit())
             return
         }
         if (!buffer.hasRemaining()) {
-            buffer.clear()
             return
         }
         val remaining = buffer.remaining()
         val data = ByteArray(remaining)
         buffer.get(data)
-        buffer.clear()
+        // get() 已全消费 (pos==limit); 不 clear(), 由 handleRead 尾部按 (pos==limit) 统一重置。
         enqueueData(data)
     }
 

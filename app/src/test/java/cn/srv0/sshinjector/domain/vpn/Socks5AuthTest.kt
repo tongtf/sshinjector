@@ -136,6 +136,29 @@ class Socks5AuthTest {
         }
     }
 
+    @Test
+    fun `second relay write arrives intact after first write cleared the buffer`() {
+        // 回归: handleRead 尾部曾在 enqueueToSsh 的 clear() 之后执行 compact() →
+        // buffer 毒化为 (pos=capacity, limit=capacity) → 下次 read 零容量返回 0,
+        // flip() 暴露 32KB 陈旧字节灌进隧道, 浏览器数据永远到不了远端 (已连接但无网络)。
+        withSocket { sock ->
+            authenticate(sock, "testUser", "testPass")
+            val out = sock.getOutputStream()
+            out.write(connectRequest())
+            readFully(sock, 10)
+
+            out.write("hello".toByteArray())
+            out.flush()
+            assertEquals("first write must relay", "hello", awaitTunnelBytes(5, firstOnly = true))
+
+            // 确保第一次 handleRead (含尾部重置) 已完全结束, 再投递第二段
+            Thread.sleep(100)
+            out.write("world".toByteArray())
+            out.flush()
+            assertEquals("no stale-buffer flood", "helloworld", awaitTunnelBytes(10, firstOnly = false))
+        }
+    }
+
     // ---- helpers ------------------------------------------------------------
 
     private inline fun withSocket(block: (Socket) -> Unit) {
@@ -204,14 +227,40 @@ class Socks5AuthTest {
         return buf
     }
 
+    /** 有界等待隧道累计收到 >= n 字节, 返回前 n 字节的解码结果; 超时 fail。 */
+    private fun awaitTunnelBytes(
+        n: Int,
+        firstOnly: Boolean,
+    ): String {
+        val deadline = System.currentTimeMillis() + SOCKET_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline) {
+            val data = fakeTunnel.received()
+            if (data.size >= n) {
+                val head = data.copyOfRange(0, n)
+                if (firstOnly && data.size != n) {
+                    fail("expected exactly $n bytes, tunnel got ${data.size}")
+                }
+                return String(head, Charsets.UTF_8)
+            }
+            Thread.sleep(20)
+        }
+        fail("tunnel received only ${fakeTunnel.received().size} bytes, expected >= $n")
+        return ""
+    }
+
     companion object {
         private const val SOCKET_TIMEOUT_MS = 5000
     }
 }
 
-/** 回程流: 在 disconnect() 前阻塞 (不立即 EOF, 避免成功回复被 close 丢弃)。 */
+/** 回程流: 在 disconnect() 前阻塞 (不立即 EOF, 避免成功回复被 close 丢弃); 捕获出向写入字节供断言。 */
 private class FakeTunnelChannel : TunnelChannel {
     @Volatile private var open = true
+
+    private val receivedLock = Any()
+    private val receivedBytes = java.io.ByteArrayOutputStream()
+
+    fun received(): ByteArray = synchronized(receivedLock) { receivedBytes.toByteArray() }
 
     override fun connect(timeoutMs: Int): Boolean = true
 
@@ -237,7 +286,13 @@ private class FakeTunnelChannel : TunnelChannel {
 
     override val outputStream: OutputStream =
         object : OutputStream() {
-            override fun write(b: Int) = Unit
+            override fun write(b: Int) = synchronized(receivedLock) { receivedBytes.write(b) }
+
+            override fun write(
+                b: ByteArray,
+                off: Int,
+                len: Int,
+            ) = synchronized(receivedLock) { receivedBytes.write(b, off, len) }
         }
 
     override val isConnected: Boolean get() = open
