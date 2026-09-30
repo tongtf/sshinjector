@@ -11,6 +11,7 @@ import cn.srv0.sshinjector.ui.screen.keymanager.KeyManagerScreen
 import cn.srv0.sshinjector.ui.screen.server.ServerEditScreen
 import cn.srv0.sshinjector.ui.screen.server.ServerListScreen
 import cn.srv0.sshinjector.ui.screen.server.ServerWizardScreen
+import cn.srv0.sshinjector.ui.screen.settings.AdBlockSettingsScreen
 import cn.srv0.sshinjector.ui.screen.settings.DomainListSettingsScreen
 import cn.srv0.sshinjector.ui.screen.settings.SettingsScreen
 import cn.srv0.sshinjector.ui.screen.whitelist.WhitelistScreen
@@ -60,6 +61,7 @@ fun AppNavGraph(
         }
         composable("settings") {
             SettingsScreen(
+                onNavigateToAdBlock = { navController.navigate("ad_block_settings") },
                 onNavigateToDomainListSettings = { navController.navigate("domain_list_settings") },
                 onNavigateToWhitelist = { navController.navigate("whitelist") },
                 onNavigateToServerManagement = { navController.navigate("servers") },
@@ -68,6 +70,9 @@ fun AppNavGraph(
         }
         composable("domain_list_settings") {
             DomainListSettingsScreen(onNavigateBack = { navController.popBackStack() })
+        }
+        composable("ad_block_settings") {
+            AdBlockSettingsScreen(onNavigateBack = { navController.popBackStack() })
         }
         composable("keys") {
             KeyManagerScreen(onNavigateBack = { navController.popBackStack() })

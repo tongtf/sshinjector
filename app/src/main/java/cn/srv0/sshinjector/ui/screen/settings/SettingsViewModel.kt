@@ -41,6 +41,11 @@ class SettingsViewModel
         val dnsMode: StateFlow<Int> =
             settingsDataStore.dnsMode
                 .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
+        // 广告过滤总开关, 默认开启
+        val adBlockEnabled: StateFlow<Boolean> =
+            settingsDataStore.adBlockEnabled
+                .stateIn(viewModelScope, SharingStarted.Eagerly, true)
         val language: StateFlow<String> =
             settingsDataStore.language
                 .stateIn(viewModelScope, SharingStarted.Eagerly, "system")
@@ -76,6 +81,8 @@ class SettingsViewModel
                 } catch (_: Exception) {
                 }
             }
+
+        fun setAdBlockEnabled(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setAdBlockEnabled(enabled) }
 
         fun setLanguage(code: String) = viewModelScope.launch { settingsDataStore.setLanguage(code) }
     }

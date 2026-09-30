@@ -1,0 +1,168 @@
+! ============================================================
+! 广告/追踪域名过滤清单 (AdBlock)
+! 格式: AdGuard/gfwlist 风格, 一行一个裸域名 = 后缀匹配(覆盖该域所有子域)
+! ! 开头为注释, 会被解析器忽略。由 AdBlocker 在连接时加载。
+! 命中即返回 0.0.0.0, 不解析、不进缓存、不走隧道/系统 DNS。
+! ============================================================
+
+! ---------- 腾讯 (广点通/优量汇 + 埋点) ----------
+ad.qq.com
+e.qq.com
+gdt.qq.com
+l.qq.com
+adping.qq.com
+adsclick.qq.com
+adsfile.qq.com
+adsrich.qq.com
+adshmct.qq.com
+adshmmsg.qq.com
+adsview.qq.com
+adsview2.qq.com
+adsqqclick.qq.com
+beacon.qq.com
+beacon.cdn.qq.com
+beaconcdn.qq.com
+btrace.qq.com
+btrace.video.qq.com
+bugly.qq.com
+analy.qq.com
+analytics.map.qq.com
+cc.map.qq.com
+act.qq.com
+appsupport.qq.com
+appcfg.v.qq.com
+jpush.html5.qq.com
+
+! 微信朋友圈广告缩略图
+wxsnsdy.wxs.qq.com
+wxsnsdythumb.wxs.qq.com
+
+! QQ音乐/腾讯音乐 广告投放与上报
+ad.tencentmusic.com
+adstats.tencentmusic.com
+report.tencentmusic.com
+
+! ---------- 抖音 / 字节跳动 (巨量引擎 + SDK) ----------
+ad.toutiao.com
+ad.zijieapi.com
+dsp.toutiao.com
+bds.snssdk.com
+log.snssdk.com
+log.isnssdk.com
+ad.tiktokv.us
+ads.tiktok.com
+ads.tiktokw.us
+
+! ---------- 百度 (联盟/凤巢/MTJ) ----------
+a.baidu.com
+a.baidu.cn
+ada.baidu.com
+adm.baidu.com
+adscnd.baidu.com
+afd.baidu.com
+als.baidu.cn
+appc.baidu.com
+as.baidu.com
+bar.baidu.com
+bdplus.baidu.com
+bes-mtj.baidu.com
+bzclk.baidu.com
+c.baidu.com
+baichuan.baidu.com
+anquan.baidu.com
+httpdns.baidu.com
+imageplus.baidu.com
+
+! ---------- 京东 (京准通/DSP/联盟) ----------
+addata.jd.com
+ads-union.jd.com
+ads.union.jd.com
+c-nfa.jd.com
+ccc-x.jd.com
+chat1.jd.com
+dsp-x.jd.com
+im-x.jd.com
+img-x.jd.com
+janapi.jd.com
+jrclick.jd.com
+jzt.jd.com
+kepler.jd.com
+knicks.jd.com
+log.jd.com
+mapi.m.jd.com
+jpushjd.m.jd.com
+dns.jd.com
+
+! ---------- 美团 (精准打击: 仅埋点子域名, meituan.net 主域不拦截) ----------
+analytics.meituan.net
+data-sdk-uuid-log.d.meituan.net
+data-sdk-uuid-report.dreport.meituan.net
+dreport.meituan.net
+! httpdns.meituan.com 已移除: 自建 HTTPDNS, 拦截可能破坏 App 连接
+show.meituangov.cn
+
+! ---------- B站 / 哔哩哔哩 (仅埋点) ----------
+! api.biliapi.net / grpc.biliapi.net / app.bilibili.com 为核心业务 API,
+! 不在拦截范围(拦截会破坏正常使用)。仅拦数据埋点域名。
+data.bilibili.com
+
+! ---------- 小红书 (视频流广告素材) ----------
+ads-video-al.xhscdn.com
+ads-video-qc.xhscdn.com
+
+! ============================================================
+! [第三部分] 第三方通用埋点/广告 SDK + 缺失大厂广告域名
+! 说明: 多为来自生态经验的候选条目, 建议对照 anti-AD 原始清单核实后定稿。
+! 命中即返回 0.0.0.0, 由 AdBlocker 在连接时加载。 ! 开头为注释会被忽略。
+! ============================================================
+
+! ---------- 第三方通用埋点/广告 SDK (跨 App 通用, 高优先级) ----------
+sensorsdata.cn
+sa.sensorsdata.cn
+umeng.com
+umtrack.com
+custom.umeng.com
+a1.umeng.com
+b1.umeng.com
+talkingdata.com
+talkingdata.net
+jpush.cn
+jiguang.cn
+api.jpush.cn
+! 备注: 神策/友盟/TalkingData 为纯埋点, 拦后基本无感;
+!   极光(JPush)兼做推送, 拦后可能收到更少 App 通知。
+
+! ---------- 缺失大厂 App (广告/追踪) ----------
+! 快手
+ad.kuaishou.com
+union.kuaishou.com
+! 微博
+ads.weibo.cn
+ax.weibo.com
+! 新浪广告
+ads.sina.com.cn
+ad.sina.com.cn
+! 网易(有道/邮箱)
+ads.api.163.com
+! 阿里妈妈(淘宝/天猫站内广告) [待核实]
+ad.alimama.com
+! 高德[阿里系] 埋点上报 [待核实, api.amap.com 为导航核心切勿拦截]
+atm.amap.com
+! 滴滴 [待核实]
+log.didiglobal.com
+
+! ============================================================
+! [第四部分] 小米 MIUI 系统级广告 (MiAD + MiStat)
+! 说明: 国产手机系统自带全面推送/推荐广告是手机端主要噪音源。
+! 命中即返回 0.0.0.0, 由 AdBlocker 在连接时加载。 ! 开头为注释会被忽略。
+! ============================================================
+
+! ---------- 小米 MIUI 系统级广告 (MiAD + MiStat) ----------
+ad.xiaomi.com
+adv.sec.xiaomi.com
+api.ad.xiaomi.com
+data.mistat.xiaomi.com
+static.ad.xiaomi.com
+o2omedia.xiaomi.com
+! 备注: 以上为小米广告平台与统计埋点; ! 切勿拦截核心域!
+!   update.miui.com / api.miui.com / account.xiaomi.com (系统更新/账号核心)

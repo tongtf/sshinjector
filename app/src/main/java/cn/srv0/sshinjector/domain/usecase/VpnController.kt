@@ -9,8 +9,10 @@ import cn.srv0.sshinjector.domain.model.ConnectionStats
 import cn.srv0.sshinjector.domain.model.HealthStep
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.model.VpnState
+import cn.srv0.sshinjector.domain.vpn.AdBlocker
 import cn.srv0.sshinjector.domain.vpn.CidrRoute
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
+import cn.srv0.sshinjector.domain.vpn.GfwListMatcher
 import cn.srv0.sshinjector.domain.vpn.PacketProcessor
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelConfig
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
@@ -49,8 +51,10 @@ class VpnController
         private val tunnelManager: TunnelManager,
         private val packetProcessor: PacketProcessor,
         private val dnsInterceptor: DnsInterceptor,
+        private val adBlocker: AdBlocker,
         private val settingsDataStore: cn.srv0.sshinjector.data.local.preferences.SettingsDataStore,
         private val domainListManager: DomainListManager,
+        private val adBlockManager: cn.srv0.sshinjector.data.local.AdBlockManager,
         @ApplicationContext private val context: Context,
     ) : CoroutineScope by CoroutineScope(Dispatchers.IO + Job()) {
         @Volatile private var vpnInterface: FileDescriptor? = null
@@ -89,6 +93,42 @@ class VpnController
             // TCP bypass 策略实时读 excludedRoutes/transportMode (无需随配置变化重挂)
             packetProcessor.setTcpBypass(::shouldBypassTcp) { socket -> protectTcpSocket?.invoke(socket) ?: false }
         }
+
+        /**
+         * 编译广告过滤规则, 优先级从高到低:
+         * 1) 运行时编辑器保存的规则 —— 仅用于查漏补缺(增/减), 叠加在下面的基础规则之上, 不整体替换;
+         * 2) 基础规则取 [AdBlockManager] 缓存内的远程清单(已内含内置规则)优先, 未配置远程 URL /
+         *    缓存过期(≥3 天未更新) / 首次启动时回退内置 assets/adblock.txt。
+         * 连接时调用; 读取失败不影响连接, 仅降级为可用内容。
+         */
+        private suspend fun loadAdBlockRules(): GfwListMatcher {
+            // 运行时编辑器保存的规则仅用于查漏补缺(增/减), 叠加在下面的基础规则之上, 不整体替换。
+            val localEdit =
+                try {
+                    settingsDataStore.adBlockRules.first().takeIf { it.isNotBlank() }
+                } catch (e: Exception) {
+                    Log.w("VpnController", "read ad block rules failed: ${e.message}")
+                    null
+                }
+            // 基础规则: 优先用缓存内的远程清单(已内含内置), 否则回退内置 assets/adblock.txt。
+            val base = remoteOrBuiltIn()
+            return GfwListMatcher.parse(if (localEdit.isNullOrBlank()) base else "$base\n$localEdit")
+        }
+
+        /** 基础规则源: 缓存内的远程清单(已内含内置规则)优先, 未配置/首次则回退内置清单。 */
+        private suspend fun remoteOrBuiltIn(): String {
+            val remote = runCatching { adBlockManager.currentRules() }.getOrNull().orEmpty()
+            return if (remote.isNotBlank()) remote else readBuiltinAsset()
+        }
+
+        /** 读取编译期内置广告清单 assets/adblock.txt, 失败返回空串。 */
+        private fun readBuiltinAsset(): String =
+            try {
+                context.assets.open("adblock.txt").use { it.readBytes().toString(Charsets.UTF_8) }
+            } catch (e: Exception) {
+                Log.w("VpnController", "load adblock.txt failed: ${e.message}")
+                ""
+            }
 
         fun setProtectTcpFunction(protectSocket: ((java.net.Socket) -> Boolean)?) {
             addLog(">>> [VpnController] setProtectTcpFunction 被调用", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
@@ -220,6 +260,24 @@ class VpnController
                     }
                 dnsInterceptor.setTransportMode(this.transportMode)
                 dnsInterceptor.setDomainListManager(domainListManager)
+
+                // 广告过滤: 连接时配置, 对所有 DNS 传输模式统一生效 (命中即回 0.0.0.0,
+                //   不解析 / 不进缓存 / 不消耗隧道或系统 DNS); 规则 = 内置清单 + 用户自定义域名
+                val adEnabled = settingsDataStore.adBlockEnabled.first()
+                dnsInterceptor.setEnabledAdBlock(adEnabled)
+                if (adEnabled) {
+                    launch {
+                        try {
+                            adBlocker.setMatcher(loadAdBlockRules())
+                            addLog("广告过滤规则已加载", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
+                        } catch (e: Exception) {
+                            addLog(
+                                "广告规则加载失败, 将仅使用可用清单: ${e.message}",
+                                cn.srv0.sshinjector.ui.viewmodel.LogLevel.WARNING,
+                            )
+                        }
+                    }
+                }
 
                 // 传递系统 DNS 服务器到 DnsInterceptor (SYSTEM/DOMAIN_SPLIT 模式需要)
                 val systemDns = getSystemDnsServers()

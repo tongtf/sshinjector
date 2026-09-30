@@ -54,6 +54,7 @@ import cn.srv0.sshinjector.ui.viewmodel.dnsModeLabel
 @Composable
 fun SettingsScreen(
     modifier: Modifier = Modifier,
+    onNavigateToAdBlock: () -> Unit = {},
     onNavigateToDomainListSettings: () -> Unit = {},
     onNavigateToWhitelist: () -> Unit = {},
     onNavigateToServerManagement: () -> Unit = {},
@@ -66,6 +67,7 @@ fun SettingsScreen(
     val probeUrl by viewModel.probeUrl.collectAsState()
     val enableIPv6 by viewModel.enableIPv6.collectAsState()
     val dnsMode by viewModel.dnsMode.collectAsState()
+    val adBlockEnabled by viewModel.adBlockEnabled.collectAsState()
     val language by viewModel.language.collectAsState()
     var showDnsDialog by remember { mutableStateOf(false) }
     var showBiometricDialog by remember { mutableStateOf(false) }
@@ -142,6 +144,18 @@ fun SettingsScreen(
                         )
                     },
                     onClick = onNavigateToWhitelist,
+                )
+                SettingsRow(
+                    title = stringResource(R.string.settings_language),
+                    subtitle = LocaleManager.getDisplayLabel(language, context),
+                    trailing = {
+                        Text(
+                            text = LocaleManager.getDisplayLabel(language, context),
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    onClick = { showLangDialog = true },
                 )
             }
 
@@ -227,18 +241,31 @@ fun SettingsScreen(
                     },
                     onClick = onNavigateToDomainListSettings,
                 )
+            }
 
+            SettingsSection(stringResource(R.string.settings_ad_block)) {
                 SettingsRow(
-                    title = stringResource(R.string.settings_language),
-                    subtitle = LocaleManager.getDisplayLabel(language, context),
+                    title = stringResource(R.string.settings_ad_block),
+                    subtitle = stringResource(R.string.settings_ad_block_desc),
                     trailing = {
-                        Text(
-                            text = LocaleManager.getDisplayLabel(language, context),
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.primary,
+                        Switch(
+                            checked = adBlockEnabled,
+                            onCheckedChange = { viewModel.setAdBlockEnabled(it) },
                         )
                     },
-                    onClick = { showLangDialog = true },
+                )
+
+                SettingsRow(
+                    title = stringResource(R.string.settings_ad_block_custom_title),
+                    subtitle = stringResource(R.string.settings_ad_block_custom_desc),
+                    trailing = {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    onClick = onNavigateToAdBlock,
                 )
             }
 

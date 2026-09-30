@@ -132,6 +132,11 @@ class DnsInterceptor
             java.util.concurrent.atomic
                 .AtomicLong(0)
 
+        // 广告拦截命中计数 (命中即回 0.0.0.0, 不进缓存 / 不解析)
+        val adBlockCount =
+            java.util.concurrent.atomic
+                .AtomicLong(0)
+
         // 定期清理过期待查 (R5: daemon, 不挂进程退出)
         private val cleanupScheduler =
             java.util.concurrent.Executors
@@ -246,6 +251,18 @@ class DnsInterceptor
             this.protectSocket = protectSocket
         }
 
+        // 广告过滤匹配器 (由 VpnController 连接时注入, 无参构造默认 null → 单测安全放行)
+        @Volatile private var adBlocker: AdBlocker? = null
+
+        fun setAdBlocker(blocker: AdBlocker?) {
+            adBlocker = blocker
+        }
+
+        // 设置广告过滤总开关, 由 DnsInterceptor 在连接时注入; 作用于全部 DNS 传输模式。
+        fun setEnabledAdBlock(enabled: Boolean) {
+            adBlocker?.setEnabled(enabled)
+        }
+
         /**
          * 设置 DNS 传输模式
          */
@@ -306,6 +323,51 @@ class DnsInterceptor
                 val question = questions[0]
                 val originalQueryId = message.header.id
                 queriesIntercepted.incrementAndGet()
+
+                // ★ 广告过滤: 对所有 DNS 传输模式统一生效。
+                //   在判定走隧道(假 IP)/系统 DNS、分配假 IP、真实解析之前拦截,
+                //   命中即回 0.0.0.0(A) / 空答案(AAAA), 不进缓存、不消耗任何通道资源。
+                val adQname = question.name.toString(true)
+                // 捕获为局部 val, 避免 @Volatile var 上无法 smart cast
+                val blocker = adBlocker
+                val blockedAd =
+                    blocker != null &&
+                        blocker.isBlocked(adQname) == true &&
+                        (question.type == org.xbill.DNS.Type.A || question.type == org.xbill.DNS.Type.AAAA)
+                if (blockedAd) {
+                    val blockedResponse =
+                        Message(originalQueryId).apply {
+                            header.setFlag(Flags.QR.toInt())
+                            header.setFlag(Flags.RD.toInt())
+                            header.setFlag(Flags.RA.toInt())
+                            header.setRcode(Rcode.NOERROR)
+                        }
+                    blockedResponse.addRecord(question, Section.QUESTION)
+                    if (question.type == org.xbill.DNS.Type.A) {
+                        // A 记录统一回 0.0.0.0 (黑洞); 客户端连该地址即失败, 达到拦截目的
+                        blockedResponse.addRecord(
+                            org.xbill.DNS.ARecord(
+                                question.name,
+                                org.xbill.DNS.Type.A,
+                                0,
+                                InetAddress.getByName("0.0.0.0"),
+                            ),
+                            Section.ANSWER,
+                        )
+                    }
+                    // AAAA: 不回 IPv4 的 0.0.0.0, 回空答案集逼客户端回落 A 记录
+                    pendingResponses.trySend(
+                        DnsResponse(
+                            srcIp = dstIp,
+                            dstIp = srcIp,
+                            dstPort = srcPort,
+                            data = blockedResponse.toWire(),
+                        ),
+                    )
+                    adBlockCount.incrementAndGet()
+                    Log.d(TAG, "广告域名命中拦截: $adQname (type=${question.type})")
+                    return true
+                }
 
                 // S5: IPv6 关闭 → AAAA 一律回空应答 (不分配/不读缓存/不真实解析 fd00 假 IP)。
                 // 应用回落 A 记录走 IPv4; 若超时式丢弃, getaddrinfo 会卡到解析超时
@@ -712,6 +774,7 @@ class DnsInterceptor
                 queriesResolved = queriesResolved.get(),
                 cacheHits = cacheHits.get(),
                 cacheMisses = cacheMisses.get(),
+                adBlockCount = adBlockCount.get(),
                 pendingQueries = pendingQueries.size,
                 cacheSize = dnsCache.size,
             )
@@ -722,6 +785,7 @@ data class DnsStats(
     val queriesResolved: Long,
     val cacheHits: Long,
     val cacheMisses: Long,
+    val adBlockCount: Long = 0L,
     val pendingQueries: Int,
     val cacheSize: Int,
 )

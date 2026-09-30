@@ -31,6 +31,10 @@ class SettingsDataStore
             private val KEY_KEEP_ALIVE = intPreferencesKey("keep_alive")
             private val KEY_ENABLE_IPV6 = booleanPreferencesKey("enable_ipv6")
             private val KEY_DNS_MODE = intPreferencesKey("dns_mode")
+            private val KEY_ADBLOCK_ENABLED = booleanPreferencesKey("ad_block_enabled")
+            private val KEY_ADBLOCK_RULES = stringPreferencesKey("ad_block_rules")
+            private val KEY_ADBLOCK_URL = stringPreferencesKey("ad_block_remote_url")
+            private val KEY_ADBLOCK_INTERVAL = intPreferencesKey("ad_block_refresh_interval_min")
             private val KEY_PROBE_URL = stringPreferencesKey("probe_url")
             private val KEY_DOMAIN_LIST_URL = stringPreferencesKey("domain_list_url")
             private val KEY_DOMAIN_LIST_LAST_UPDATE = longPreferencesKey("domain_list_last_update")
@@ -38,6 +42,16 @@ class SettingsDataStore
             private const val KEY_KEYSTORE_ALIAS_PREFIX = "keystore_alias_"
 
             const val DEFAULT_DOMAIN_LIST_URL = "https://gitlab.com/gfwlist/gfwlist/raw/master/gfwlist.txt"
+
+            // 广告规则远程刷新间隔默认值(分钟); 实际取值由 AdBlockManager 约束在 [MIN, MAX]
+            const val DEFAULT_ADBLOCK_REFRESH_MINUTES = 360
+            const val MIN_ADBLOCK_REFRESH_MINUTES = 5L
+            const val MAX_ADBLOCK_REFRESH_MINUTES = 1440L
+
+            // 预设远程规则源(GitHub raw, 含内置+Google/YouTube 广告域名); 未单独配置时自动采用。
+            const val DEFAULT_ADBLOCK_REMOTE_URL =
+                "https://raw.githubusercontent.com/tongtf/sshinjector/main/" +
+                    "adblock_rules.txt"
         }
 
         val autoConnect: Flow<Boolean> =
@@ -68,6 +82,23 @@ class SettingsDataStore
         val dnsMode: Flow<Int> =
             context.dataStore.data
                 .map { it[KEY_DNS_MODE] ?: 0 } // 默认远程代理模式
+
+        // 广告过滤总开关, 默认开启
+        val adBlockEnabled: Flow<Boolean> =
+            context.dataStore.data.map { it[KEY_ADBLOCK_ENABLED] ?: true }
+
+        // 运行时编辑的完整广告规则(每行一条, 支持 AdGuard/gfwlist 语法);
+        // 空串 = 未编辑, 连接时回退内置清单 assets/adblock.txt
+        val adBlockRules: Flow<String> =
+            context.dataStore.data.map { it[KEY_ADBLOCK_RULES]?.takeIf { s -> s.isNotBlank() } ?: "" }
+
+        // 广告规则远程源地址; 未单独配置时自动使用预设的 GitHub raw 清单, 无需手动填写。
+        val adBlockRemoteUrl: Flow<String> =
+            context.dataStore.data.map { it[KEY_ADBLOCK_URL] ?: DEFAULT_ADBLOCK_REMOTE_URL }
+
+        // 自动刷新间隔(分钟); 默认 6 小时
+        val adBlockRefreshInterval: Flow<Int> =
+            context.dataStore.data.map { it[KEY_ADBLOCK_INTERVAL] ?: DEFAULT_ADBLOCK_REFRESH_MINUTES }
 
         /** 连通性探测端点; null/未设置 = ConnectivityProber.DEFAULT_ENDPOINT。 */
         val probeUrl: Flow<String?> =
@@ -108,6 +139,36 @@ class SettingsDataStore
 
         suspend fun setDnsMode(mode: Int) {
             context.dataStore.edit { it[KEY_DNS_MODE] = mode }
+        }
+
+        suspend fun setAdBlockEnabled(enabled: Boolean) {
+            context.dataStore.edit { it[KEY_ADBLOCK_ENABLED] = enabled }
+        }
+
+        /** 传入 null/空串 = 清空, 回退内置清单。多行, 每行一条规则 (支持 ||domain^ / @@例外)。 */
+        suspend fun setAdBlockRules(rules: String?) {
+            context.dataStore.edit { it[KEY_ADBLOCK_RULES] = rules.orEmpty() }
+        }
+
+        /** 传 null/空串 = 关闭远程加载。 */
+        suspend fun setAdBlockRemoteUrl(url: String?) {
+            context.dataStore.edit {
+                if (url.isNullOrBlank()) {
+                    it.remove(KEY_ADBLOCK_URL)
+                } else {
+                    it[KEY_ADBLOCK_URL] = url.trim()
+                }
+            }
+        }
+
+        /** 刷新间隔(分钟); 约束在 [MIN, MAX] 范围内。 */
+        suspend fun setAdBlockRefreshInterval(minutes: Int) {
+            val safe =
+                minutes.toLong().coerceIn(
+                    SettingsDataStore.MIN_ADBLOCK_REFRESH_MINUTES,
+                    SettingsDataStore.MAX_ADBLOCK_REFRESH_MINUTES,
+                )
+            context.dataStore.edit { it[KEY_ADBLOCK_INTERVAL] = safe.toInt() }
         }
 
         /** 传 null/空串 = 恢复默认探测端点。 */
