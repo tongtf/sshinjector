@@ -42,8 +42,9 @@
 -keepnames class * implements java.io.Serializable
 -keepnames class * extends java.lang.Enum
 
-# L1: release 剥离 debug/info 日志 (保留 e/w 便于线上排查)
+# L1: release 剥离 debug 日志 (Log.d),保留必要诊断日志 w/e/i
+# 用户要求 release 不写 debug 日志;但 "已连接但无网络" 这类复现环境问题需要 i/w/e 才能排查,
+# 故仅对 Log.d 加 -assumenosideeffects,让 R8 删掉 Log.d,保留其余。
 -assumenosideeffects class android.util.Log {
     public static int d(...);
-    public static int i(...);
 }
