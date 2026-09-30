@@ -71,6 +71,8 @@
     <string name="settings_network">网络</string>
     <string name="settings_mtu">MTU: %d</string>
     <string name="settings_keepalive">保活间隔: %d s</string>
+    <string name="settings_probe_url">连通性探测地址</string>
+    <string name="settings_probe_url_hint">http://connect.rom.miui.com/generate_204</string>
     <string name="settings_ipv6">IPv6 支持</string>
     <string name="settings_ipv6_desc">启用 IPv6 双栈</string>
     <string name="settings_connection_mode">连接模式</string>

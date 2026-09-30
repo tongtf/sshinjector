@@ -71,6 +71,8 @@
     <string name="settings_network">Сеть</string>
     <string name="settings_mtu">MTU: %d</string>
     <string name="settings_keepalive">Keepalive: %d с</string>
+    <string name="settings_probe_url">URL проверки связи</string>
+    <string name="settings_probe_url_hint">http://connect.rom.miui.com/generate_204</string>
     <string name="settings_ipv6">Поддержка IPv6</string>
     <string name="settings_ipv6_desc">Включить двойной стек IPv6</string>
     <string name="settings_connection_mode">Режим подключения</string>

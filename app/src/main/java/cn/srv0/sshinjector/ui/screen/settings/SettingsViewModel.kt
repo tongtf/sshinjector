@@ -45,6 +45,11 @@ class SettingsViewModel
             settingsDataStore.language
                 .stateIn(viewModelScope, SharingStarted.Eagerly, "system")
 
+        /** null = 未设置 → 探测走默认端点 (connect.rom.miui.com/generate_204)。 */
+        val probeUrl: StateFlow<String?> =
+            settingsDataStore.probeUrl
+                .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
         fun setAutoConnect(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setAutoConnect(enabled) }
 
         fun setBiometricUnlock(enabled: Boolean) {
@@ -54,6 +59,8 @@ class SettingsViewModel
         fun setMtu(value: Int) = viewModelScope.launch { settingsDataStore.setMtu(value) }
 
         fun setKeepAlive(value: Int) = viewModelScope.launch { settingsDataStore.setKeepAlive(value) }
+
+        fun setProbeUrl(url: String) = viewModelScope.launch { settingsDataStore.setProbeUrl(url.ifBlank { null }) }
 
         fun setEnableIPv6(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setEnableIPv6(enabled) }
 

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
@@ -22,6 +23,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -39,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -60,6 +63,7 @@ fun SettingsScreen(
     val biometricUnlock by viewModel.biometricUnlock.collectAsState()
     val mtu by viewModel.mtu.collectAsState()
     val keepAlive by viewModel.keepAlive.collectAsState()
+    val probeUrl by viewModel.probeUrl.collectAsState()
     val enableIPv6 by viewModel.enableIPv6.collectAsState()
     val dnsMode by viewModel.dnsMode.collectAsState()
     val language by viewModel.language.collectAsState()
@@ -172,6 +176,19 @@ fun SettingsScreen(
                         Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp),
+                )
+
+                OutlinedTextField(
+                    value = probeUrl ?: "",
+                    onValueChange = { viewModel.setProbeUrl(it) },
+                    label = { Text(stringResource(R.string.settings_probe_url)) },
+                    placeholder = { Text(stringResource(R.string.settings_probe_url_hint)) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
                 )
 
                 SettingsRow(

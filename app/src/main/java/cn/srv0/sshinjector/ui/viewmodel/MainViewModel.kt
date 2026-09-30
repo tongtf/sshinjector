@@ -114,6 +114,8 @@ class MainViewModel
             val currentServerHost: String = "",
             val currentServerUser: String = "",
             val connectionStatus: String = "断开",
+            /** 状态展示文案 (含验证/降级/失败步骤, spec connectivity-health); connectionStatus 保留机器名供逻辑判断。 */
+            val statusDisplay: String = "断开",
             val errorMessage: String? = null,
             // 网络信息
             val deviceIpv4: String = "-",
@@ -322,6 +324,7 @@ class MainViewModel
                 launch {
                     vpnController.vpnState.collect { state ->
                         val isConnected = state.status == cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Connected
+                        val isHealthy = isConnected && state.verified && state.failedStep == null
                         val serverId = state.server?.id ?: 0
                         val status = state.status.name
 
@@ -329,7 +332,14 @@ class MainViewModel
                             if (serverId > 0) {
                                 _uiState.value.serverConnectionStatus.toMutableMap().apply {
                                     keys.filter { it != serverId }.forEach { remove(it) }
-                                    put(serverId, if (isConnected) "Connected" else status)
+                                    put(
+                                        serverId,
+                                        when {
+                                            isHealthy -> "Connected"
+                                            isConnected -> "Degraded"
+                                            else -> status
+                                        },
+                                    )
                                 }
                             } else {
                                 emptyMap()
@@ -338,6 +348,7 @@ class MainViewModel
                         _uiState.update {
                             it.copy(
                                 isConnected = isConnected,
+                                statusDisplay = buildStatusDisplay(state),
                                 currentServer = state.server?.name ?: "未连接",
                                 currentServerId = serverId,
                                 currentServerHost = state.server?.host ?: "",
@@ -493,6 +504,28 @@ class MainViewModel
                     )
                 } else {
                     String.format(java.util.Locale.ROOT, "%02d:%02d:%02d", hours, minutes, seconds)
+                }
+            }
+
+            /**
+             * 状态展示文案: Connected 也分「已验证可用/验证中/异常·步骤」; 连接失败带步骤归因。
+             * 纯函数 (按现有测试形态可在 MainViewModelFormatTest 直测)。
+             */
+            fun buildStatusDisplay(state: cn.srv0.sshinjector.domain.model.VpnState): String {
+                val step = state.failedStep
+                return when (state.status) {
+                    cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Connected ->
+                        when {
+                            step != null -> "连接异常 · ${step.label}"
+                            !state.verified -> "网络验证中"
+                            else -> "已连接"
+                        }
+                    cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Connecting -> "连接中"
+                    cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Disconnecting -> "断开中"
+                    cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Failed ->
+                        if (step != null) "连接失败 · ${step.label}" else "连接失败"
+                    cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Disconnected ->
+                        if (step != null) "连接失败 · ${step.label}" else "未连接"
                 }
             }
 
@@ -802,13 +835,21 @@ class MainViewModel
                 readProcessMemory()
                 val state = vpnController.vpnState.first()
                 val isConnected = state.status == cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Connected
+                val isHealthy = isConnected && state.verified && state.failedStep == null
                 val serverId = state.server?.id ?: 0
                 val status = state.status.name
                 val newServerStatus =
                     if (serverId > 0) {
                         _uiState.value.serverConnectionStatus.toMutableMap().apply {
                             keys.filter { it != serverId }.forEach { remove(it) }
-                            put(serverId, if (isConnected) "Connected" else status)
+                            put(
+                                serverId,
+                                when {
+                                    isHealthy -> "Connected"
+                                    isConnected -> "Degraded"
+                                    else -> status
+                                },
+                            )
                         }
                     } else {
                         emptyMap()
@@ -816,6 +857,7 @@ class MainViewModel
                 _uiState.update {
                     it.copy(
                         isConnected = isConnected,
+                        statusDisplay = buildStatusDisplay(state),
                         currentServer = state.server?.name ?: "未连接",
                         currentServerId = serverId,
                         currentServerHost = state.server?.host ?: "",

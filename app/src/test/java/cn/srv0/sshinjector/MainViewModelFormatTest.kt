@@ -1,5 +1,7 @@
 package cn.srv0.sshinjector
 
+import cn.srv0.sshinjector.domain.model.HealthStep
+import cn.srv0.sshinjector.domain.model.VpnState
 import cn.srv0.sshinjector.ui.viewmodel.MainViewModel
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -32,5 +34,65 @@ class MainViewModelFormatTest {
     fun `formatDuration handles days and negatives`() {
         assertEquals("1d 01:01:00", MainViewModel.formatDuration(86_400_000L + 3_660_000L))
         assertEquals("-", MainViewModel.formatDuration(-1))
+    }
+
+    // ---- statusDisplay (connectivity-health spec UI 映射) ----
+
+    @Test
+    fun `status display shows connected only when verified`() {
+        assertEquals(
+            "已连接",
+            MainViewModel.buildStatusDisplay(
+                VpnState(status = VpnState.VpnStatus.Connected, verified = true),
+            ),
+        )
+        assertEquals(
+            "网络验证中",
+            MainViewModel.buildStatusDisplay(VpnState(status = VpnState.VpnStatus.Connected)),
+        )
+    }
+
+    @Test
+    fun `status display shows failing step when degraded`() {
+        assertEquals(
+            "连接异常 · 隧道通道",
+            MainViewModel.buildStatusDisplay(
+                VpnState(status = VpnState.VpnStatus.Connected, failedStep = HealthStep.TUNNEL),
+            ),
+        )
+    }
+
+    @Test
+    fun `status display attributes connect failure with step`() {
+        assertEquals(
+            "连接失败 · 身份认证",
+            MainViewModel.buildStatusDisplay(
+                VpnState(status = VpnState.VpnStatus.Failed, failedStep = HealthStep.AUTH),
+            ),
+        )
+        assertEquals(
+            "连接失败",
+            MainViewModel.buildStatusDisplay(VpnState(status = VpnState.VpnStatus.Failed)),
+        )
+        // 连接失败的归因在 controller disconnect (state=Disconnected) 之后补写, 必须仍带步骤
+        assertEquals(
+            "连接失败 · SSH 连接",
+            MainViewModel.buildStatusDisplay(
+                VpnState(status = VpnState.VpnStatus.Disconnected, failedStep = HealthStep.SSH),
+            ),
+        )
+    }
+
+    @Test
+    fun `status display maps transitional states`() {
+        assertEquals("未连接", MainViewModel.buildStatusDisplay(VpnState()))
+        assertEquals(
+            "连接中",
+            MainViewModel.buildStatusDisplay(VpnState(status = VpnState.VpnStatus.Connecting)),
+        )
+        assertEquals(
+            "断开中",
+            MainViewModel.buildStatusDisplay(VpnState(status = VpnState.VpnStatus.Disconnecting)),
+        )
     }
 }

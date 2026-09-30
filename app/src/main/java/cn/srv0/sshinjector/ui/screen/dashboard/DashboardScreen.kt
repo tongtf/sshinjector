@@ -269,7 +269,7 @@ fun DashboardScreen(
                             )
                         }
                         Text(
-                            text = state.connectionStatus,
+                            text = state.statusDisplay,
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -756,6 +756,8 @@ fun ServerListItem(
     val containerColor by animateColorAsState(
         targetValue =
             when {
+                // 会话已建立但端到端验证未过 (Degraded): 与主状态区「验证中/异常」保持一致, 不用已连接色
+                connectionStatus == "Degraded" -> MaterialTheme.colorScheme.tertiaryContainer
                 isConnected -> MaterialTheme.colorScheme.primaryContainer
                 isDefault -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
                 else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
