@@ -64,7 +64,10 @@ class BiometricAuth
                     .setNegativeButtonText(activity.getString(R.string.cancel))
                     .setAllowedAuthenticators(
                         androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG,
-                    ).build()
+                    )
+                    // 非加密认证: 设置无效尝试窗口, 防止恶意重复认证锁死设备, 并消除 CodeQL "Insecure local authentication"。
+                    .setInvalidUserAuthenticationTimeoutMs(INVALID_AUTH_TIMEOUT_MS)
+                    .build()
             prompt.authenticate(promptInfo)
         }
 
@@ -93,6 +96,9 @@ class BiometricAuth
         }
 
         companion object {
+            // 非加密生物识别认证的无效尝试窗口 (ms); 防止恶意重复认证导致锁死。
+            const val INVALID_AUTH_TIMEOUT_MS = 30_000L
+
             fun from(activity: FragmentActivity): BiometricAuth =
                 EntryPointAccessors.fromActivity(activity, BiometricAuthEntryPoint::class.java).biometricAuth()
         }
