@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.util.Log
 import cn.srv0.sshinjector.data.local.DomainListManager
 import cn.srv0.sshinjector.domain.model.ConnectionStats
+import cn.srv0.sshinjector.domain.model.HealthStep
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.model.VpnState
 import cn.srv0.sshinjector.domain.vpn.CidrRoute
@@ -176,7 +177,10 @@ class VpnController
 
             currentServer = server
             isRunning = true
-            updateState { it.copy(status = VpnState.VpnStatus.Connecting, server = server) }
+            // 新一轮连接: 清掉上一次的健康归因, 重新从"未验证"开始
+            updateState {
+                it.copy(status = VpnState.VpnStatus.Connecting, server = server, verified = false, failedStep = null)
+            }
 
             return try {
                 // 1. 启动隧道插件
@@ -514,7 +518,11 @@ class VpnController
                             // isVpnRunning() 检查处短路, SSH tunnel 会泄漏
                             android.util.Log.e("VpnController", "packetLoop failing continuously, stopping")
                             updateState {
-                                it.copy(status = VpnState.VpnStatus.Failed, error = e.message)
+                                it.copy(
+                                    status = VpnState.VpnStatus.Failed,
+                                    error = e.message,
+                                    failedStep = HealthStep.TUN,
+                                )
                             }
                             break
                         }
@@ -952,6 +960,17 @@ class VpnController
         fun getCurrentServer(): ServerConfig? = currentServer
 
         fun isVpnRunning(): Boolean = isRunning
+
+        /**
+         * 上报端到端健康结果 (SshVpnService 的探测循环驱动)。
+         * 相同值重复上报会被 StateFlow 的相等性去重, 无需调用方节流。
+         */
+        fun reportHealth(
+            verified: Boolean,
+            failedStep: HealthStep?,
+        ) {
+            updateState { it.copy(verified = verified, failedStep = failedStep) }
+        }
 
         private fun updateState(block: (VpnState) -> VpnState) {
             vpnState.update(block)
