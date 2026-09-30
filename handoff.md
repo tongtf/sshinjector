@@ -1,7 +1,7 @@
 # Handoff — SSHInjector Session Summary
 
 **Date:** 2026-09-30 (CST)
-**Branch:** `main` | **HEAD:** 本次提交（首页出口 IP） | **Version:** `1.0.7` (versionCode 7)
+**Branch:** `main` | **HEAD:** 本次提交（连接流程状态细化） | **Version:** `1.0.7` (versionCode 7)
 **Push/Release:** ✅ 完成 — `git push --no-verify` 绕过 pre-push #N 钩子（用户指令 push到github），`bf5f656..26635bb` 20 提交上库；tag `v1.0.7` → CI 三 job 全绿 → **GitHub Release 已发布**（`app-{arm64-v8a,armeabi-v7a,x86_64}-release.apk` + `app-release.aab`，git-cliff notes）
 **Device:** Redmi K50 Pro `TCEIPN4DVWRSNNRK`, adb `/opt/android-sdk/platform-tools/adb`, release 包 `cn.srv0.sshinjector`（已装 1.0.7，不含出口 IP 功能）
 
@@ -9,7 +9,8 @@
 
 1. ~~修复「VPN 已连接但无法访问网络」~~ ✅ Bug A/B 已修+真机验证（`99c13a5`/`1011824`）
 2. **状态检测 connectivity-health** ✅ 实现+审计+文档+7 提交+发布 v1.0.7
-3. **首页出口 IP（隧道回显）** ✅ 本次提交（实现+测试+文档）
+3. **首页出口 IP（隧道回显）** ✅ `756f737`（实现+测试+文档，未 push）
+4. **连接流程状态细化（ConnectStage）** ✅ 本次提交（实现+测试+文档，未 push）
 
 ## What Is Done ✅
 
@@ -24,7 +25,7 @@
 | `c22bf14` / `26635bb` | docs: spec/AGENTS/evidence + README×3/USER_GUIDE/vpn-state 图 |
 | `28e488a` | chore: bump version to 1.0.7 |
 
-### 本次提交：首页出口 IP
+### 已提交 `756f737`：首页出口 IP
 
 - **用户选定方案**: 隧道回显（非 SSH 对端 IP）——互联网视角的真实代理出口 IP
 - `VpnState.exitIp`（会话级缓存，连接期 `exitIp=null` 重置）+ `VpnController.reportExitIp`
@@ -33,12 +34,21 @@
 - UI: `UiState.exitIp` 两处 collector 透传（未连接 → `-`）；Dashboard 状态块 IPv6 行下新增「出口 IP」；`dashboard_exit_ip` 4 语言
 - **测试**: prober 新增 5 例（json/无 CL 至 EOF/非 IP/空体/代理不可达）→ 170 绿；**质量门 6/6**（test/ktlint/detekt/lint/assembleDebug；release 未重跑——未 bump 版本）
 
+### 本次提交：连接流程状态细化（ConnectStage）
+
+- **需求**: 连接过程只显示「连接中」，需展示流程中每个可能状态
+- `ConnectStage` 枚举: TUN 正在创建 VPN 接口 / TUNNEL 正在连接 SSH（隧道插件含 SSH 握手=最慢阶段）/ CONFIG 正在配置网络规则; `VpnState.connectStage`
+- 推进点: `SshVpnService` establish 前 `reportConnectStage(TUN)`（connect + autoReconnect 两处）→ `VpnController.connect` 入口清阶段 → startPlugin 前 TUNNEL → DNS 配置前 CONFIG → Connected 后由 verified 接管（网络验证中/已连接）
+- 映射同源: `buildStatusDisplay`（状态卡）+ `updateHealthNotification`（通知）; **Connecting 分支 failedStep 优先** — establish 失败时 controller.disconnect 因 isRunning=false 早退, status 停留 Connecting, 不然卡显阶段文案
+- 通知门由 `isVpnRunning` 改为状态过滤（TUN 阶段在 isRunning=true 之前, 原门会拦掉该阶段通知）
+- 测试 +2（stage 映射、failedStep 优先）→ 172 绿; 6 质量门全绿
+
 ## What Is Pending ⏳
 
 1. **真机验证**（唯一阻塞项）：需你**手点**连接（MIUI 禁 adb 模拟点击 INJECT_EVENTS / BIND_VPN_SERVICE 拦 service 启动）——本机 debug 包可装 `cn.srv0.sshinjector.debug`，或下次发版后装 release。核验：
    - 四态：已连接 / 网络验证中 / 连接异常·步骤 / 连接失败·步骤（`logcat | grep "health probe"`）
    - 出口 IP：状态块「出口 IP」行 `-` → IP（`logcat | grep "exit ip"`）
-2. **发版含出口 IP 功能**: bump 1.0.8 → tag → CI（等你指令）
+2. **push + 发版**: `756f737` + 本次提交未 push（`--no-verify` 需你再次授权）; bump 1.0.8 → tag → CI（等你指令）, release 将含 出口 IP + 连接流程状态
 3. GitHub dependabot: default branch 1 个 **moderate** 漏洞（v1.0.7 push 时 remote 提示，`…/security/dependabot/62`）
 4. 残留（不阻塞）: Keystore 300s 根本解法=导入软件 Ed25519 key（用户未操作）
 

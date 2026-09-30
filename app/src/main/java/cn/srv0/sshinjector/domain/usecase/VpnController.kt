@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.util.Log
 import cn.srv0.sshinjector.data.local.DomainListManager
+import cn.srv0.sshinjector.domain.model.ConnectStage
 import cn.srv0.sshinjector.domain.model.ConnectionStats
 import cn.srv0.sshinjector.domain.model.HealthStep
 import cn.srv0.sshinjector.domain.model.ServerConfig
@@ -177,7 +178,7 @@ class VpnController
 
             currentServer = server
             isRunning = true
-            // 新一轮连接: 清掉上一次的健康归因与出口 IP, 重新从"未验证"开始
+            // 新一轮连接: 清掉上一次的健康归因/出口 IP/流程阶段, 重新从"未验证"开始
             updateState {
                 it.copy(
                     status = VpnState.VpnStatus.Connecting,
@@ -185,12 +186,14 @@ class VpnController
                     verified = false,
                     failedStep = null,
                     exitIp = null,
+                    connectStage = null,
                 )
             }
 
             return try {
-                // 1. 启动隧道插件
+                // 1. 启动隧道插件 (内含 SSH TCP+握手, 连接流程中最慢阶段)
                 val tunnelConfig = TunnelConfig.forSocks5(server, password)
+                updateState { it.copy(connectStage = ConnectStage.TUNNEL) }
                 addLog("正在连接隧道 (socks5)...", cn.srv0.sshinjector.ui.viewmodel.LogLevel.INFO)
                 val tunnelResult = tunnelManager.startPlugin("socks5", tunnelConfig)
                 if (tunnelResult.isFailure) {
@@ -201,6 +204,7 @@ class VpnController
                 addLog("隧道连接成功: socks5", cn.srv0.sshinjector.ui.viewmodel.LogLevel.SUCCESS)
 
                 // 3. 设置 DNS 拦截器
+                updateState { it.copy(connectStage = ConnectStage.CONFIG) }
                 packetProcessor.setDnsInterceptor(dnsInterceptor)
                 // S5: IPv6 开关联动 — TUN 侧丢弃 v6 包 + DNS AAAA 回空应答
                 packetProcessor.setEnableIPv6(server.enableIPv6)
@@ -981,6 +985,11 @@ class VpnController
         /** 上报隧道出口 IP (探测成功后经 IP 回显取回); UI 断开时自行降级为占位符。 */
         fun reportExitIp(exitIp: String?) {
             updateState { it.copy(exitIp = exitIp) }
+        }
+
+        /** 上报连接流程阶段 (SshVpnService 在 TUN 建立前调用; connect() 内部步骤自行推进 TUNNEL/CONFIG)。 */
+        fun reportConnectStage(stage: ConnectStage) {
+            updateState { it.copy(status = VpnState.VpnStatus.Connecting, connectStage = stage) }
         }
 
         private fun updateState(block: (VpnState) -> VpnState) {

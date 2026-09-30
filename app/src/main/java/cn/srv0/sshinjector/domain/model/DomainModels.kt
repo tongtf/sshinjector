@@ -66,6 +66,15 @@ enum class HealthStep(
     TUN("虚拟网卡"),
 }
 
+/** 连接流程阶段 (仅 Connecting 期间有意义); label 为状态栏/通知栏展示文案, 与 HealthStep.label 同风格。 */
+enum class ConnectStage(
+    val label: String,
+) {
+    TUN("正在创建 VPN 接口"),
+    TUNNEL("正在连接 SSH"),
+    CONFIG("正在配置网络规则"),
+}
+
 data class VpnState(
     val status: VpnStatus = VpnStatus.Disconnected,
     val server: ServerConfig? = null,
@@ -77,6 +86,8 @@ data class VpnState(
     val failedStep: HealthStep? = null,
     /** 隧道出口 IP (IP 回显获取, 会话级缓存); null = 未取回。 */
     val exitIp: String? = null,
+    /** 当前连接流程阶段; null = 无阶段 (非连接中或未细分)。 */
+    val connectStage: ConnectStage? = null,
 ) {
     enum class VpnStatus {
         Disconnected,

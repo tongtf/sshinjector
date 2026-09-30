@@ -523,7 +523,12 @@ class MainViewModel
                             !state.verified -> "网络验证中"
                             else -> "已连接"
                         }
-                    cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Connecting -> "连接中"
+                    cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Connecting ->
+                        when {
+                            // 连接期失败 (如 TUN 建立失败) 归因补写时 status 仍停留 Connecting, 必须优先显示
+                            step != null -> "连接失败 · ${step.label}"
+                            else -> state.connectStage?.label ?: "连接中"
+                        }
                     cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Disconnecting -> "断开中"
                     cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Failed ->
                         if (step != null) "连接失败 · ${step.label}" else "连接失败"

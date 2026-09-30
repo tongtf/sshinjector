@@ -17,6 +17,7 @@ import android.os.ParcelFileDescriptor
 import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.data.local.dao.WhitelistDao
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
+import cn.srv0.sshinjector.domain.model.ConnectStage
 import cn.srv0.sshinjector.domain.model.ConnectionStats
 import cn.srv0.sshinjector.domain.model.HealthStep
 import cn.srv0.sshinjector.domain.model.ServerConfig
@@ -330,7 +331,8 @@ class SshVpnService : VpnService() {
                 // 启动前台服务
                 startForegroundWithNotification(merged)
 
-                // 建立 VPN 接口
+                // 建立 VPN 接口 (先报阶段: 状态卡/通知从 TUN 建立起显示细分流程)
+                vpnController.reportConnectStage(ConnectStage.TUN)
                 val fd = establishVpnInterface(merged, allowedPackages, dnsMode)
                 vpnController.setVpnInterface(fd)
 
@@ -576,9 +578,15 @@ class SshVpnService : VpnService() {
         notificationManager?.notify(NOTIFICATION_ID, notification)
     }
 
-    /** 健康状态变化 → 通知栏文案跟随 (已连接/网络验证中/连接异常 · <步骤>)。 */
+    /** 状态变化 → 通知栏文案跟随 (连接阶段 / 已连接 / 网络验证中 / 连接异常 · <步骤>)。 */
     private fun updateHealthNotification(state: DomainVpnState) {
-        if (!vpnController.isVpnRunning()) return
+        // 门基于状态而非 isVpnRunning: TUN 阶段 (reportConnectStage) 发生在 isRunning=true 之前
+        if (state.status == DomainVpnState.VpnStatus.Disconnected ||
+            state.status == DomainVpnState.VpnStatus.Failed ||
+            state.status == DomainVpnState.VpnStatus.Disconnecting
+        ) {
+            return
+        }
         val config = currentServer ?: return
         val label =
             when (state.status) {
@@ -588,7 +596,8 @@ class SshVpnService : VpnService() {
                         !state.verified -> "网络验证中"
                         else -> "已连接"
                     }
-                DomainVpnState.VpnStatus.Connecting -> "连接中..."
+                DomainVpnState.VpnStatus.Connecting ->
+                    state.connectStage?.label ?: "连接中..."
                 else -> return
             }
         updateNotification(config, label)
@@ -861,6 +870,7 @@ class SshVpnService : VpnService() {
                 } else {
                     emptyList()
                 }
+            vpnController.reportConnectStage(ConnectStage.TUN)
             val fd = establishVpnInterface(config, allowedPackages, dnsMode)
             vpnController.setVpnInterface(fd)
             vpnController.setProtectFunction { socket -> this.protect(socket) }

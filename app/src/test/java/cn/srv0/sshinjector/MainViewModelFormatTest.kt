@@ -1,5 +1,6 @@
 package cn.srv0.sshinjector
 
+import cn.srv0.sshinjector.domain.model.ConnectStage
 import cn.srv0.sshinjector.domain.model.HealthStep
 import cn.srv0.sshinjector.domain.model.VpnState
 import cn.srv0.sshinjector.ui.viewmodel.MainViewModel
@@ -93,6 +94,42 @@ class MainViewModelFormatTest {
         assertEquals(
             "断开中",
             MainViewModel.buildStatusDisplay(VpnState(status = VpnState.VpnStatus.Disconnecting)),
+        )
+    }
+
+    @Test
+    fun `status display shows each connect stage while connecting`() {
+        assertEquals(
+            "正在创建 VPN 接口",
+            MainViewModel.buildStatusDisplay(
+                VpnState(status = VpnState.VpnStatus.Connecting, connectStage = ConnectStage.TUN),
+            ),
+        )
+        assertEquals(
+            "正在连接 SSH",
+            MainViewModel.buildStatusDisplay(
+                VpnState(status = VpnState.VpnStatus.Connecting, connectStage = ConnectStage.TUNNEL),
+            ),
+        )
+        assertEquals(
+            "正在配置网络规则",
+            MainViewModel.buildStatusDisplay(
+                VpnState(status = VpnState.VpnStatus.Connecting, connectStage = ConnectStage.CONFIG),
+            ),
+        )
+    }
+
+    @Test
+    fun `status display connect failure takes precedence over stage`() {
+        assertEquals(
+            "连接失败 · 虚拟网卡",
+            MainViewModel.buildStatusDisplay(
+                VpnState(
+                    status = VpnState.VpnStatus.Connecting,
+                    connectStage = ConnectStage.TUN,
+                    failedStep = HealthStep.TUN,
+                ),
+            ),
         )
     }
 }
