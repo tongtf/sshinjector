@@ -18,6 +18,9 @@ import java.util.concurrent.atomic.AtomicLong
 
 private val IS_DEBUG = android.util.Log.isLoggable("PacketProcessor", android.util.Log.DEBUG)
 
+/** SOCKS5 握手/认证诊断日志开关 (独立 tag, 便于一次性开两端排查). */
+private val IS_DEBUG_SOCKS = android.util.Log.isLoggable("Socks5Proxy", android.util.Log.DEBUG)
+
 /**
  * TCP 状态机：解析 TCP 头、维护连接状态、通过隧道/SOCKS5 转发。
  */
@@ -322,6 +325,24 @@ class TcpStateMachine(
             }
         }
 
+        /**
+         * 阻塞读取直到 `dst` 填满;返回 false = EOF/错误(连接已断)。
+         *
+         * 修复 ed713d3 引入的回归:原实现单次 `sock.read()` 后连续 `.get()`,当服务端把 `05 02`/
+         * `01 00`/CONNECT 响应这类小报文按 TCP 分段送达时,首读只拿到部分字节,后续 `.get()`
+         * 触发 BufferUnderflow → 连接被静默关闭 → VPN 建了但无法联网。
+         */
+        fun readFully(
+            sock: SocketChannel,
+            dst: ByteBuffer,
+        ): Boolean {
+            while (dst.hasRemaining()) {
+                val n = sock.read(dst)
+                if (n <= 0) return false
+            }
+            return true
+        }
+
         // SOCKS5 握手: 仅提供用户名/密码认证 (RFC 1929, 0x02); 服务端 fail-closed, 无凭据必失败
         val creds = plugin.socksAuth
         if (creds == null) {
@@ -330,12 +351,17 @@ class TcpStateMachine(
             closeTcpConnection(connKey, conn)
             return
         }
+        if (IS_DEBUG_SOCKS) {
+            Log.d(
+                "Socks5Proxy",
+                "[socks] conn=${conn.id} writing handshake 05 01 02 to ${conn.dstIp}:${conn.dstPort}",
+            )
+        }
         sock.write(ByteBuffer.wrap(byteArrayOf(0x05, 0x01, 0x02)))
 
         val handshakeResp = ByteBuffer.allocate(2)
-        val hsRead = sock.read(handshakeResp)
-        if (hsRead <= 0) {
-            Log.e(TAG, "SOCKS5 handshake read failed: bytesRead=$hsRead")
+        if (!readFully(sock, handshakeResp)) {
+            Log.e(TAG, "SOCKS5 handshake read failed (partial/EOF)")
             sock.close()
             closeTcpConnection(connKey, conn)
             return
@@ -343,6 +369,12 @@ class TcpStateMachine(
         handshakeResp.flip()
         val respVer = handshakeResp.get().toInt() and 0xFF
         val respMethod = handshakeResp.get().toInt() and 0xFF
+        if (IS_DEBUG_SOCKS) {
+            Log.d(
+                "Socks5Proxy",
+                "[socks] conn=${conn.id} handshake reply ver=$respVer method=$respMethod",
+            )
+        }
         if (respVer != 0x05 || respMethod != 0x02) {
             Log.e(TAG, "SOCKS5 handshake failed: ver=$respVer method=$respMethod")
             sock.close()
@@ -366,9 +398,8 @@ class TcpStateMachine(
         sock.write(ByteBuffer.wrap(authReq))
 
         val authResp = ByteBuffer.allocate(2)
-        val authRead = sock.read(authResp)
-        if (authRead <= 0) {
-            Log.e(TAG, "SOCKS5 auth read failed: bytesRead=$authRead")
+        if (!readFully(sock, authResp)) {
+            Log.e(TAG, "SOCKS5 auth read failed (partial/EOF)")
             sock.close()
             closeTcpConnection(connKey, conn)
             return
@@ -376,6 +407,7 @@ class TcpStateMachine(
         authResp.flip()
         val authVer = authResp.get().toInt() and 0xFF
         val authStatus = authResp.get().toInt() and 0xFF
+        if (IS_DEBUG_SOCKS) Log.d("Socks5Proxy", "[socks] conn=${conn.id} auth reply ver=$authVer status=$authStatus")
         if (authVer != 0x01 || authStatus != 0x00) {
             Log.e(TAG, "SOCKS5 auth rejected: ver=$authVer status=$authStatus")
             sock.close()
@@ -388,10 +420,12 @@ class TcpStateMachine(
         val connectReq = buildSocks5ConnectRequest(conn.dstIp, conn.dstPort, domain)
         sock.write(ByteBuffer.wrap(connectReq))
 
-        val connectResp = ByteBuffer.allocate(32)
-        val bytesRead = sock.read(connectResp)
-        if (bytesRead <= 0) {
-            Log.e(TAG, "SOCKS5 CONNECT read failed")
+        // 服务端 CONNECT 响应为定长 (VER REP RSV ATYP BND.ADDR BND.PORT)，IPv4/错误均为 10 字节；
+        // 只处理前 10 字节，跳过按 atyp 计算的剩余段(仅移动 position，不再 .get())。用 allocate(10)
+        // 配合 readFully 既避免分片 BufferUnderflow，又不会像原 allocate(32) 那样死等不满。
+        val connectResp = ByteBuffer.allocate(10)
+        if (!readFully(sock, connectResp)) {
+            Log.e(TAG, "SOCKS5 CONNECT read failed (partial/EOF)")
             sock.close()
             closeTcpConnection(connKey, conn)
             return
