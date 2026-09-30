@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Base64
@@ -129,9 +130,27 @@ class AdBlockManager
                     writeChecksum(decoded)
                     AdBlockRemoteState.Ready(decoded, now).also { _state.value = it }
                 }
+            } catch (e: IOException) {
+                // Network failure (reset/timeout/DNS): fall back to the verified local cache, not the raw socket error.
+                val state = fallbackToCached() ?: AdBlockRemoteState.Error("网络不可达，暂时无法刷新广告规则")
+                _state.value = state
+                state
             } catch (e: Exception) {
+                // Content-level problem (empty / HTML / no valid rules): report clearly, never degrade.
                 AdBlockRemoteState.Error(e.message ?: "远程刷新失败").also { _state.value = it }
             }
+        }
+
+        /** Fall back to the verified local cache on network failure; returns null when no cache is available. */
+        private fun fallbackToCached(): AdBlockRemoteState? {
+            val file = remoteFile()
+            if (file.exists() && verifyChecksum(file.readText())) {
+                val text = file.readText().trim()
+                if (text.isNotBlank()) {
+                    return AdBlockRemoteState.Ready(text, null)
+                }
+            }
+            return null
         }
 
         private fun fetch(url: String): String {

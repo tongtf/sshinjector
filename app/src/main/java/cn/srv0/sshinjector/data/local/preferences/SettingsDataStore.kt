@@ -48,9 +48,9 @@ class SettingsDataStore
             const val MIN_ADBLOCK_REFRESH_MINUTES = 5L
             const val MAX_ADBLOCK_REFRESH_MINUTES = 1440L
 
-            // 预设远程规则源(GitHub raw, 含内置+Google/YouTube 广告域名); 未单独配置时自动采用。
+            // Default remote source (jsDelivr mirror): identical content to GitHub raw, reachable where raw is reset.
             const val DEFAULT_ADBLOCK_REMOTE_URL =
-                "https://raw.githubusercontent.com/tongtf/sshinjector/main/" +
+                "https://cdn.jsdelivr.net/gh/tongtf/sshinjector@main/" +
                     "adblock_rules.txt"
         }
 

@@ -28,6 +28,10 @@ class AdBlockSettingsViewModel
         private val _rulesText = MutableStateFlow("")
         val rulesText: StateFlow<String> = _rulesText.asStateFlow()
 
+        // 持久化的远程缓存规则文本 (连接时与 rules 叠加生效); UI 仅用于计数, 不展示其内容。
+        private val _remoteText = MutableStateFlow("")
+        val remoteText: StateFlow<String> = _remoteText.asStateFlow()
+
         // 搜索关键字 (对规则做子串过滤, 仅影响展示与统计)
         private val _query = MutableStateFlow("")
         val query: StateFlow<String> = _query.asStateFlow()
@@ -59,7 +63,14 @@ class AdBlockSettingsViewModel
             adBlockManager.state.stateIn(viewModelScope, SharingStarted.Eagerly, AdBlockRemoteState.Idle)
 
         init {
+            // 手动编辑的规则仅来自 adBlockRules, 与远程刷新互不影响; 远程规则在连接时作为基础清单静默生效, UI 不展示其内容。
             viewModelScope.launch { loadInitialRules() }
+            // 持久化的远程缓存文本 (磁盘旧缓存 + 刷新成功的新内容); 供顶部计数使用。
+            viewModelScope.launch {
+                adBlockManager.state.collect { state ->
+                    if (state is AdBlockRemoteState.Ready) _remoteText.value = state.text.orEmpty()
+                }
+            }
         }
 
         /** 读取运行时保存的规则; 未保存则加载内置清单作为可编辑起点。 */
@@ -105,6 +116,12 @@ class AdBlockSettingsViewModel
         /** 保存远程规则源 URL; 空串 = 关闭远程加载。 */
         fun setRemoteUrl(url: String) {
             viewModelScope.launch { settingsDataStore.setAdBlockRemoteUrl(url.trim()) }
+        }
+
+        /** 把远程源重置为内置默认 URL (jsDelivr); 而非清空成空串导致输入框只剩 example.com 占位提示。 */
+        fun resetRemoteUrlToDefault() {
+            val url = SettingsDataStore.DEFAULT_ADBLOCK_REMOTE_URL
+            viewModelScope.launch { settingsDataStore.setAdBlockRemoteUrl(url) }
         }
 
         /** 自动刷新间隔(分钟); 约束在允许范围内。 */

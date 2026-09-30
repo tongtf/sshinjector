@@ -66,6 +66,7 @@ fun AdBlockSettingsScreen(
     val remoteUrl by viewModel.remoteUrl.collectAsState()
     val refreshInterval by viewModel.refreshInterval.collectAsState()
     val remoteState by viewModel.remoteState.collectAsState()
+    val remoteText by viewModel.remoteText.collectAsState()
     var urlInput by remember { mutableStateOf(remoteUrl) }
     LaunchedEffect(remoteUrl) {
         urlInput = remoteUrl
@@ -75,7 +76,8 @@ fun AdBlockSettingsScreen(
         intervalInput = refreshInterval.toString()
     }
 
-    val totalRules = remember(rules) { countVisibleRules(rules) }
+    val totalRules =
+        remember(rules, remoteText) { countVisibleRules(rules) + countVisibleRules(remoteText) }
 
     var showHelp by remember { mutableStateOf(false) }
 
@@ -150,10 +152,7 @@ fun AdBlockSettingsScreen(
                         ) {
                             Text(stringResource(R.string.settings_ad_block_remote_save))
                         }
-                        TextButton(onClick = {
-                            urlInput = ""
-                            viewModel.setRemoteUrl("")
-                        }) {
+                        TextButton(onClick = { viewModel.resetRemoteUrlToDefault() }) {
                             Text(stringResource(R.string.settings_ad_block_reset_default))
                         }
                     }
@@ -286,7 +285,8 @@ fun AdBlockSettingsScreen(
                             color = MaterialTheme.colorScheme.primary,
                         )
                         Spacer(modifier = Modifier.height(4.dp))
-                        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        // 随外层主可滚Column整体滚动; 内部不再嵌套verticalScroll(否则触发 infinite-height crash)
+                        Column {
                             filteredLines.forEach { line ->
                                 Text(
                                     text = line,
@@ -315,6 +315,12 @@ private fun countVisibleRules(text: String): Int {
     return n
 }
 
+private fun formatTime(timestamp: Long): String =
+    SimpleDateFormat(
+        "yyyy-MM-dd HH:mm",
+        Locale.getDefault(),
+    ).format(Date(timestamp))
+
 @Composable
 private fun StatusRow(
     label: String,
@@ -342,9 +348,3 @@ private fun HelpLine(text: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }
-
-private fun formatTime(timestamp: Long): String =
-    SimpleDateFormat(
-        "yyyy-MM-dd HH:mm",
-        Locale.getDefault(),
-    ).format(Date(timestamp))
