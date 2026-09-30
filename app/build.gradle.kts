@@ -21,8 +21,8 @@ android {
         applicationId = "cn.srv0.sshinjector"
         minSdk = 34
         targetSdk = 35
-        versionCode = 8
-        versionName = "1.1.0"
+        versionCode = 9
+        versionName = "1.1.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
     }
