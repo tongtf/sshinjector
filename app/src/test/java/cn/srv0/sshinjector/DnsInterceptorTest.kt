@@ -4,6 +4,8 @@ import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.xbill.DNS.DClass
@@ -59,6 +61,68 @@ class DnsInterceptorTest {
             assertTrue("identical second query must hit the cache", afterSecond.cacheHits >= 1)
             assertEquals("same name+type must return the same fake ip", afterSecond.cacheSize, afterFirst.cacheSize)
         }
+    }
+
+    /**
+     * 假 IP 计数器 clamp 必须按**无符号**比较: 198.18.0.0 的高位是 1, 作为 [Int] 是负数。
+     *
+     * 曾经 `resetFakeIpCounters` 用 `maxOf(cur.toLong(), maxSeen, FAKE_IP_BASE.toLong())` ——
+     * 符号扩展成负 long, 而 `maxSeen` 是从字节拼出的正 long; `domainToIp` 里没有 IPv4 条目
+     * (`maxSeen == 0`) 时 `maxOf(负, 0, 负)` 恒等于 **0** → 计数器被打回 0 →
+     * 下一次分配拿到 0.0.0.1, `rawIp > FAKE_IP_MAX` 判为"池耗尽",
+     * REMOTE 模式所有 A 记录解析失败且**不自愈** (分配失败 → 永远没有 IPv4 → 下轮再清零)。
+     */
+    @Test
+    fun `resetFakeIpCounterNeverFallsBelowBase`() {
+        val dns = DnsInterceptor()
+        val base = (198 shl 24) or (18 shl 16) // 198.18.0.0 (Int 为负数 —— 这正是陷阱)
+        val mid = base or 0x0012_3456
+        val maxSeen = (198L shl 24) or (18L shl 16) or 0x1234
+
+        // 剩余映射里没有 IPv4 条目 (maxSeen=0): 绝不能被打回 0
+        assertEquals(base, dns.clampFakeIpCounter(base, 0))
+        // 计数器已推进过 (高位为 1 → 负 Int) 必须原样保留
+        assertEquals(mid, dns.clampFakeIpCounter(mid, 0))
+        // 剩余映射的最大值优先 (重置到已用到的最大假 IP)
+        assertEquals(maxSeen.toInt(), dns.clampFakeIpCounter(base, maxSeen))
+        // 段外/未初始化 (旧 bug 形态 0、1) 必须被拉回基线
+        assertEquals(base, dns.clampFakeIpCounter(0, 0))
+        assertEquals(base, dns.clampFakeIpCounter(1, 0))
+    }
+
+    /**
+     * 真实 IP 映射 (SYSTEM / DOMAIN_SPLIT 未命中路径的 DNS 回包) 必须进**独立的表**:
+     * 单表时真实 IP 基数远超 16384, LRU 一淘汰就把假 IP 映射挤掉 → 客户端拿本地缓存的
+     * 假 IP 发 CONNECT → 拿不到域名 → SOCKS 0x03 → 下载卡"连接中"。
+     */
+    @Test
+    fun `real ip mappings must not evict fake ip mappings`() {
+        val dns = DnsInterceptor()
+        dns.seedFakeIpMappingForTest("198.18.0.2", "example.test")
+
+        // 分表后 lookupDomain 仍要能反查真实 IP (连接日志靠它显示域名)
+        var lastRealIp = ""
+        // 压满真实 IP 表 (上限 8192): 30000 条远超容量, 必然触发淘汰
+        repeat(30_000) { i ->
+            lastRealIp = "10.${(i shr 16) and 0xFF}.${(i shr 8) and 0xFF}.${i and 0xFF}"
+            dns.seedRealIpMappingForTest(lastRealIp, "h$i.example")
+        }
+        assertNotNull(dns.lookupDomain(lastRealIp))
+
+        dns.trimMappingsForTest()
+
+        assertNotNull(
+            "fake IP mapping must survive a real-IP flood",
+            dns.lookupDomain("198.18.0.2"),
+        )
+
+        // 假 IP 释放只动假 IP 表, 真实 IP 表不受影响
+        dns.releaseFakeIp("198.18.0.2")
+        // 归零后进入摘除宽限期, 宽限期内仍可解析 (客户端可能还持有这张假 IP, 立即删会 0x03)
+        assertNotNull(dns.lookupDomain("198.18.0.2"))
+        dns.sweepPendingFakeIpReleaseForTest(Long.MAX_VALUE)
+        assertNull(dns.lookupDomain("198.18.0.2"))
+        assertNotNull(dns.lookupDomain(lastRealIp))
     }
 
     @Test

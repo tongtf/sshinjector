@@ -28,6 +28,7 @@ import cn.srv0.sshinjector.domain.vpn.HealthTracker
 import cn.srv0.sshinjector.domain.vpn.VpnNetwork
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import cn.srv0.sshinjector.ui.StatusDisplay
+import cn.srv0.sshinjector.ui.viewmodel.LogLevel
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,6 +43,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import cn.srv0.sshinjector.domain.model.VpnState as DomainVpnState
 
@@ -59,7 +61,7 @@ class SshVpnService : VpnService() {
 
     @Inject lateinit var tunnelManager: TunnelManager
 
-    private var vpnInterface: ParcelFileDescriptor? = null
+    @Volatile private var vpnInterface: ParcelFileDescriptor? = null
     private var tunFd: java.io.FileDescriptor? = null
     private val scope = CoroutineScope(Dispatchers.IO)
     private var currentServer: ServerConfig? = null
@@ -68,7 +70,14 @@ class SshVpnService : VpnService() {
     private var connectivityManager: ConnectivityManager? = null
     private var reconnectJob: Job? = null
 
-    @Volatile private var isReconnecting = false
+    // 重连互斥标志: compareAndSet 原子占位 (旧版 @Volatile check-then-set 有竞态,
+    // 池失败/网络切换/解锁三个触发源可同时通过检查), 读取仍走 isReconnecting 属性
+    private val reconnecting = AtomicBoolean(false)
+    private val isReconnecting: Boolean get() = reconnecting.get()
+
+    // 池失败触发的重连已排队/进行中: 该失败的收尾由重连负责, vpnState=Failed 的
+    // 观察者据此跳过 disconnect — 否则两个协程竞态, disconnect 拆掉刚重建的会话
+    @Volatile private var poolFailReconnectPending = false
 
     @Volatile private var lastNetworkId: Long = -1
 
@@ -299,8 +308,9 @@ class SshVpnService : VpnService() {
         super.onDestroy()
     }
 
-    // F12-g: ACTION_CONNECT 串行化, 消除 isVpnRunning 检查与建立之间的 TOCTOU。
-    // 死锁警告: connect 的 catch 会调 disconnect — disconnect 绝不能也拿此锁 (Mutex 不可重入)
+    // F12-g: 所有会话变更入口 (connect/disconnect/autoReconnect/rebuild) 串行化。
+    // 死锁纪律: 已持锁的路径只能调 *Internal 变体 (connect 的 catch → disconnectInternal,
+    // autoReconnect 的 catch → disconnectInternal) — Mutex 不可重入, 锁内再拿锁必死锁。
     private val connectMutex = Mutex()
 
     private suspend fun connect(serverId: Long) {
@@ -330,6 +340,8 @@ class SshVpnService : VpnService() {
                     } else {
                         emptyList()
                     }
+                // 供 VpnController 决定 DNS 传输策略 (空名单 → 不劫持 DNS, 见 dnsTransportFor)
+                vpnController.setWhitelistPackages(allowedPackages, whitelistEnabled = dnsMode == 2)
 
                 // 启动前台服务
                 startForegroundWithNotification(merged)
@@ -365,7 +377,7 @@ class SshVpnService : VpnService() {
                         status = DomainVpnState.VpnStatus.Failed,
                         error = e.message,
                     )
-                disconnect(userInitiated = false)
+                disconnectInternal(userInitiated = false)
                 // 断开清理不抹健康字段 (controller 侧保留), 失败归因在断开后补写, 供 UI 显示"连接失败 · <步骤>"
                 vpnController.reportHealth(verified = false, failedStep = mapConnectFailureToStep(e.message))
             }
@@ -421,7 +433,9 @@ class SshVpnService : VpnService() {
      * 重新读取白名单并重建 Builder, 仅替换 TUN 接口, SSH 隧道连接保持不断。
      */
     fun rebuildVpnInterface() {
-        scope.launch { rebuildVpnInterfaceInternal() }
+        scope.launch {
+            connectMutex.withLock { rebuildVpnInterfaceInternal() }
+        }
     }
 
     private suspend fun rebuildVpnInterfaceInternal() {
@@ -437,11 +451,24 @@ class SshVpnService : VpnService() {
                 } else {
                     emptyList()
                 }
-            // 关闭旧 TUN 接口并更新 VpnController 的流 (由 rebuildTunInterface 处理旧流关闭)
+            // 先建新接口、成功后再套用 DNS 策略: 顺序反过来时若 establish 抛异常,
+            // 策略已切到新状态而 TUN 还是旧的 —— 空名单翻成非空的瞬间假 IP 没有路由,
+            // 正是 DnsTransportPolicy 注释里那个 "DNS_PROBE_FINISHED_NO_INTERNET" 黑洞。
+            // establishVpnInterface 只依赖入参 (allowedPackages/dnsMode), 不读 controller 状态。
             val fd = establishVpnInterface(config, allowedPackages, dnsMode)
+            // 白名单增删会翻转"空↔非空" → DNS 策略跟着变 (空名单不得劫持 DNS), 与路由变更同步重算
+            vpnController.setWhitelistPackages(allowedPackages, whitelistEnabled = dnsMode == 2)
+            vpnController.updateDnsMode()
+            // 关闭旧 TUN 接口并更新 VpnController 的流 (由 rebuildTunInterface 处理旧流关闭)
             vpnController.rebuildTunInterface(fd)
         } catch (e: Exception) {
             android.util.Log.e("SshVpnService", "rebuildVpnInterfaceInternal failed", e)
+            // 只写 logcat 等于没报: 设备上没有 adb, 半应用状态必须进应用内日志
+            VpnController.appLogThrottled(
+                "VPN 接口重建失败 · ${e::class.simpleName}: ${e.message}",
+                level = LogLevel.WARNING,
+                throttleKey = "VPN 接口重建失败",
+            )
         }
     }
 
@@ -471,7 +498,9 @@ class SshVpnService : VpnService() {
                         if (mode == 2 && vpnController.isVpnRunning() && !rebuildInProgress) {
                             rebuildInProgress = true
                             try {
-                                rebuildVpnInterfaceInternal()
+                                // 与 connect/disconnect/autoReconnect 串行: 热重建 TUN
+                                // 不能与断开/重连并发 (会把新 fd 装进已拆掉的会话)
+                                connectMutex.withLock { rebuildVpnInterfaceInternal() }
                             } finally {
                                 rebuildInProgress = false
                             }
@@ -645,19 +674,27 @@ class SshVpnService : VpnService() {
                 Notification.Action
                     .Builder(
                         null,
-                        "断开",
+                        getString(R.string.notification_action_disconnect),
                         disconnectPendingIntent,
                     ).build(),
             ).setOngoing(true)
             .build()
     }
 
+    /** 会话断开入口 (事件源: ACTION_DISCONNECT/onRevoke/onTaskRemoved/失败观察者): 持锁串行。 */
+    private suspend fun disconnect(userInitiated: Boolean = true) {
+        connectMutex.withLock { disconnectInternal(userInitiated) }
+    }
+
     /**
+     * 断开实现。**只允许已持 connectMutex 的路径调用** (connect/autoReconnect 的 catch,
+     * 或 disconnect 持锁包装器内部) — 自己再拿锁会自死锁 (Mutex 不可重入)。
+     *
      * @param userInitiated true = 用户主动断开 (ACTION_DISCONNECT/onTaskRemoved):
      *   清除激活状态与 lastServerId, 开机自启不再触发。false = 连接失败/系统回收等
      *   非用户意图的清理, 保留 lastServerId 供重启后 BootReceiver 续连。
      */
-    private suspend fun disconnect(userInitiated: Boolean = true) {
+    private suspend fun disconnectInternal(userInitiated: Boolean = true) {
         android.util.Log.d("SshVpnService", "Starting disconnect... userInitiated=$userInitiated")
 
         // 0. 停止白名单观察者与健康监测; 用户主动断开时清除健康归因
@@ -705,22 +742,47 @@ class SshVpnService : VpnService() {
         android.util.Log.d("SshVpnService", "Disconnect completed")
     }
 
+    /**
+     * Failed 观察者是否应执行断开清理。三个跳过条件:
+     * 1. 池失败已有重连排队 — 该失败的收尾由重连负责;
+     * 2. 重连进行中 — 失败观察与重连的触发顺序不确定, 此时 disconnect 会拆掉刚重建的会话;
+     * 3. 已无可清理资源 — connect 自己的 catch 已清理过, 再跑一遍会把 Failed 状态复位成 Disconnected。
+     */
+    private fun shouldCleanupOnFailure(): Boolean {
+        if (poolFailReconnectPending || isReconnecting) return false
+        return vpnController.isVpnRunning() || vpnInterface != null
+    }
+
     private fun observeVpnControllerState() {
         scope.launch {
             vpnController.vpnState.collect { state ->
-                serviceVpnState.value = state
-                state.error?.let { lastError.value = it }
-                updateHealthNotification(state)
-                // F12-i 兜底: packetLoop 连续读失败已退出 (状态 Failed) → 完整清理资源;
-                // disconnect(false) 保留 lastServerId 供重连。幂等, 与 connect catch 不冲突
-                if (state.status == DomainVpnState.VpnStatus.Failed) {
-                    disconnect(userInitiated = false)
+                // collect 体里任何一处抛异常都会取消本协程 → 状态镜像与 Failed 兜底**永久失联**
+                // (UI 卡在最后一帧、连接失败不再自动清理)。单帧失败只记日志, 下一帧继续收。
+                try {
+                    serviceVpnState.value = state
+                    state.error?.let { lastError.value = it }
+                    updateHealthNotification(state)
+                    // F12-i 兜底: packetLoop 连续读失败已退出 (状态 Failed) → 完整清理资源;
+                    // disconnect(false) 保留 lastServerId 供重连。幂等, 与 connect catch 不冲突。
+                    if (state.status == DomainVpnState.VpnStatus.Failed && shouldCleanupOnFailure()) {
+                        disconnect(userInitiated = false)
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    reportObserverFailure("vpnState", e)
                 }
             }
         }
         scope.launch {
             vpnController.connectionStats.collect { stats ->
-                serviceConnectionStats.value = stats
+                try {
+                    serviceConnectionStats.value = stats
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    reportObserverFailure("connectionStats", e)
+                }
             }
         }
     }
@@ -737,13 +799,40 @@ class SshVpnService : VpnService() {
                 val now = System.currentTimeMillis()
                 // SSH 池失败重连带退避窗口: 服务器持续不可达时避免无限快速重连风暴
                 val backoffElapsed = now - lastPoolFailReconnectAt >= POOL_FAIL_RECONNECT_BACKOFF_MS
-                if (poolFailed && canReconnect && backoffElapsed) {
-                    lastPoolFailReconnectAt = now
-                    android.util.Log.w("SshVpnService", "SSH session pool failed, auto reconnecting")
-                    autoReconnect()
+                try {
+                    if (poolFailed && canReconnect && backoffElapsed) {
+                        lastPoolFailReconnectAt = now
+                        android.util.Log.w("SshVpnService", "SSH session pool failed, auto reconnecting")
+                        // 标记本次失败的收尾由重连负责 + 捕获配置: vpnState=Failed 的观察者
+                        // (与本观察者触发顺序不确定) 据此跳过 disconnect, 不拆刚重建的会话
+                        poolFailReconnectPending = true
+                        autoReconnect(currentServer)
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // 这里一抛, 以后 SSH 池再失败就没有任何东西去触发重连了
+                    reportObserverFailure("jschConnectionState", e)
                 }
             }
         }
+    }
+
+    /**
+     * 观察协程单帧失败的统一出口: 记 logcat + 应用内日志, **只吞不抛**。
+     * 抛出会取消整条 collector —— 状态镜像/池失败重连从此再也不触发, 且没有任何可见迹象。
+     * [CancellationException] 不走这里 (由调用方 rethrow, 否则连协程取消都会被吞)。
+     */
+    private fun reportObserverFailure(
+        source: String,
+        e: Exception,
+    ) {
+        android.util.Log.e("SshVpnService", "$source observer failed: ${e.message}", e)
+        VpnController.appLogThrottled(
+            "状态观察异常 · $source — ${e::class.simpleName}: ${e.message} (循环继续)",
+            level = LogLevel.WARNING,
+            throttleKey = "状态观察异常",
+        )
     }
 
     /**
@@ -845,61 +934,83 @@ class SshVpnService : VpnService() {
     }
 
     /**
-     * 网络切换后的自动重连: 重建 VPN 接口并恢复隧道连接。
+     * 自动重连 (网络切换去抖 / SSH 池失败 / 解锁): 断旧 + 重建是一个原子临界区,
+     * 与 connect/disconnect 共用 connectMutex 串行。调用发生在锁外、函数内部自己拿锁,
+     * 所以 catch 里只能调 disconnectInternal (锁内再拿锁自死锁)。
+     *
+     * @param config 检测时点捕获的会话配置 — 池失败场景下 vpnState=Failed 的观察者可能
+     *   先行 disconnect 把 currentServer 置空, 显式传入仍能完成重建。
      */
-    private suspend fun autoReconnect() {
-        val config = currentServer ?: return
-        if (isReconnecting) return
-        isReconnecting = true
-        android.util.Log.d("SshVpnService", "Network changed, auto reconnecting to ${config.name}")
-        serviceVpnState.value = DomainVpnState(status = DomainVpnState.VpnStatus.Connecting, server = config)
-
+    private suspend fun autoReconnect(config: ServerConfig? = null) {
+        if (!reconnecting.compareAndSet(false, true)) return // 已有重连在排队/进行, 复用它
         try {
-            // 1. 关闭旧隧道与接口
-            if (vpnController.isVpnRunning()) {
-                vpnController.disconnect()
-            }
-            try {
-                vpnInterface?.close()
-            } catch (_: Exception) {
-            }
-            vpnInterface = null
-            tunFd = null
-
-            // 2. 重建接口并重连
-            val dnsMode = settingsDataStore.dnsMode.first()
-            val allowedPackages =
-                if (dnsMode == 2) {
-                    whitelistDao.getEnabledPackageNames()
-                } else {
-                    emptyList()
+            connectMutex.withLock {
+                // 用户主动断开 (lastServerId 清零) → 不再重建; 失败/系统清理路径保留该值,
+                // 因此连接失败重试与开机续连不受影响
+                if ((settingsDataStore.lastServerId.first() ?: 0L) == 0L) {
+                    android.util.Log.d("SshVpnService", "Auto reconnect skipped: user disconnected")
+                    return@withLock
                 }
-            vpnController.reportConnectStage(ConnectStage.TUN)
-            val fd = establishVpnInterface(config, allowedPackages, dnsMode)
-            vpnController.setVpnInterface(fd)
-            vpnController.setProtectFunction { socket -> this.protect(socket) }
-            vpnController.setProtectTcpFunction { socket -> this.protect(socket) }
-            val result = vpnController.connect(config, config.password)
-            if (result.isFailure) {
-                throw result.exceptionOrNull() ?: Exception("Reconnect failed")
+                val cfg = config ?: currentServer ?: return@withLock
+                android.util.Log.d("SshVpnService", "Auto reconnecting to ${cfg.name}")
+                // 拆旧/建新窗口内探测打的是已经关掉的本地代理, 结果只会把 healthTracker
+                // 打成 PROXY 败; 隧道未就绪时 packetLoopActive=false 又会把 tunVerdict
+                // 记成连续失败窗口 → 降级状态被带进新会话。新会话 startHealthMonitor 重开。
+                // 失败分支走 disconnectInternal (本身会 stop), 幂等。
+                stopHealthMonitor()
+                serviceVpnState.value =
+                    DomainVpnState(status = DomainVpnState.VpnStatus.Connecting, server = cfg)
+
+                try {
+                    // 1. 关闭旧隧道与接口
+                    if (vpnController.isVpnRunning()) {
+                        vpnController.disconnect()
+                    }
+                    try {
+                        vpnInterface?.close()
+                    } catch (_: Exception) {
+                    }
+                    vpnInterface = null
+                    tunFd = null
+
+                    // 2. 重建接口并重连
+                    val dnsMode = settingsDataStore.dnsMode.first()
+                    val allowedPackages =
+                        if (dnsMode == 2) {
+                            whitelistDao.getEnabledPackageNames()
+                        } else {
+                            emptyList()
+                        }
+                    vpnController.reportConnectStage(ConnectStage.TUN)
+                    vpnController.setWhitelistPackages(allowedPackages, whitelistEnabled = dnsMode == 2)
+                    val fd = establishVpnInterface(cfg, allowedPackages, dnsMode)
+                    vpnController.setVpnInterface(fd)
+                    vpnController.setProtectFunction { socket -> this.protect(socket) }
+                    vpnController.setProtectTcpFunction { socket -> this.protect(socket) }
+                    val result = vpnController.connect(cfg, cfg.password)
+                    if (result.isFailure) {
+                        throw result.exceptionOrNull() ?: Exception("Reconnect failed")
+                    }
+                    serviceVpnState.value = DomainVpnState(status = DomainVpnState.VpnStatus.Connected, server = cfg)
+                    startHealthMonitor(cfg)
+                    updateNotification(cfg, StatusDisplay.build(serviceVpnState.value, this::getString))
+                    startWhitelistObserver()
+                    lastError.value = null
+                    android.util.Log.d("SshVpnService", "Auto reconnect succeeded to ${cfg.name}")
+                } catch (e: Exception) {
+                    lastError.value = e.message
+                    serviceVpnState.value =
+                        DomainVpnState(
+                            status = DomainVpnState.VpnStatus.Failed,
+                            error = e.message,
+                        )
+                    disconnectInternal(userInitiated = false)
+                    vpnController.reportHealth(verified = false, failedStep = mapConnectFailureToStep(e.message))
+                }
             }
-            serviceVpnState.value = DomainVpnState(status = DomainVpnState.VpnStatus.Connected, server = config)
-            startHealthMonitor(config)
-            updateNotification(config, "网络验证中")
-            startWhitelistObserver()
-            lastError.value = null
-            android.util.Log.d("SshVpnService", "Auto reconnect succeeded to ${config.name}")
-        } catch (e: Exception) {
-            lastError.value = e.message
-            serviceVpnState.value =
-                DomainVpnState(
-                    status = DomainVpnState.VpnStatus.Failed,
-                    error = e.message,
-                )
-            disconnect(userInitiated = false)
-            vpnController.reportHealth(verified = false, failedStep = mapConnectFailureToStep(e.message))
         } finally {
-            isReconnecting = false
+            reconnecting.set(false)
+            poolFailReconnectPending = false
         }
     }
 

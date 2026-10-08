@@ -14,6 +14,9 @@ import cn.srv0.sshinjector.domain.vpn.CidrRoute
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
 import cn.srv0.sshinjector.domain.vpn.GfwListMatcher
 import cn.srv0.sshinjector.domain.vpn.PacketProcessor
+import cn.srv0.sshinjector.domain.vpn.StageCounters
+import cn.srv0.sshinjector.domain.vpn.StageHealthEvaluator
+import cn.srv0.sshinjector.domain.vpn.dnsTransportFor
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelConfig
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
@@ -68,9 +71,15 @@ class VpnController
         @Volatile private var inputStream: FileInputStream? = null
 
         @Volatile private var outputStream: FileOutputStream? = null
-        private var packetLoopJob: Job? = null
+
+        // 健康线程在 stats/健康环里读它算 packetLoopActive, 不加 @Volatile 会读到陈旧 Job
+        // → 虚假 TUN FAIL (需连续 2 窗才降级, 影响小但不该有)
+        @Volatile private var packetLoopJob: Job? = null
         private var tunGeneration = 0L
         private val readBuffer = ByteBuffer.allocate(32768).order(ByteOrder.BIG_ENDIAN)
+
+        // 分阶段健康 (TUN/DNS/转发三段): 端到端探测探不到的盲区由它补
+        private val stageEvaluator = StageHealthEvaluator()
 
         // F12-i: TUN 读连续失败计数 (成功读取即清零), 防止死流 fd 的无退避忙循环
         @Volatile private var consecutiveReadFailures = 0
@@ -327,6 +336,9 @@ class VpnController
                 }
                 return false
             }
+
+            /** 假 IP 的字符串形式 (是假 IP 才返回, 否则 null); 供引用计数表做 key。 */
+            internal fun fakeIpOrNull(ip: InetAddress): String? = ip.hostAddress?.takeIf { isFakeIp(ip) }
         }
 
         /**
@@ -338,12 +350,15 @@ class VpnController
             password: String? = null,
         ): Result<Unit> {
             if (isRunning) {
-                addLog("VPN 已在运行中", cn.srv0.sshinjector.ui.viewmodel.LogLevel.WARNING)
+                addLog("VPN 已在运行中", LogLevel.WARNING)
                 return Result.failure(IllegalStateException("VPN already running"))
             }
 
             currentServer = server
             isRunning = true
+            // 新一轮连接: 分阶段计数与评估窗口清零, 避免上一会话的增量污染本轮归因
+            StageCounters.reset()
+            stageEvaluator.reset()
             // 新一轮连接: 清掉上一次的健康归因/出口 IP/流程阶段, 重新从"未验证"开始
             updateState {
                 it.copy(
@@ -376,30 +391,32 @@ class VpnController
                 packetProcessor.setEnableIPv6(server.enableIPv6)
                 dnsInterceptor.setEnableIPv6(server.enableIPv6)
                 val dnsModeValue = settingsDataStore.dnsMode.first()
-                this.transportMode =
-                    when (dnsModeValue) {
-                        0 -> DnsInterceptor.DnsTransport.REMOTE // 全部走隧道
-                        1 -> DnsInterceptor.DnsTransport.SYSTEM // 系统默认，完全透传
-                        2 -> DnsInterceptor.DnsTransport.WHITELIST // 白名单分流
-                        3 -> DnsInterceptor.DnsTransport.DOMAIN_SPLIT // 域名分流
-                        else -> DnsInterceptor.DnsTransport.REMOTE
-                    }
+                this.transportMode = dnsTransportFor(dnsModeValue, whitelistPackages)
                 dnsInterceptor.setTransportMode(this.transportMode)
+                if (dnsModeValue == 2 && whitelistPackages.isEmpty()) {
+                    addLog(
+                        "白名单为空: 全部流量不走隧道, DNS 按本地直连解析 (避免假 IP 无路由)",
+                        LogLevel.INFO,
+                    )
+                }
                 dnsInterceptor.setDomainListManager(domainListManager)
 
                 // 广告过滤: 连接时配置, 对所有 DNS 传输模式统一生效 (命中即回 0.0.0.0,
                 //   不解析 / 不进缓存 / 不消耗隧道或系统 DNS); 规则 = 内置清单 + 用户自定义域名
                 val adEnabled = settingsDataStore.adBlockEnabled.first()
+                // 必须先接线再设开关: DnsInterceptor.adBlocker 不注入就是死代码
+                // (isBlocked 恒 null 放行, 开关/规则全是摆设), 与本控制器持有同一 @Singleton 实例
+                dnsInterceptor.setAdBlocker(adBlocker)
                 dnsInterceptor.setEnabledAdBlock(adEnabled)
                 if (adEnabled) {
                     launch {
                         try {
                             adBlocker.setMatcher(loadAdBlockRules())
-                            addLog("广告过滤规则已加载", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
+                            addLog("广告过滤规则已加载", LogLevel.INFO)
                         } catch (e: Exception) {
                             addLog(
                                 "广告规则加载失败, 将仅使用可用清单: ${e.message}",
-                                cn.srv0.sshinjector.ui.viewmodel.LogLevel.WARNING,
+                                LogLevel.WARNING,
                             )
                         }
                     }
@@ -574,14 +591,7 @@ class VpnController
         suspend fun updateDnsMode() {
             if (!isRunning) return
             val dnsModeValue = settingsDataStore.dnsMode.first()
-            this.transportMode =
-                when (dnsModeValue) {
-                    0 -> DnsInterceptor.DnsTransport.REMOTE // 全部走隧道
-                    1 -> DnsInterceptor.DnsTransport.SYSTEM // 系统默认，完全透传
-                    2 -> DnsInterceptor.DnsTransport.WHITELIST // 白名单分流
-                    3 -> DnsInterceptor.DnsTransport.DOMAIN_SPLIT // 域名分流
-                    else -> DnsInterceptor.DnsTransport.REMOTE
-                }
+            this.transportMode = dnsTransportFor(dnsModeValue, whitelistPackages)
             dnsInterceptor.setTransportMode(this.transportMode)
             dnsInterceptor.setDomainListManager(domainListManager)
 
@@ -619,12 +629,19 @@ class VpnController
             excludedRoutes = baseRoutes + commonDohEndpoints + dnsExcludes
             addLog(
                 "DNS 模式已切换: $transportMode, 排除路由: ${excludedRoutes.size} 条",
-                cn.srv0.sshinjector.ui.viewmodel.LogLevel.INFO,
+                LogLevel.INFO,
             )
         }
 
         /**
          * 强制重置状态 (超时后调用)
+         *
+         * 必须与 [disconnect] 的清理段保持一致 —— 少了下面两项就会跨会话泄漏:
+         * ① `clearPendingResponses()` 不做, 未排空的 DNS 应答会在下一次 connect 重开的
+         *    dnsResponseDeliveryLoop 里被投给**新会话**的 TUN;
+         * ② `resetTcpState()` 不做, 旧连接表原样留到新会话 (新 SYN 虽会关旧重建,
+         *    但关闭包/黑洞统计会算在新会话头上)。
+         * 调用点: 断开卡在 Disconnecting 超 3s 后 MainViewModel 直接 stopService + forceReset。
          */
         fun forceReset() {
             // F12-j: 释放对 VpnService 的 lambda 引用
@@ -637,6 +654,11 @@ class VpnController
             }
             packetLoopJob?.cancel()
             packetLoopJob = null
+
+            // 投递协程已随 cancelChildren 停掉, 此刻排空不会与新会话竞争
+            dnsInterceptor.clearPendingResponses()
+            packetProcessor.resetTcpState()
+
             vpnInterface = null
             inputStream = null
             outputStream = null
