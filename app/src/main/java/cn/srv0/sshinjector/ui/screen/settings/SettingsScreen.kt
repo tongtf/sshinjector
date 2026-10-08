@@ -18,11 +18,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -32,13 +34,16 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -49,6 +54,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.ui.locale.LocaleManager
 import cn.srv0.sshinjector.ui.viewmodel.dnsModeLabel
+import java.net.URI
+import java.net.URISyntaxException
 
 @OptIn(ExperimentalMaterial3Api::class)
 @SuppressLint("LocalContextGetResourceValueCall")
@@ -75,6 +82,20 @@ fun SettingsScreen(
     var showBiometricDialog by remember { mutableStateOf(false) }
     var showLangDialog by remember { mutableStateOf(false) }
     var showLicenseDialog by remember { mutableStateOf(false) }
+    // probe URL 草稿: 只在失焦/初始时与存储同步 — 旧实现每敲一键写一次 DataStore 且立即
+    // 生效, 半截 URL 会让 ConnectivityProber 误判 invalid endpoint → 2 连败降级显示"连接异常"
+    var probeDraft by rememberSaveable { mutableStateOf(probeUrl ?: "") }
+    var probeFocused by remember { mutableStateOf(false) }
+    var probeError by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(probeUrl) {
+        if (!probeFocused) {
+            val stored = probeUrl ?: ""
+            if (probeDraft != stored) {
+                probeDraft = stored
+                probeError = false
+            }
+        }
+    }
     val context = LocalContext.current
     val fragmentActivity = context as? androidx.fragment.app.FragmentActivity
     val biometricAuth =
@@ -207,16 +228,41 @@ fun SettingsScreen(
                 )
 
                 OutlinedTextField(
-                    value = probeUrl ?: "",
-                    onValueChange = { viewModel.setProbeUrl(it) },
+                    value = probeDraft,
+                    onValueChange = {
+                        probeDraft = it
+                        probeError = false
+                    },
                     label = { Text(stringResource(R.string.settings_probe_url)) },
                     placeholder = { Text(stringResource(R.string.settings_probe_url_hint)) },
                     singleLine = true,
+                    isError = probeError,
+                    supportingText = {
+                        if (probeError) Text(stringResource(R.string.settings_probe_url_invalid))
+                    },
+                    trailingIcon = {
+                        if (probeDraft.trim() != (probeUrl ?: "")) {
+                            IconButton(
+                                onClick = {
+                                    val cleaned = probeDraft.trim()
+                                    if (cleaned.isEmpty() || isValidProbeUrl(cleaned)) {
+                                        viewModel.setProbeUrl(cleaned)
+                                        probeError = false
+                                    } else {
+                                        probeError = true
+                                    }
+                                },
+                            ) {
+                                Icon(Icons.Filled.Save, contentDescription = stringResource(R.string.save))
+                            }
+                        }
+                    },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                     modifier =
                         Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                            .padding(horizontal = 16.dp, vertical = 4.dp)
+                            .onFocusChanged { probeFocused = it.hasFocus },
                 )
 
                 SettingsRow(
@@ -573,3 +619,12 @@ private fun TextButton(
 ) {
     androidx.compose.material3.TextButton(onClick = onClick) { content() }
 }
+
+/** 探测地址校验: http/https + 可解析 host (保存时一次性校验, 不在按键路径上)。 */
+private fun isValidProbeUrl(raw: String): Boolean =
+    try {
+        val uri = URI(raw)
+        (uri.scheme == "http" || uri.scheme == "https") && !uri.host.isNullOrBlank()
+    } catch (_: URISyntaxException) {
+        false
+    }

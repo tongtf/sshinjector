@@ -141,10 +141,14 @@ class ConnectivityProber(
         output.write(request.toByteArray(Charsets.US_ASCII))
         output.flush()
         val statusLine = readLine(input)
-        return if (statusLine.startsWith("HTTP/1.")) {
-            Result.Ok
-        } else {
-            Result.Failed(HealthStep.REMOTE, "no http status line: ${statusLine.take(32)}")
+        return when {
+            // 0 字节关闭: 探测端点 (miui 204 / ipify) 是**必然**回状态行的健康服务,
+            // 一个字节都没回来 = 本栈到远端之间的路径断了。归 TUNNEL 而非 REMOTE ——
+            // 归 REMOTE 会把排查方向带向"远端不可达", 而真正该看的是隧道侧的
+            // 零回程 / 回程读取异常 / 隧道无回程 日志 (SSH 会话健康但单条通道死也长这样)。
+            statusLine == null -> Result.Failed(HealthStep.TUNNEL, "tunnel closed with 0B before status line")
+            statusLine.startsWith("HTTP/1.") -> Result.Ok
+            else -> Result.Failed(HealthStep.REMOTE, "no http status line: ${statusLine.take(32)}")
         }
     }
 
@@ -189,13 +193,13 @@ class ConnectivityProber(
                 "User-Agent: sshinjector-exit-ip\r\n\r\n"
         output.write(request.toByteArray(Charsets.US_ASCII))
         output.flush()
-        if (!readLine(input).startsWith("HTTP/1.")) return null
+        if (readLine(input)?.startsWith("HTTP/1.") != true) return null
         var contentLength = -1
         var headerLines = 0
         while (headerLines < MAX_HEADER_LINES) {
             val line = readLine(input)
             headerLines++
-            if (line.isEmpty()) break
+            if (line == null || line.isEmpty()) break
             if (line.startsWith("Content-Length:", ignoreCase = true)) {
                 contentLength = line.substringAfter(':').trim().toIntOrNull() ?: -1
             }
@@ -264,12 +268,21 @@ class ConnectivityProber(
         return buf
     }
 
-    /** 读到 \n 为止 (上限 512 字节), 去掉尾部 \r\n。 */
-    private fun readLine(input: InputStream): String {
+    /**
+     * 读到 \n 为止 (上限 512 字节), 去掉尾部 \r\n。
+     *
+     * @return null = **首字节即 EOF** (对端一个字节都没回)。不能折叠成空串: 空串还包含
+     * "对端先回了个空行"这一种, 而 0 字节关闭恰恰是隧道断 / 远端未应答的现场 —— 折叠后
+     * reason 恒为 `no http status line: `, 排障时四种成因分不出来 (见 httpExchange)。
+     */
+    private fun readLine(input: InputStream): String? {
         val sb = StringBuilder()
+        var sawByte = false
         while (sb.length < MAX_STATUS_LINE) {
             val b = input.read()
-            if (b < 0 || b == '\n'.code) break
+            if (b < 0) return if (sawByte) sb.toString() else null
+            sawByte = true
+            if (b == '\n'.code) break
             if (b != '\r'.code) sb.append(b.toChar())
         }
         return sb.toString()
@@ -311,8 +324,8 @@ class ConnectivityProber(
     }
 
     companion object {
-        /** 默认探测端点: 国内可达的 204 端点; 收到任意 HTTP 状态行都算可用 (可配置覆盖)。 */
-        const val DEFAULT_ENDPOINT = "http://connect.rom.miui.com/generate_204"
+        /** 默认探测端点: 香港/海外服务器出口可达; 收到任意 HTTP 状态行都算可用 (可配置覆盖)。 */
+        const val DEFAULT_ENDPOINT = "http://www.gstatic.com/generate_204"
 
         /** 默认出口 IP 回显端点 (JSON body {"ip":"..."}; 失败仅显示占位符, 不影响健康状态)。 */
         const val DEFAULT_EXIT_IP_ENDPOINT = "https://api.ipify.org/?format=json"

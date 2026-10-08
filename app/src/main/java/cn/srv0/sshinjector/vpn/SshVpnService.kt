@@ -144,6 +144,9 @@ class SshVpnService : VpnService() {
     private var healthJob: Job? = null
     private val healthTracker = HealthTracker()
 
+    /** 上次上报的故障步骤; 变化时写入应用内日志 (每 15s 评估, 不刷屏)。 */
+    private var lastReportedStep: HealthStep? = null
+
     /**
      * 连接刚建立 → 未验证 (UI 显示"网络验证中"): 立即探测 + 15s 周期循环。
      * 探测失败只降级显示 (spec D3), 自动重连仍走解锁/网络切换/keepAlive 既有钩子。
@@ -151,6 +154,7 @@ class SshVpnService : VpnService() {
     private fun startHealthMonitor(config: ServerConfig) {
         stopHealthMonitor()
         healthTracker.reset()
+        lastReportedStep = null
         vpnController.reportHealth(verified = false, failedStep = null)
         healthJob =
             scope.launch {
@@ -174,6 +178,8 @@ class SshVpnService : VpnService() {
     }
 
     private suspend fun runHealthProbe(config: ServerConfig) {
+        // 分阶段健康 (TUN/DNS/转发): 探测走 loopback + 域名型 CONNECT, 探不到 TUN 路径, 二者互补
+        val stageStep = vpnController.evaluateStageHealth()
         try {
             val endpoint = settingsDataStore.probeUrl.first() ?: ConnectivityProber.DEFAULT_ENDPOINT
             val prober =
@@ -201,15 +207,50 @@ class SshVpnService : VpnService() {
                     val step = if (!sshOk) HealthStep.SSH else result.step
                     healthTracker.onFailure(step, immediate = !sshOk)
                     android.util.Log.w("SshVpnService", "health probe failed: step=$step reason=${result.reason}")
+                    VpnController.appLogThrottled(
+                        "网络探测失败 · ${getString(step.labelRes)} — reason: ${result.reason}",
+                        level = LogLevel.WARNING,
+                        throttleKey = "网络探测失败",
+                    )
                 }
             }
-            vpnController.reportHealth(healthTracker.verified, healthTracker.failedStep)
+            reportMergedHealth(stageStep)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            // 探测自身异常 (如读配置失败) 不影响连接, 只记日志
+            // 探测自身异常 (如读配置失败) 不影响连接, 只记日志; 分阶段归因仍上报
             android.util.Log.e("SshVpnService", "health probe error: ${e.message}")
+            VpnController.appLogThrottled(
+                "健康探测自身异常 — ${e.message}",
+                level = LogLevel.WARNING,
+                throttleKey = "健康探测自身异常",
+            )
+            if (stageStep != null) reportMergedHealth(stageStep)
         }
+    }
+
+    /**
+     * 合并上报: 分阶段故障优先于探测归因 (两者都无则健康)。
+     * verified 只有在探测通过且分阶段无故障时才为 true — 状态卡以此区分
+     * 「已连接 / 网络验证中 / 连接异常 · <步骤>」。步骤变化时同步写应用内日志
+     * (logcat 之外用户唯一可见的诊断面), 便于无 adb 现场归因。
+     */
+    private fun reportMergedHealth(stageStep: HealthStep?) {
+        val failedStep = stageStep ?: healthTracker.failedStep
+        val verified = healthTracker.verified && stageStep == null
+        if (failedStep != lastReportedStep) {
+            if (failedStep == null) {
+                vpnController.addLog("网络健康已恢复", LogLevel.SUCCESS)
+            } else {
+                val source = if (stageStep != null) "分阶段" else "端到端探测"
+                vpnController.addLog(
+                    "连接异常 · ${getString(failedStep.labelRes)} (来源: $source)",
+                    LogLevel.WARNING,
+                )
+            }
+            lastReportedStep = failedStep
+        }
+        vpnController.reportHealth(verified, failedStep)
     }
 
     /** 连接期失败 → 步骤归因 (spec D4): 按异常消息映射, 与运行期探测共用 HealthStep。 */

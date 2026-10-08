@@ -1196,6 +1196,18 @@ class VpnController
             updateState { it.copy(verified = verified, failedStep = failedStep) }
         }
 
+        /**
+         * 分阶段健康评估 (与端到端探测同节奏, SshVpnService 驱动): 补探测器探不到的
+         * TUN 写回 / DNS 回程 / 本地 SOCKS 转发三段盲区。窗口增量在 [StageHealthEvaluator] 内。
+         */
+        fun evaluateStageHealth(): HealthStep? =
+            stageEvaluator.evaluate(
+                StageCounters.snapshot(
+                    packetLoopActive = packetLoopJob?.isActive == true,
+                    dnsQueries = dnsInterceptor.queriesIntercepted.get(),
+                ),
+            )
+
         /** 上报隧道出口 IP (探测成功后经 IP 回显取回); UI 断开时自行降级为占位符。 */
         fun reportExitIp(exitIp: String?) {
             updateState { it.copy(exitIp = exitIp) }

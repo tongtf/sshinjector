@@ -74,6 +74,7 @@
     <string name="settings_keepalive">Keepalive: %d s</string>
     <string name="settings_probe_url">Connectivity probe URL</string>
     <string name="settings_probe_url_hint">http://connect.rom.miui.com/generate_204</string>
+    <string name="settings_probe_url_invalid">Enter a full http(s):// URL</string>
     <string name="settings_ipv6">IPv6 Support</string>
     <string name="settings_ipv6_desc">Enable IPv6 dual-stack</string>
     <string name="settings_connection_mode">Connection Mode</string>

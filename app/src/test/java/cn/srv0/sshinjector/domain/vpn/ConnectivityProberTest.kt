@@ -125,12 +125,18 @@ class ConnectivityProberTest {
         assertTrue((result as ConnectivityProber.Result.Failed).reason.contains("no http status line"))
     }
 
+    /**
+     * 0 字节关闭必须归 TUNNEL: 探测端点是必然回状态行的健康服务, 一个字节都没回来
+     * 说明断在本栈到远端之间 (SSH 会话健康但单条通道死也长这样)。
+     * 归 REMOTE 曾经把排查方向带向"远端不可达", 而该看的是隧道侧零回程/回程读取异常日志。
+     * 非空但不是 HTTP 状态行的垃圾响应仍然是远端问题 (见上面那条)。
+     */
     @Test
-    fun `tunnel eof at http phase attributed to REMOTE`() {
+    fun `zero byte eof at http phase attributed to TUNNEL not REMOTE`() {
         fakeTunnel.response = ByteArray(0)
         val result = newProber().probe()
-        assertStep(HealthStep.REMOTE, result)
-        assertTrue((result as ConnectivityProber.Result.Failed).reason.contains("no http status line"))
+        assertStep(HealthStep.TUNNEL, result)
+        assertTrue((result as ConnectivityProber.Result.Failed).reason.contains("0B"))
     }
 
     @Test
