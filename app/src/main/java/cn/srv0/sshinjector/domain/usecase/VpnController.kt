@@ -98,6 +98,13 @@ class VpnController
             java.util.concurrent.atomic
                 .AtomicLong(0)
 
+        // 数据面快照的上一窗口基线 (用于算速率)
+        private var lastSnapshotUp = 0L
+        private var lastSnapshotDown = 0L
+
+        /** 一次 TUN 读取里没能解析成包的残留字节 (批量读取路径的监控点)。 */
+        private val trailingBytesDropped = AtomicLong(0)
+
         // 用于 SYSTEM 模式 DNS 绕过的 socket 保护函数
         private var protectDatagramChannel: ((java.net.DatagramSocket) -> Boolean)? = null
 
@@ -949,9 +956,20 @@ class VpnController
                         dstPort = response.dstPort,
                         payload = response.data,
                     )
-                writeToTun(packet)
+                // 只有真写进 TUN 才算一次"DNS 应答已投递": writeToTun 吞异常返回 false 时
+                // 无脑计成功会让分阶段健康把"应答根本没出去"当成健康窗口
+                if (writeToTun(packet)) {
+                    StageCounters.onDnsDelivered()
+                }
             } catch (e: Exception) {
-                android.util.Log.e("VpnController", "writeDnsResponse failed: ${e.message}")
+                android.util.Log.e("VpnController", "writeDnsResponse failed: ${e.message}", e)
+                // src/dst 不进文案 (每条 DNS 应答都不同 → 节流 key 唯一, TUN 持续故障时
+                // 会刷穿 replay=500 缓存把真正要看的日志挤掉); 详情只进 logcat
+                appLogThrottled(
+                    "DNS 响应写入 TUN 失败 · ${e::class.simpleName}: ${e.message}",
+                    level = LogLevel.WARNING,
+                    throttleKey = "DNS 响应写入 TUN 失败",
+                )
             }
         }
 
@@ -962,24 +980,59 @@ class VpnController
          */
         private suspend fun dnsResponseDeliveryLoop() {
             while (isRunning) {
-                val dnsResponse = dnsInterceptor.pollResponse()
-                if (dnsResponse != null) {
-                    writeDnsResponse(dnsResponse)
-                } else {
-                    delay(10)
+                try {
+                    val dnsResponse = dnsInterceptor.pollResponse()
+                    if (dnsResponse != null) {
+                        writeDnsResponse(dnsResponse)
+                    } else {
+                        delay(10)
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // 协程一抛即死 = 之后所有 DNS 应答都投不出去 (解析全挂却无人知), 必须吞住继续
+                    appLogThrottled(
+                        "DNS 响应投递协程异常 — ${e.message} (循环继续)",
+                        level = LogLevel.ERROR,
+                        throttleKey = "DNS 响应投递协程异常",
+                    )
+                    delay(100)
                 }
             }
         }
 
+        /**
+         * 写 TUN。**只有真正写成功才累计下行字节/包数** —— 早先计数在 try-catch 之外,
+         * 写失败 (流为 null / IOException) 也会被算进 "下行 7MB", 数据面快照据此报出根本
+         * 没送到应用的流量, 把"隧道在搬数据"和"隧道全死"混成同一副样子。
+         *
+         * @return 是否已成功写入 TUN (调用方据此决定要不要计一次分阶段成功信号)
+         */
         @Synchronized
-        fun writeToTun(data: ByteArray) {
-            try {
-                outputStream?.write(data)
-            } catch (e: Exception) {
-                android.util.Log.e("VpnController", "writeToTun FAILED: ${e.message}")
+        fun writeToTun(data: ByteArray): Boolean {
+            val stream = outputStream
+            if (stream == null) {
+                // 必须计失败: 分阶段健康的 TUN 段是按 success/error 比例判的,
+                // 流为 null 的写在这里静默返回, 等于把"没写进去"全判成中性 → TUN 段恒绿。
+                StageCounters.onTunWrite(success = false)
+                return false
             }
-            bytesSentCounter.addAndGet(data.size.toLong())
-            packetsSentCounter.incrementAndGet()
+            return try {
+                stream.write(data)
+                bytesSentCounter.addAndGet(data.size.toLong())
+                packetsSentCounter.incrementAndGet()
+                StageCounters.onTunWrite(success = true)
+                true
+            } catch (e: Exception) {
+                StageCounters.onTunWrite(success = false)
+                android.util.Log.e("VpnController", "writeToTun FAILED: ${e.message}")
+                appLogThrottled(
+                    "TUN 写入失败 · ${e::class.simpleName}: ${e.message}",
+                    level = LogLevel.WARNING,
+                    throttleKey = "TUN 写入失败",
+                )
+                false
+            }
         }
 
         /**
@@ -987,15 +1040,65 @@ class VpnController
          * 避免每包触发 MutableStateFlow 发射与 collector 唤醒 (SshVpnService + MainViewModel)。
          */
         private suspend fun statsFlushLoop() {
+            // 置为当前时间: 否则首帧就满足 >=60s, 连接后 ~100ms 打一条
+            // "数据面快照 … 速率待下一窗口" 的空基线噪声
+            var lastSnapshotAt = System.currentTimeMillis()
+            // 基线同时取当前值: 计数器是**跨会话累计**的, 不重置会让首窗口速率
+            // 把上个会话已传的字节也摊进来 (首次启动时为 0, 无影响)
+            lastSnapshotUp = bytesReceivedCounter.get()
+            lastSnapshotDown = bytesSentCounter.get()
             while (isRunning) {
                 delay(STATS_FLUSH_INTERVAL_MS)
-                connectionStats.update {
-                    it.copy(
-                        bytesSent = bytesSentCounter.get(),
-                        bytesReceived = bytesReceivedCounter.get(),
-                        packetsSent = packetsSentCounter.get(),
-                        packetsReceived = packetsReceivedCounter.get(),
-                        lastUpdate = java.util.Date(),
+                // 整段必须包 try: 任一快照字段抛异常都会让本协程退出, 流量统计从此冻结在
+                // 最后一帧、60s 数据面快照永久消失 —— 而这是无 adb 现场唯一的观测面。
+                // delay 留在 try 之外: 取消时必须直接抛出, 不能被下面的 catch 吞掉。
+                try {
+                    connectionStats.update {
+                        it.copy(
+                            bytesSent = bytesSentCounter.get(),
+                            bytesReceived = bytesReceivedCounter.get(),
+                            packetsSent = packetsSentCounter.get(),
+                            packetsReceived = packetsReceivedCounter.get(),
+                            lastUpdate = java.util.Date(),
+                        )
+                    }
+                    // 每 60s 一条数据面快照 (应用内日志是唯一可见面, 无 adb):
+                    // 只看累计总数无法判断"此刻隧道还在不在搬数据", 增量+速率才能区分
+                    // 「连接空转」与「隧道全死」。QUIC 丢弃计数由 UdpRelay 自行周期上报。
+                    val now = System.currentTimeMillis()
+                    if (now - lastSnapshotAt >= DATA_SNAPSHOT_INTERVAL_MS) {
+                        val prevAt = lastSnapshotAt
+                        lastSnapshotAt = now
+                        val windowSec = if (prevAt == 0L) 0 else (now - prevAt) / 1000
+                        val up = bytesReceivedCounter.get()
+                        val down = bytesSentCounter.get()
+                        val rateText =
+                            if (windowSec > 0) {
+                                val upRate = (up - lastSnapshotUp) / windowSec
+                                val downRate = (down - lastSnapshotDown) / windowSec
+                                "↑$upRate B/s ↓$downRate B/s"
+                            } else {
+                                "速率待下一窗口"
+                            }
+                        lastSnapshotUp = up
+                        lastSnapshotDown = down
+                        val tunnelStats = tunnelManager.getActiveOrFallback().tunnelDiagnostics()
+                        appLog(
+                            "数据面快照 · 上行 $up B / 下行 $down B · 包 ↑${packetsReceivedCounter.get()} " +
+                                "↓${packetsSentCounter.get()} · $rateText · " +
+                                "TUN 残留未解析 ${trailingBytesDropped.get()}B · " +
+                                "${packetProcessor.tcpDiagnostics()} · " +
+                                "${packetProcessor.udpDiagnostics()} · $tunnelStats",
+                        )
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    android.util.Log.e("VpnController", "statsFlushLoop failed: ${e.message}", e)
+                    appLogThrottled(
+                        "统计发布异常 · ${e::class.simpleName}: ${e.message} — 循环继续",
+                        level = LogLevel.WARNING,
+                        throttleKey = "统计发布异常",
                     )
                 }
             }

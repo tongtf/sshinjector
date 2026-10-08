@@ -9,6 +9,7 @@ class JschTunnelChannel(
     private val channel: ChannelDirectTCPIP,
     private val cachedInput: InputStream,
     private val cachedOutput: OutputStream,
+    override val sessionId: String = "",
     private val onClose: (() -> Unit)? = null,
 ) : TunnelChannel {
     override fun connect(timeoutMs: Int): Boolean {

@@ -1,6 +1,8 @@
 package cn.srv0.sshinjector.domain.vpn
 
 import android.util.Log
+import cn.srv0.sshinjector.domain.usecase.VpnController
+import cn.srv0.sshinjector.ui.viewmodel.LogLevel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -26,8 +28,20 @@ import javax.inject.Singleton
 private val IS_DEBUG = android.util.Log.isLoggable("Socks5Proxy", android.util.Log.DEBUG)
 private const val TIMEOUT_CHECK_INTERVAL_MS = 5000L
 
-// L4: 2MB/连接出向队列 (64×32KB) — BDP 足够, OOM 面比 256×32KB 缩 4 倍
-private const val SSH_SEND_QUEUE_CAPACITY = 64
+/** 回程写入 TUN 超过此时长就告警: 它会把 JSch 读线程拖住 (管道 32KB→1MB 后仍是会话级风险)。 */
+private const val SLOW_TUN_WRITE_WARN_MS = 300L
+
+/** 已写 SSH 但读回 0B 持续这么久 → 打「隧道无回程」, 每条连接只打一次。 */
+private const val ZERO_RETURN_WARN_MS = 5000L
+
+private val FAKE_TUNNEL_HOST_PREFIXES = listOf("198.18.", "198.19.", "fd00:")
+
+/** 是否 DnsInterceptor 分配的假 IP 主机 (198.18.0.0/15 或 fd00::/8) — 必须先映射回域名才能连接。 */
+private fun isFakeTunnelHost(host: String): Boolean = FAKE_TUNNEL_HOST_PREFIXES.any { host.startsWith(it) }
+
+// L4: 出向队列 64×32KB=2MB/连接。**实测过小**: 下行卡住时 SSH 写协程随之阻塞, 队列一满就
+// 只能"丢段靠客户端重传", 表现为上行重传风暴 (实测 1 分钟 16MB 上行 / 0.4MB 下行)。128 段留足突发吸收。
+private const val SSH_SEND_QUEUE_CAPACITY = 128
 private typealias TunCallback = (ByteArray, Int, Int) -> Unit
 
 /**
@@ -49,6 +63,17 @@ class Socks5ProxyServer
         private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         private val connections = ConcurrentHashMap<Int, Socks5Connection>()
         private val connectionIdCounter = AtomicLong(0)
+
+        /**
+         * 隧道数据面诊断快照 (周期日志): 上行/下行累计字节对比可立即判断卡在哪一侧,
+         * 队列峰值贴近容量 = 持续背压 (丢段重传的直接原因)。
+         */
+        fun diagnostics(): String {
+            val list = connections.values
+            return "代理 活跃 ${list.size} 连接 · 上行累计 ${list.sumOf { it.toTunnelTotal.get() }}B · " +
+                "下行累计 ${list.sumOf { it.fromTunnelTotal.get() }}B · " +
+                "背压触发 ${list.sumOf { it.backpressureCount.get() }} 次"
+        }
 
         /** RFC 1929 期望凭据；由插件在 start() 前设置。null = 拒绝一切认证（fail-closed，不降级无认证）。 */
         @Volatile private var expectedAuth: Pair<String, String>? = null
@@ -108,6 +133,10 @@ class Socks5ProxyServer
                 Result.success(actualPort)
             } catch (e: IOException) {
                 serverState.value = ServerState(ServerState.Status.Error, error = e.message)
+                VpnController.appLog(
+                    "本地代理启动失败 · bind $bindAddress:$port — ${e.message} (端口被占用?)",
+                    level = LogLevel.ERROR,
+                )
                 stop()
                 Result.failure(e)
             }
@@ -155,10 +184,15 @@ class Socks5ProxyServer
 
                             for (key in keysCopy) {
                                 if (key.isValid) {
-                                    when {
-                                        key.isAcceptable -> handleAccept(key)
-                                        key.isReadable -> handleRead(key)
-                                        key.isWritable -> handleWrite(key)
+                                    try {
+                                        when {
+                                            key.isAcceptable -> handleAccept(key)
+                                            key.isReadable -> handleRead(key)
+                                            key.isWritable -> handleWrite(key)
+                                        }
+                                    } catch (e: java.nio.channels.CancelledKeyException) {
+                                        // 连接关闭与选中键处理的正常竞态 (key 在 select 后、处理前被 cancel)
+                                        android.util.Log.d("Socks5Proxy", "cancelled key (benign)", e)
                                     }
                                 }
                             }
@@ -167,11 +201,21 @@ class Socks5ProxyServer
                 } catch (e: IOException) {
                     if (selector?.isOpen == true) {
                         android.util.Log.w("Socks5Proxy", "eventLoop IO error", e)
+                        VpnController.appLogThrottled(
+                            "本地代理事件循环 IO 错误 — ${e.message}",
+                            throttleKey = "本地代理事件循环 IO 错误",
+                        )
                     } else {
                         stopped = true
                     }
                 } catch (e: Exception) {
                     android.util.Log.e("Socks5Proxy", "eventLoop unexpected error", e)
+                    // 单次迭代异常 (非 IO): 循环继续; 带异常类名 — message 可能为 null
+                    VpnController.appLogThrottled(
+                        "本地代理事件循环单次异常 — $e (循环继续)",
+                        level = LogLevel.WARNING,
+                        throttleKey = "本地代理事件循环单次异常",
+                    )
                 }
             }
         }
@@ -194,6 +238,21 @@ class Socks5ProxyServer
         }
 
         fun getTunCallback(connectionId: Int): TunCallback? = pendingTunCallbacks.remove(connectionId)
+
+        // 远端结束通知: connectionId → 回调, 形参 = 是否 clean EOF (决定 TcpStateMachine 发
+        // FIN 还是 RST)。与 pendingTunCallbacks 同键 (tunCallbackKey = clientPort)。
+        private val pendingTargetEofCallbacks = ConcurrentHashMap<Int, (Boolean) -> Unit>()
+
+        fun registerTargetEofCallback(
+            connectionId: Int,
+            callback: (Boolean) -> Unit,
+        ) {
+            pendingTargetEofCallbacks[connectionId] = callback
+        }
+
+        fun removeTargetEofCallback(connectionId: Int) {
+            pendingTargetEofCallbacks.remove(connectionId)
+        }
 
         private fun handleAccept(key: SelectionKey) {
             val serverChannel = key.channel() as ServerSocketChannel
@@ -221,16 +280,18 @@ class Socks5ProxyServer
                     onClosed = {
                         connections.remove(connectionId.toInt())
                         removeTunCallback(clientPort)
+                        removeTargetEofCallback(clientPort)
                         activeConnections.value = connections.size
                     },
                     onDataFromTarget = null,
-                    ipToDomainLookup = { dnsInterceptor.ipToDomain[it] },
+                    ipToDomainLookup = { dnsInterceptor.lookupDomain(it) },
                     expectedAuth = expectedAuth,
                 )
 
             // 延迟查找回调: relayFromTarget 首次使用前从 pendingTunCallbacks 获取
             connection.tunCallbackKey = clientPort
             connection.pendingTunCallbacksRef = pendingTunCallbacks
+            connection.pendingTargetEofCallbacksRef = pendingTargetEofCallbacks
 
             connections[connectionId.toInt()] = connection
             activeConnections.value = connections.size
@@ -299,9 +360,50 @@ private class Socks5Connection(
     private var remoteHost: String? = null
     private var remotePort: Int = 0
     private val pendingWrites = java.util.concurrent.ConcurrentLinkedDeque<ByteBuffer>()
+
+    // 直写 channel 的互斥: eventLoop handleWrite 与 sshIoDispatcher 的 sendReplyAndClose
+    // (connectToTarget 失败路径) 并发直写同一 SocketChannel 时串行化, 避免字节交错
+    private val writeLock = Any()
     internal var selectionKey: SelectionKey? = null
     internal var tunCallbackKey: Int = 0
     internal var pendingTunCallbacksRef: ConcurrentHashMap<Int, (ByteArray, Int, Int) -> Unit>? = null
+
+    /** 远端 clean EOF 回调 (同 tunCallbackKey 键), 由 handleAccept 注入; 见 companion 的注册函数。 */
+    internal var pendingTargetEofCallbacksRef: ConcurrentHashMap<Int, (Boolean) -> Unit>? = null
+
+    // 连接级流量计数: 故障日志里必须能回答"这个 conn 是谁、搬了多少字节" ——
+    // 早期只有 conn=NN 无法定位目标与数据量 (排障时反复猜测的唯一原因)。
+    private val bytesToTunnel = AtomicLong()
+    private val bytesFromTunnel = AtomicLong()
+    private val openedAt = System.currentTimeMillis()
+
+    /**
+     * 真正传给 `createDirectChannel` 的主机 (假 IP 已反查成域名)。
+     * 故障日志一律用它而非 [remoteHost]: 后者对本栈来说几乎总是 198.18.x.x,
+     * 只打假 IP 等于没说哪个域名在失败。
+     */
+    @Volatile
+    private var resolvedRemoteHost: String? = null
+
+    /** 已写 SSH 的时刻 (0 = 还没写过); 「隧道无回程」看门狗的起算点。 */
+    @Volatile
+    private var firstSshWriteAt = 0L
+
+    /** 看门狗每条连接最多告警一次, 避免 5s 一刷。 */
+    @Volatile
+    private var zeroReturnWarned = false
+
+    /** SSH 写协程累计写入字节 (客户端 → 隧道)。与 fromTunnelTotal 对比可判断"上行堵"还是"下行堵"。 */
+    internal val toTunnelTotal = AtomicLong()
+
+    /** relay 从隧道累计读回字节 (隧道 → 客户端)。 */
+    internal val fromTunnelTotal = AtomicLong()
+
+    /**
+     * 背压触发次数 (出向 Channel 满 + 单槽挂起): 持续增长 = 写 SSH 的速度跟不上客户端上行,
+     * 本地读已被暂停。数据未丢 (单槽 + Channel 承接), 但它是上行被卡的唯一可见证据。
+     */
+    internal val backpressureCount = AtomicLong()
 
     // 出向(本地 SOCKS → SSH)有界 Channel: eventLoop trySend 入队, 写协程挂起接收。
     // 满时挂到连接级单槽 pendingToSshBlock(不丢), 暂停 OP_READ 背压; 写协程腾出空间后回填。
@@ -392,6 +494,15 @@ private class Socks5Connection(
             }
         } catch (e: Exception) {
             android.util.Log.e("Socks5Proxy", "[conn=$id] handleRead exception: ${e.message}", e)
+            val up = bytesToTunnel.get()
+            val down = bytesFromTunnel.get()
+            val ageSec = (System.currentTimeMillis() - openedAt) / 1000
+            VpnController.appLogThrottled(
+                "本地代理读取异常 · conn=$id → ${remoteHost ?: "-"}:$remotePort — ${e.message} " +
+                    "(上行 ${up}B / 下行 ${down}B / ${ageSec}s)",
+                level = LogLevel.DEBUG,
+                throttleKey = "本地代理读取异常",
+            )
             close()
         }
     }
@@ -401,8 +512,9 @@ private class Socks5Connection(
         while (buf != null) {
             if (buf.hasRemaining()) {
                 try {
-                    val written = channel.write(buf)
+                    val written = synchronized(writeLock) { channel.write(buf) }
                     onDataSent(written.toLong())
+                    bytesFromTunnel.addAndGet(written.toLong())
                     lastActivity = System.currentTimeMillis()
                     if (buf.hasRemaining()) {
                         // Buffer partially written, re-add to front (keeps order)
@@ -607,8 +719,11 @@ private class Socks5Connection(
 
         if (factory == null || host == null) {
             android.util.Log.e("Socks5Proxy", "connectToTarget failed: factory=$factory host=$host")
-            sendErrorReply(0x05)
-            close()
+            VpnController.appLog(
+                "本地代理配置错误 · 无 SSH 通道工厂 (host=$host)",
+                level = LogLevel.WARNING,
+            )
+            sendErrorReplyAndClose(0x05)
             return
         }
 
@@ -616,20 +731,39 @@ private class Socks5Connection(
         // 回执到 eventLoop 线程, 冻结整个 SOCKS5 代理 (128+ 并发时可能触发)
         if (sshIoDispatcher.isSaturated()) {
             android.util.Log.w("Socks5Proxy", "connectToTarget rejected: ssh-io pool saturated ($host:$port)")
-            sendErrorReply(0x05)
-            close()
+            VpnController.appLogThrottled(
+                "连接被拒 · SSH IO 线程池已饱和 ($host:$port)",
+                level = LogLevel.WARNING,
+                throttleKey = "连接被拒 · SSH IO 线程池已饱和",
+            )
+            sendErrorReplyAndClose(0x05)
             return
         }
 
-        // 解析假 IP 为真实域名 (198.18.x.x 或 fd00::/64 范围)
-        val resolvedHost =
-            if (host.startsWith("198.18.")) {
-                ipToDomainLookup?.invoke(host) ?: host
-            } else if (host.startsWith("fd00:")) {
-                ipToDomainLookup?.invoke(host) ?: host
-            } else {
-                host
+        // 解析假 IP 为真实域名 (198.18.0.0/15 或 fd00::/8)
+        val resolvedHost: String
+        if (isFakeTunnelHost(host)) {
+            val mapped = ipToDomainLookup?.invoke(host)
+            if (mapped == null || mapped == host) {
+                // 假 IP 无映射 (映射被逐出/VPN 进程重启): 把 198.18.x.x 当真实主机发给远端
+                // 会黑洞超时再重试, 永远"连接中" — 秒拒让客户端立刻重查 DNS 拿新映射
+                android.util.Log.w(
+                    "Socks5Proxy",
+                    "connectToTarget: fake IP has no domain mapping, reject fast: $host:$port",
+                )
+                VpnController.appLogThrottled(
+                    "假 IP 映射失效 · $host:$port 无域名映射, 已秒拒 (请重试让 DNS 重新分配)",
+                    level = LogLevel.WARNING,
+                    throttleKey = "假 IP 映射失效",
+                )
+                sendErrorReplyAndClose(0x03)
+                return
             }
+            resolvedHost = mapped
+        } else {
+            resolvedHost = host
+        }
+        resolvedRemoteHost = resolvedHost
 
         if (resolvedHost != host && IS_DEBUG) {
             android.util.Log.d("Socks5Proxy", "Resolved fake IP $host to domain $resolvedHost")
@@ -654,8 +788,12 @@ private class Socks5Connection(
                         "Socks5Proxy",
                         "connectToTarget failed: createDirectChannel returned null for $host:$port",
                     )
-                    sendErrorReply(0x05)
-                    close()
+                    VpnController.appLogThrottled(
+                        "SSH 通道建立失败 · $resolvedHost:$port — 通道工厂返回 null",
+                        level = LogLevel.ERROR,
+                        throttleKey = "SSH 通道建立失败",
+                    )
+                    sendErrorReplyAndClose(0x05)
                     return@launch
                 }
 
@@ -665,19 +803,49 @@ private class Socks5Connection(
                         "Socks5Proxy",
                         "connectToTarget failed: tunnel.connect returned false for $host:$port",
                     )
+                    VpnController.appLogThrottled(
+                        "SSH 通道连接失败 · $resolvedHost:$port — connect 超时/返回 false",
+                        level = LogLevel.ERROR,
+                        throttleKey = "SSH 通道连接失败",
+                    )
                     tunnel.disconnect()
-                    sendErrorReply(0x05)
-                    close()
+                    sendErrorReplyAndClose(0x05)
                     return@launch
                 }
 
                 if (IS_DEBUG) android.util.Log.d("Socks5Proxy", "connectToTarget success: $host:$port")
-                targetTunnel = tunnel
+                // close() 可能在这 5s 的阻塞 connect() 里整个跑完: scope.cancel() 打不断非挂起点,
+                // 而此刻 targetTunnel 还是 null, close() 的 targetTunnel?.disconnect() 会空过 ——
+                // 这条通道从此无人 disconnect, 挂在 JSch 静态 Channel.pool 里泄漏, 且它会持续
+                // 灌 1MB 输入管道把整条 SSH 会话的读线程冻结 (见 MAX_INPUT_BUFFER_SIZE 注释)。
+                // 与 close() 同持连接锁登记: 抢在它前面写入, close() 就能看到并负责断开;
+                // 它先跑完则这里必读到 Closed, 自己断开。两条路都有人收尾。
+                val closedWhileConnecting =
+                    synchronized(this@Socks5Connection) {
+                        if (state == SocksState.Closed) {
+                            true
+                        } else {
+                            targetTunnel = tunnel
+                            false
+                        }
+                    }
+                if (closedWhileConnecting) {
+                    android.util.Log.w(
+                        "Socks5Proxy",
+                        "connectToTarget: connection closed during tunnel.connect, discarding channel $host:$port",
+                    )
+                    tunnel.disconnect()
+                    return@launch
+                }
                 onTargetConnected()
             } catch (e: Exception) {
                 android.util.Log.e("Socks5Proxy", "connectToTarget exception: $host:$port", e)
-                sendErrorReply(0x05)
-                close()
+                VpnController.appLogThrottled(
+                    "SSH 通道连接异常 · $host:$port — ${e.message}",
+                    level = LogLevel.ERROR,
+                    throttleKey = "SSH 通道连接异常",
+                )
+                sendErrorReplyAndClose(0x05)
             }
         }
     }
@@ -739,11 +907,24 @@ private class Socks5Connection(
                     val readWaitMs = (System.nanoTime() - readStart) / 1000000
                     if (read == -1) {
                         android.util.Log.w("Socks5Proxy", "[conn=$id] relayFromTarget: EOF from tunnel")
+                        // remove-and-invoke: 与 close() 的 remove 竞争时也只触发一次
+                        // (CHM.remove 原子, 谁拿到非 null 谁负责上报)。
+                        // 必须先于 close(): close() 走 onClosed 会清掉这条回调。
+                        // graceful 取**调用瞬间**的 state: 仍 Relaying = 真·远端 clean EOF → FIN;
+                        // 否则说明 close() 已先置 Closed 并断开管道把我们唤醒 → 必须报 false 才发 RST,
+                        // 报 true 会把"本栈主动断开"伪装成远端正常收尾 (截断下载被当成正常结束)。
+                        val eofCallback = pendingTargetEofCallbacksRef?.remove(tunCallbackKey)
+                        eofCallback?.invoke(state == SocksState.Relaying)
                         this@Socks5Connection.close()
                         break
                     }
                     if (read > 0) {
                         lastActivity = System.currentTimeMillis()
+                        // 必须在 callback **之前**计数: callback 走 writeTcpPayloadToTun →
+                        // @Synchronized writeToTun, 可能阻塞; 之后再计数会把"SSH 其实读到了"
+                        // 的字节藏起来, 零回程诊断就把"回程堵在 TUN 写"误判成"远端没回话"。
+                        fromTunnelTotal.addAndGet(read.toLong())
+                        onDataReceived(read.toLong())
                         if (IS_DEBUG) {
                             android.util.Log.d(
                                 "Socks5Proxy",
@@ -751,8 +932,19 @@ private class Socks5Connection(
                                     "callback=${callback != null}",
                             )
                         }
+                        val cbStartNs = System.nanoTime()
                         callback?.invoke(readBuffer.array(), 0, read)
-                        onDataReceived(read.toLong())
+                        val cbMs = (System.nanoTime() - cbStartNs) / 1_000_000
+                        if (cbMs >= SLOW_TUN_WRITE_WARN_MS) {
+                            // 这一步卡住 = 本连接停止排空 JSch 管道 = 该 SSH 会话读线程被拖住
+                            // = 同会话所有通道一起收不到数据 (见 MAX_INPUT_BUFFER_SIZE 注释)
+                            VpnController.appLogThrottled(
+                                "回程写入 TUN 阻塞 · ${targetForLog()}:$remotePort — ${read}B 耗时 $cbMs ms " +
+                                    "(会话 ${tunnel.sessionId}) 回程协程停摆会拖死 JSch 读线程, 同会话其它通道一起断流",
+                                level = LogLevel.WARNING,
+                                throttleKey = "回程写入 TUN 阻塞",
+                            )
+                        }
                         if (callback == null) {
                             // 快照后入队: wrap 是共享 readBuffer.array() 的视图, 异步写出前下轮 read 会覆写它
                             sendReply(readBuffer.array().copyOf(read))
@@ -761,7 +953,15 @@ private class Socks5Connection(
                 }
             } catch (e: Exception) {
                 android.util.Log.e("Socks5Connection", "[conn=$id] relayFromTarget error: ${e.message}", e)
-                // 回程异常 = 隧道已坏, 不关闭则客户端永远等不到 EOF
+                VpnController.appLogThrottled(
+                    "回程读取异常 · SSH → 浏览器 $remoteHost:$remotePort — ${e.message}",
+                    level = LogLevel.WARNING,
+                    throttleKey = "回程读取异常",
+                )
+                // 回程异常 = 隧道已坏, 不关闭则客户端永远等不到 EOF;
+                // 顺带上报 graceful=false: 不报的话 directRelay 主路径下 TcpStateMachine
+                // 完全收不到通知, 纯下行连接会挂到 300s 陈旧清理才被 RST。
+                pendingTargetEofCallbacksRef?.remove(tunCallbackKey)?.invoke(false)
                 this@Socks5Connection.close()
             } finally {
                 if (IS_DEBUG) android.util.Log.d("Socks5Connection", "[conn=$id] relayFromTarget coroutine exiting")
@@ -788,21 +988,13 @@ private class Socks5Connection(
         )
     }
 
-    private fun sendErrorReply(rep: Int) {
-        val reply =
-            byteArrayOf(
-                0x05,
-                rep.toByte(),
-                0x00,
-                0x01,
-                0x00,
-                0x00,
-                0x00,
-                0x00,
-                0x00,
-                0x00,
-            )
-        sendReply(reply)
+    /**
+     * 最终拒绝回复 + 关闭: 必须同步写出 — 走 sendReply 排队再紧跟 close(), pendingWrites
+     * 会被丢弃, 客户端只看到 EOF 而收不到明确拒绝码 (0x03 假 IP 无映射等诊断依赖该码)。
+     */
+    private fun sendErrorReplyAndClose(rep: Int) {
+        val reply = byteArrayOf(0x05, rep.toByte(), 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+        sendReplyAndClose(reply)
     }
 
     private fun sendReply(reply: ByteArray) {
@@ -810,14 +1002,22 @@ private class Socks5Connection(
     }
 
     /**
-     * 最终拒绝回复 + 关闭: 必须同步写出。
-     * 走 sendReply 排队的话, 紧接着的 close() 会 cancel selectionKey, pendingWrites 被丢弃,
-     * 客户端只看到 EOF 而收不到 0xFF/0x01 等明确拒绝码。
-     * 仅在 eventLoop 线程调用 (协议解析路径), 字节数 ≤ 18, 非阻塞 write 在 loopback 上必然写完。
+     * 最终拒绝回复 + 关闭: 必须同步写出 — 走 sendReply 排队的话, 紧接着的 close() 会
+     * cancel selectionKey, pendingWrites 被丢弃, 客户端只看到 EOF 收不到拒绝码。
+     * writeLock 与 eventLoop 的 handleWrite 直写串行化, 因此 connectToTarget 的
+     * sshIoDispatcher 失败路径也可安全调用; 回复 ≤10B, loopback 上单次 write 基本写完,
+     * 循环只兜底极小概率的部分写。
      */
     private fun sendReplyAndClose(reply: ByteArray) {
+        val buf = ByteBuffer.wrap(reply)
         try {
-            channel.write(ByteBuffer.wrap(reply))
+            synchronized(writeLock) {
+                var attempts = 0
+                while (buf.hasRemaining() && attempts < 16) {
+                    if (channel.write(buf) <= 0) break
+                    attempts++
+                }
+            }
         } catch (_: Exception) {
         }
         close()
@@ -842,7 +1042,9 @@ private class Socks5Connection(
                 } catch (_: Exception) {
                 }
             } else {
-                channel.write(ByteBuffer.wrap(data, offset, length))
+                synchronized(writeLock) {
+                    channel.write(ByteBuffer.wrap(data, offset, length))
+                }
             }
         } catch (e: Exception) {
             close()
@@ -888,12 +1090,16 @@ private class Socks5Connection(
                 if (!toSshChannel.trySend(data).isSuccess) {
                     pendingToSshBlock = data
                     pendingToSshFull = true
+                    // 必须计数: diagnostics() 的「背压触发 N 次」是上行重传风暴的唯一可见证据,
+                    // 不自增就永远打 0 —— 正是历史上"各丢弃计数全 0 但数据真丢了"的形态
+                    backpressureCount.incrementAndGet()
                     suspendLocalRead()
                 }
             }
         }
         lastActivity = System.currentTimeMillis()
         onDataSent(data.size.toLong())
+        bytesToTunnel.addAndGet(data.size.toLong())
     }
 
     /**
@@ -910,10 +1116,17 @@ private class Socks5Connection(
                     output.write(data)
                     // JSch SSH channel 需要 flush 才能真正发送数据包
                     output.flush()
+                    toTunnelTotal.addAndGet(data.size.toLong())
+                    if (firstSshWriteAt == 0L) firstSshWriteAt = System.currentTimeMillis()
                     resumeLocalReadIfSpace()
                 } catch (e: Exception) {
                     if (state != SocksState.Closed) {
                         android.util.Log.e("Socks5Proxy", "[conn=$id] ssh write error: ${e.message}", e)
+                        VpnController.appLogThrottled(
+                            "SSH 写入失败 · 浏览器 → SSH $remoteHost:$remotePort — ${e.message}",
+                            level = LogLevel.ERROR,
+                            throttleKey = "SSH 写入失败",
+                        )
                         close()
                     }
                     break
@@ -958,6 +1171,34 @@ private class Socks5Connection(
         }
     }
 
+    /** 故障日志用域名 (假 IP 已反查); 拿不到就退回 remoteHost。 */
+    private fun targetForLog(): String = resolvedRemoteHost ?: remoteHost ?: "?"
+
+    /**
+     * 「已写未读」看门狗: 写进 SSH 但一直读不回, 是最难排的一类故障 ——
+     * `隧道通道就绪` 正常、所有丢弃计数为 0、SSH 侧也无异常, 只能等到 30s 客户端
+     * 放弃时才从 `隧道零回程` 里看到结果。这里 5s 就报, 并带上 `sessionId`:
+     * **同会话多个通道一起无回程 = JSch 读线程被某通道的管道拖死 (会话级冻结)**;
+     * 只有本连接无回程 = 远端对这个主机不应答 —— 两者排障方向完全相反。
+     */
+    private fun reportZeroReturnIfNeeded() {
+        if (zeroReturnWarned || state != SocksState.Relaying) return
+        val written = toTunnelTotal.get()
+        if (written == 0L || fromTunnelTotal.get() > 0L) return
+        val startedAt = firstSshWriteAt
+        if (startedAt == 0L) return
+        val waited = System.currentTimeMillis() - startedAt
+        if (waited < ZERO_RETURN_WARN_MS) return
+        zeroReturnWarned = true
+        VpnController.appLogThrottled(
+            "隧道无回程 · ${targetForLog()}:$remotePort — SSH 已写 $written B / 读回 0B · $waited ms " +
+                "(会话 ${targetTunnel?.sessionId ?: "?"}; 同会话其它通道也没回程=会话读线程被管道拖死, " +
+                "只有本连接=远端不应答)",
+            level = LogLevel.WARNING,
+            throttleKey = "隧道无回程",
+        )
+    }
+
     /**
      * 检查连接超时
      * @return true 表示已超时，应关闭连接
@@ -989,6 +1230,7 @@ private class Socks5Connection(
             scope.launch {
                 while (state != SocksState.Closed) {
                     kotlinx.coroutines.delay(TIMEOUT_CHECK_INTERVAL_MS)
+                    reportZeroReturnIfNeeded()
                     if (state != SocksState.Closed && checkTimeout()) {
                         android.util.Log.w("Socks5Proxy", "Connection $id timed out (state=$state)")
                         close()
@@ -1002,6 +1244,23 @@ private class Socks5Connection(
     fun close() {
         if (state == SocksState.Closed) return
         state = SocksState.Closed
+
+        // 隧道侧零回程 (TcpStateMachine.reportTunnelBlackHole 的镜像, 但带 SSH 真实写出量):
+        // TcpStateMachine 的 forwardedBytes 只说明数据**交给了本地代理**, toTunnelTotal 才是
+        // 真正写进 SSH 通道的字节。两者都 >0 而读回 0 → 数据确实出了本栈, 问题在远端/回程;
+        // 若 toTunnelTotal 明显小于上行 → 上行堵在本栈 (Channel 满 / 写协程卡), 排障方向相反。
+        val sshTarget = targetForLog()
+        if (targetTunnel != null) {
+            val sshSent = toTunnelTotal.get()
+            if (sshSent > 0 && fromTunnelTotal.get() == 0L) {
+                VpnController.appLogThrottled(
+                    "隧道侧零回程 · $sshTarget:$remotePort — SSH 写出 $sshSent B / 读回 0B · " +
+                        "存活 ${System.currentTimeMillis() - openedAt}ms (会话 ${targetTunnel?.sessionId ?: "?"})",
+                    level = LogLevel.WARNING,
+                    throttleKey = "隧道侧零回程",
+                )
+            }
+        }
 
         timeoutCheckJob?.cancel()
         timeoutCheckJob = null
@@ -1029,6 +1288,12 @@ private class Socks5Connection(
         } catch (_: Exception) {
         }
         targetTunnel = null
+
+        // 本栈主动关闭 (空闲超时 / SSH 写失败 / 会话死亡 / 握手失败) —— 必须让
+        // TcpStateMachine 发 RST 而不是干等它 300s 陈旧清理; 且必须在 onClosed() 的
+        // remove **之前** invoke, 否则回调被摘走却没被调用, 纯下行连接就此悬挂。
+        // 拿到 null = 对面 (relay EOF / TSM 自己) 已上报过, 幂等靠 CHM.remove 保证。
+        pendingTargetEofCallbacksRef?.remove(tunCallbackKey)?.invoke(false)
 
         onClosed()
     }

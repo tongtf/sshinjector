@@ -92,6 +92,12 @@ class TcpCloseBannerTest {
             assertTrue("server must receive CONNECT", server.awaitConnect(5, TimeUnit.SECONDS))
 
             sendFinAck(sm)
+            assertTrue(
+                "browser FIN must be acknowledged (ack covers the FIN's sequence number)," +
+                    " otherwise the client stays in FIN_WAIT_1 and retransmits the FIN forever" +
+                    " — each retransmit is a payload-less segment that lands in the orphan bucket",
+                awaitUntil { tunPackets.any(::ackCoversFin) },
+            )
             Thread.sleep(300)
             assertTrue(
                 "browser FIN must not be answered with RST (peer already closed)",
@@ -101,6 +107,115 @@ class TcpCloseBannerTest {
             tunPackets.clear()
             sendSyn(sm)
             assertTrue("entry must be removed by FIN close", awaitUntil { tunPackets.any(::isSynAck) })
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun `remote clean EOF closes with FIN not RST and frees the5-tuple`() {
+        // tunCallback 注册失败 → 走 socket relay fallback, remote EOF 才会经过
+        // startRelayFromSocks 的 read==-1 路径 (directRelay 模式该循环根本不启动)
+        val server = FakeSocksServer(bannerThenClose = true)
+        val plugin = FakeSocksPlugin(server.port, failTunCallback = true)
+        val tunPackets = CopyOnWriteArrayList<ByteArray>()
+        val sm = newStateMachine(plugin, tunPackets)
+
+        try {
+            sendSyn(sm)
+            assertTrue("banner must reach TUN", awaitUntil { tunPackets.any(::containsBanner) })
+            assertTrue("clean remote EOF must emit FIN+ACK", awaitUntil { tunPackets.any(::isFinAck) })
+            assertTrue(
+                "normal close must not emit RST (app would see ECONNRESET)",
+                tunPackets.none(::isRst),
+            )
+
+            tunPackets.clear()
+            sendSyn(sm)
+            assertTrue(
+                "entry must be removed so a new SYN rebuilds",
+                awaitUntil { tunPackets.any(::isSynAck) },
+            )
+        } finally {
+            server.close()
+        }
+    }
+
+    /**
+     * 主回程走直通回调 (directRelay=true) 时 [TcpStateMachine] **不跑** startRelayFromSocks,
+     * 因此收不到 read==-1。少了 registerTargetEofCallback 这根线, 远端的 clean EOF 就无处上报:
+     * 要么等客户端下次上行失败才发 RST (对端看到 connection reset 而非正常收尾),
+     * 要么挂到 300s 陈旧清理才被 RST。上面那条 fallback 用例测不到这条路径。
+     */
+    @Test
+    fun `direct-relay path closes with FIN not RST when the remote ends cleanly`() {
+        val server = FakeSocksServer()
+        val plugin = FakeSocksPlugin(server.port)
+        val tunPackets = CopyOnWriteArrayList<ByteArray>()
+        val sm = newStateMachine(plugin, tunPackets)
+
+        try {
+            sendSyn(sm)
+            assertTrue("handshake must reach SYN-ACK", awaitUntil { tunPackets.any(::isSynAck) })
+            assertTrue(
+                "direct-relay 模式必须注册远端 EOF 钩子",
+                awaitUntil { plugin.targetEofCallback != null },
+            )
+
+            val eof = plugin.targetEofCallback!!
+            eof.invoke(true)
+            assertTrue("clean remote EOF must emit FIN+ACK", awaitUntil { tunPackets.any(::isFinAck) })
+            assertTrue("normal close must not emit RST (peer would see ECONNRESET)", tunPackets.none(::isRst))
+
+            // 幂等: 关闭可能被多条路径并发触发 (远端 EOF / relay finally / 上行写失败),
+            // closeTcpConnection 必须以 state==Closed 占位, 第二次不得再发关闭包、再计一次黑洞。
+            val finCount = tunPackets.count(::isFinAck)
+            eof.invoke(true)
+            Thread.sleep(200)
+            assertEquals("closeTcpConnection must be idempotent", finCount, tunPackets.count(::isFinAck))
+
+            tunPackets.clear()
+            sendSyn(sm)
+            assertTrue(
+                "entry must be removed so a new SYN rebuilds",
+                awaitUntil { tunPackets.any(::isSynAck) },
+            )
+        } finally {
+            server.close()
+        }
+    }
+
+    /**
+     * `graceful=false` 是代理层"本栈主动关闭 / 回程异常"的唯一出口:
+     * Socks5Connection.close() 与 relay catch 分支都靠它把关闭原因传过来。
+     * 少了它 (或者误传 true) 会把隧道侧的断开伪装成远端正常收尾 —— 截断的下载
+     * 被浏览器当成正常结束静默接受, 或者反过来纯下行连接挂着等 300s 陈旧清理。
+     */
+    @Test
+    fun `aborting through the eof hook emits RST not FIN`() {
+        val server = FakeSocksServer()
+        val plugin = FakeSocksPlugin(server.port)
+        val tunPackets = CopyOnWriteArrayList<ByteArray>()
+        val sm = newStateMachine(plugin, tunPackets)
+
+        try {
+            sendSyn(sm)
+            assertTrue("handshake must reach SYN-ACK", awaitUntil { tunPackets.any(::isSynAck) })
+            assertTrue(
+                "direct-relay 模式必须注册远端 EOF 钩子",
+                awaitUntil { plugin.targetEofCallback != null },
+            )
+
+            plugin.targetEofCallback!!.invoke(false)
+            assertTrue("graceful=false must emit RST", awaitUntil { tunPackets.any(::isRst) })
+            assertTrue("graceful=false must not emit FIN", tunPackets.none(::isFinAck))
+
+            tunPackets.clear()
+            sendSyn(sm)
+            assertTrue(
+                "entry must be removed so a new SYN rebuilds",
+                awaitUntil { tunPackets.any(::isSynAck) },
+            )
         } finally {
             server.close()
         }
@@ -132,7 +247,26 @@ class TcpCloseBannerTest {
 
     private fun isRst(p: ByteArray) = p.size >= 34 && (p[33].toInt() and 0x04) != 0
 
+    private fun isFinAck(p: ByteArray) = p.size >= 34 && (p[33].toInt() and 0x01) != 0
+
     private fun isSynAck(p: ByteArray) = p.size >= 34 && (p[33].toInt() and 0xFF) == 0x12
+
+    /**
+     * 本端回包的 ack 是否覆盖了客户端 FIN。
+     * `sendSyn` 用 seq=12345 建链, SYN 占 1 → FIN 落在 12346, 覆盖它的 ack = 12347;
+     * 没有载荷转发 (forwardedBytes=0), 所以 12347 是唯一正确值。
+     */
+    private fun ackCoversFin(p: ByteArray): Boolean {
+        if (p.size < 34) return false
+        if ((p[33].toInt() and 0x10) == 0) return false
+        return ackNumber(p) == 12347L
+    }
+
+    private fun ackNumber(p: ByteArray): Long {
+        var v = 0L
+        for (i in 28..31) v = (v shl 8) or (p[i].toLong() and 0xFF)
+        return v
+    }
 
     private fun containsBanner(p: ByteArray): Boolean {
         if (p.size <= 40) return false
@@ -174,10 +308,12 @@ class TcpCloseBannerTest {
     /** 最小可用 SOCKS5 服务端: 用户名/密码认证 + CONNECT, 支持多连接。 */
     private class FakeSocksServer(
         private val beforeConnectReply: (() -> Unit)? = null,
+        private val bannerThenClose: Boolean = false,
     ) : AutoCloseable {
         private val serverSocket = ServerSocket(0)
         val port: Int get() = serverSocket.localPort
         private val connectLatch = CountDownLatch(1)
+        private val banner = "SSH-2.0-testserver\r\n".toByteArray()
 
         fun awaitConnect(
             timeout: Long,
@@ -237,6 +373,13 @@ class TcpCloseBannerTest {
                 beforeConnectReply?.invoke()
                 out.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
                 out.flush()
+                if (bannerThenClose) {
+                    // 正常收尾: 回一段数据后主动 FIN — 触发 startRelayFromSocks 的
+                    // cleanEof 路径, 断言回给浏览器的是 FIN 而不是 RST
+                    out.write(banner)
+                    out.flush()
+                    return
+                }
                 while (inp.read() != -1) {
                     // 消费浏览器→服务端数据直到对端关闭
                 }
@@ -259,8 +402,12 @@ class TcpCloseBannerTest {
 
     private class FakeSocksPlugin(
         override val localSocksPort: Int,
+        private val failTunCallback: Boolean = false,
     ) : TunnelPlugin {
         @Volatile var tunCallback: ((ByteArray, Int, Int) -> Unit)? = null
+
+        /** 远端结束钩子 (形参 = graceful), 见 [TunnelPlugin.registerTargetEofCallback]。 */
+        @Volatile var targetEofCallback: ((Boolean) -> Unit)? = null
 
         override val id = "fake-socks"
         override val displayName = "fake"
@@ -284,11 +431,23 @@ class TcpCloseBannerTest {
             clientPort: Int,
             callback: (ByteArray, Int, Int) -> Unit,
         ) {
+            if (failTunCallback) error("tun callback disabled (fallback mode)")
             tunCallback = callback
         }
 
         override fun removeTunCallback(clientPort: Int) {
             tunCallback = null
+        }
+
+        override fun registerTargetEofCallback(
+            clientPort: Int,
+            callback: (Boolean) -> Unit,
+        ) {
+            targetEofCallback = callback
+        }
+
+        override fun removeTargetEofCallback(clientPort: Int) {
+            targetEofCallback = null
         }
     }
 }

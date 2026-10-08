@@ -77,6 +77,8 @@ class Socks5TunnelPlugin
         override val localSocksPort: Int
             get() = socksServer?.boundPort?.value ?: 0
 
+        override fun tunnelDiagnostics(): String = socksServer?.diagnostics() ?: ""
+
         override suspend fun connect(config: TunnelConfig): Result<Unit> {
             val c = config as TunnelConfig.Socks5
             _state.value = TunnelState(status = TunnelState.Status.Connecting, serverAddress = c.sshHost)
@@ -170,5 +172,16 @@ class Socks5TunnelPlugin
 
         override fun removeTunCallback(clientPort: Int) {
             socksServer?.removeTunCallback(clientPort)
+        }
+
+        override fun registerTargetEofCallback(
+            clientPort: Int,
+            callback: (Boolean) -> Unit,
+        ) {
+            socksServer?.registerTargetEofCallback(clientPort, callback)
+        }
+
+        override fun removeTargetEofCallback(clientPort: Int) {
+            socksServer?.removeTargetEofCallback(clientPort)
         }
     }

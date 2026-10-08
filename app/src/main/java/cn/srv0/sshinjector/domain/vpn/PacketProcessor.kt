@@ -179,4 +179,14 @@ class PacketProcessor
         fun cleanupStaleConnections(timeoutMs: Long = DEFAULT_CONNECTION_CLEANUP_TIMEOUT_MS) {
             tcpStateMachine.cleanupStaleConnections(timeoutMs)
         }
+
+        /** TCP 数据面诊断快照 (周期日志): 活跃连接 / 背压丢段 / 回程闸门阻塞。 */
+        fun tcpDiagnostics(): String = tcpStateMachine.diagnostics()
+
+        /**
+         * UDP 非 DNS 丢弃量 (QUIC/游戏等)。UdpRelay 自己会按目标端口周期上报,
+         * 但 60s 数据面快照是唯一一张"全局对账单", 少了它就无法一眼看出
+         * 「下载慢」里有多少是 QUIC 一直在被丢弃后才回退 TCP。
+         */
+        fun udpDiagnostics(): String = "UDP 丢弃 ${udpRelay.droppedUdp} 个"
     }
