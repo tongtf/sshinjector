@@ -116,7 +116,7 @@
     </a>
     <a class="item" href="tcp-flow.html">
       <p class="t">TCP 数据通路流程</p>
-      <p class="d">SYN → 本地 SOCKS5 通道建立 → 回向直通；seq 校验与 RST 关闭。</p>
+      <p class="d">SYN → 本地 SOCKS5 通道建立 → 回向直通；seq 校验；远端正常 EOF 发 FIN+ACK，错误/拒绝/陈旧发 RST。</p>
       <span class="tag">Flowchart</span>
     </a>
     <a class="item" href="dns-flow.html">

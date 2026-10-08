@@ -90,7 +90,7 @@
     <line x1="600" y1="368" x2="364" y2="368" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
     <text x="412" y="362" class="msg">rep=0 · Established</text>
     <line x1="360" y1="408" x2="124" y2="408" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
-    <text x="168" y="402" class="msg">SYN-ACK → TUN</text>
+    <text x="168" y="402" class="msg">SYN-ACK → TUN（MSS + 条件 WS 选项）</text>
 
     <!-- outgoing data -->
     <line x1="120" y1="456" x2="356" y2="456" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
@@ -110,7 +110,7 @@
     <line x1="600" y1="696" x2="364" y2="696" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
     <text x="424" y="690" class="msg">callback(data, off, len) · 零拷贝</text>
     <line x1="360" y1="736" x2="124" y2="736" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
-    <text x="164" y="730" class="msg">buildTcpResponsePacket → TUN</text>
+    <text x="164" y="730" class="msg">awaitFlowCapacity 窗口闸门 → 写 TUN</text>
 
     <!-- legend -->
     <line x1="24" y1="768" x2="1076" y2="768" stroke="rgba(25,28,32,0.10)" stroke-width="0.8"/>
@@ -125,7 +125,8 @@
   </div>
   <p class="foot">SSHInjector · 出向背压：Channel(256) 满 → 单槽 pendingToSshBlock + 暂停 OP_READ（backpressureLock 保护单槽/标志/OP_READ 切换原子性；预读数据经 pendingConnectData 传递, buffer 不跨线程）→ loopback 满 →
     forwardToSocks 非阻塞写失败丢弃段 + 不回 ACK（浏览器 TCP 重传兜底, 不阻塞 packetLoop）；
-    回向 relay 跑 SshIoDispatcher, 回调 (data, off, len) 零拷贝, 组包每段 1 分配 1 拷贝</p>
+    回向 relay 跑 SshIoDispatcher, 回调 (data, off, len) 零拷贝, 组包每段 1 分配 1 拷贝；
+    回程写 TUN 前按客户端通告窗口限流（awaitFlowCapacity, flowLock 内 wait/notify、锁外写 TUN；零窗口靠 window update 唤醒, 关闭/ACK 段 notifyAll）</p>
 </div>
 </body>
 </html>
