@@ -11,6 +11,118 @@ object IpPacketParser {
     // IPv6 扩展头部类型: Hop-by-Hop(0), Routing(43), Fragment(44), Destination Options(60), Reserved(255)
     private val IPV6_EXTENSION_HEADERS = setOf(0, 43, 44, 60, 255)
 
+    /** UDP 头固定 8 字节 (RFC 768)。 */
+    private const val UDP_HEADER_LEN = 8
+
+    /**
+     * IP 头字节数: IPv4 = IHL*4 (**含选项**, 别硬编码 20), IPv6 = 40 固定头。
+     *
+     * @param packet 从 IP 头开始的完整报文
+     * @param version IP 版本号 (4 / 6)
+     * @return 头长; 版本未知 / IHL 非法 / 缓冲区不足返回 -1
+     */
+    fun ipHeaderLength(
+        packet: ByteArray,
+        version: Int,
+    ): Int =
+        when (version) {
+            4 ->
+                if (packet.size < 20) {
+                    -1
+                } else {
+                    val ihl = (packet[0].toInt() and 0x0F) * 4
+                    if (ihl < 20 || ihl > packet.size) -1 else ihl
+                }
+            6 -> if (packet.size < 40) -1 else 40
+            else -> -1
+        }
+
+    /**
+     * UDP 载荷 (DNS 查询应答等) 在整个 IP 报文里的起始下标 = IP 头 + **8 字节 UDP 头**。
+     *
+     * 少加这 8 字节会把 UDP 头 (srcPort/dstPort/len/cksum) 一起当载荷发出去: 对端把
+     * dstPort=0x0035 当成 QDCOUNT → 直接丢包 → 本地 5s 超时, 而日志只报"DNS 响应超时",
+     * 排障方向被完全带偏。同文件的 portOffset / UdpRelay 的剥离逻辑都要跳过这 8 字节。
+     *
+     * @param packet 从 IP 头开始的完整报文
+     * @param version IP 版本号 (4 / 6)
+     * @return 载荷起始下标; IP 头非法或装不下 UDP 头返回 -1
+     */
+    fun udpPayloadOffset(
+        packet: ByteArray,
+        version: Int,
+    ): Int {
+        val ipHeaderLen = ipHeaderLength(packet, version)
+        if (ipHeaderLen < 0) return -1
+        val offset = ipHeaderLen + UDP_HEADER_LEN
+        if (packet.size - offset < 1) return -1
+        return offset
+    }
+
+    /**
+     * 从 [packet] 的 [offset] 起读大端 u16 (UDP 端口 / 长度等)。
+     * 越界返回 -1 —— 调用方据此丢包, 而不是读到隔壁字段当端口。
+     */
+    fun readU16(
+        packet: ByteArray,
+        offset: Int,
+    ): Int {
+        if (offset < 0 || offset + 1 >= packet.size) return -1
+        return ((packet[offset].toInt() and 0xFF) shl 8) or (packet[offset + 1].toInt() and 0xFF)
+    }
+
+    /**
+     * 从 [buffer] 的绝对下标 [start] 处读出该 IP 包的**总长度** (IP 头自带的长度字段, 含头)。
+     *
+     * 粘连包定界必须用它: `parseIpv4Header` 的 `payloadLength = buffer.remaining()` 是**到 buffer
+     * 末尾**的长度, 一次 TUN read 里有多个包时会把后续包整段算进第 1 包的 payload —— 隧道收到的是
+     * 被污染的字节流 + 第 1 包的 ACK 推过了头, 而后续包又被丢掉。
+     *
+     * 用**绝对下标**而非当前 position: `parseIpv4Header` / `processTcpPacket` 都会推进 position,
+     * 读 total length 必须回到包起点。IPv4 取 bytes[2..3]; IPv6 取 bytes[4..5] + 40
+     * (bytes[2..5] 是 traffic class/flow label, 不是长度)。
+     *
+     * @return 总字节数 (>=20); -1 = 版本未知/长度字段非法/缓冲区不足
+     */
+    fun ipPacketTotalLength(
+        buffer: ByteBuffer,
+        start: Int,
+    ): Int {
+        if (start < 0 || start >= buffer.limit()) return -1
+        val version = (buffer.get(start).toInt() shr 4) and 0x0F
+        return when (version) {
+            4 -> ipv4TotalLength(buffer, start)
+            6 -> ipv6TotalLength(buffer, start)
+            else -> -1
+        }
+    }
+
+    /** IPv4: total length = bytes[2..3] (不含前缀), 必须至少装下 IHL*4 的头。 */
+    private fun ipv4TotalLength(
+        buffer: ByteBuffer,
+        start: Int,
+    ): Int {
+        if (buffer.limit() - start < 20) return -1
+        val ihl = buffer.get(start).toInt() and 0x0F
+        if (ihl < 5) return -1
+        val total =
+            ((buffer.get(start + 2).toInt() and 0xFF) shl 8) or
+                (buffer.get(start + 3).toInt() and 0xFF)
+        return if (total >= ihl * 4) total else -1
+    }
+
+    /** IPv6: 总长 = 40 字节头 + payload length (bytes[4..5])。bytes[2..5] 是 flow label, 不是长度。 */
+    private fun ipv6TotalLength(
+        buffer: ByteBuffer,
+        start: Int,
+    ): Int {
+        if (buffer.limit() - start < 40) return -1
+        val payloadLen =
+            ((buffer.get(start + 4).toInt() and 0xFF) shl 8) or
+                (buffer.get(start + 5).toInt() and 0xFF)
+        return 40 + payloadLen
+    }
+
     /**
      * 解析 IPv4 头，返回协议、源/目的地址与 payload 区间。
      * @param buffer 位置将停在 payload 起始处

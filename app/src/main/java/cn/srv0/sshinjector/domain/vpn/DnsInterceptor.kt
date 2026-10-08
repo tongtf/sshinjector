@@ -295,7 +295,7 @@ class DnsInterceptor
         )
 
         // IP → 域名映射: DNS 解析时建立，PacketProcessor 用于 SOCKS5 CONNECT 域名模式
-        internal val ipToDomain = LruStringMap(MAX_IP_DOMAIN_MAP_SIZE)
+        private val ipToDomain = LruStringMap(MAX_IP_DOMAIN_MAP_SIZE)
 
         /** 真实 IP → 域名, 只由 [lookupDomain] 作兜底读取, 不参与假 IP 生命周期。 */
         private val realIpToDomain = LruStringMap(MAX_REAL_IP_MAP_SIZE)
