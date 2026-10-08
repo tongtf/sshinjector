@@ -9,6 +9,10 @@ plugins {
     id("io.gitlab.arturbosch.detekt")
 }
 
+base {
+    archivesName.set("sshinjector")
+}
+
 android {
     namespace = "cn.srv0.sshinjector"
     compileSdk = 37

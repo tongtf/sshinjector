@@ -130,7 +130,7 @@ jobs:
       - name: Upload Debug APK
         uses: actions/upload-artifact@v5
         with:
-          name: app-debug
+          name: sshinjector-debug
           path: app/build/outputs/apk/debug/*.apk
 
   build-release:
@@ -218,10 +218,10 @@ jobs:
       - name: Upload Release Artifacts
         uses: actions/upload-artifact@v5
         with:
-          name: app-release
+          name: sshinjector-release
           path: |
             app/build/outputs/apk/release/*.apk
-            app/build/outputs/bundle/release/app-release.aab
+            app/build/outputs/bundle/release/sshinjector-release.aab
       
       - name: Generate release notes
         uses: orhun/git-cliff-action@v4
@@ -237,7 +237,7 @@ jobs:
         with:
           files: |
             app/build/outputs/apk/release/*.apk
-            app/build/outputs/bundle/release/app-release.aab
+            app/build/outputs/bundle/release/sshinjector-release.aab
           body_path: RELEASE_NOTES.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
