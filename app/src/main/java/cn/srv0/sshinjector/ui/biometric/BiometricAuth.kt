@@ -83,7 +83,7 @@ class BiometricAuth
             if (needsBiometric(keyAlias)) {
                 authenticate(
                     activity = activity,
-                    title = "验证身份",
+                    title = activity.getString(R.string.settings_verify_identity),
                     onSuccess = onGranted,
                     onCancelled = { onDenied?.invoke() },
                 )

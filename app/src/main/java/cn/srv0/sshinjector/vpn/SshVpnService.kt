@@ -27,6 +27,7 @@ import cn.srv0.sshinjector.domain.vpn.ConnectivityProber
 import cn.srv0.sshinjector.domain.vpn.HealthTracker
 import cn.srv0.sshinjector.domain.vpn.VpnNetwork
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
+import cn.srv0.sshinjector.ui.StatusDisplay
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -241,7 +242,7 @@ class SshVpnService : VpnService() {
                             username = "",
                             keyAlias = "",
                         ),
-                        "连接中...",
+                        connectingLabel(),
                     )
                 // 不传递 foregroundServiceType，让系统使用 manifest 中声明的类型
                 startForeground(NOTIFICATION_ID, notification)
@@ -355,7 +356,7 @@ class SshVpnService : VpnService() {
                 // 记录最后连接的服务器, 供开机自启 (BootReceiver) 使用
                 settingsDataStore.setLastServerId(serverId)
                 startHealthMonitor(merged)
-                updateNotification(merged, "网络验证中")
+                updateNotification(merged, StatusDisplay.build(serviceVpnState.value, this::getString))
                 startWhitelistObserver()
             } catch (e: Exception) {
                 lastError.value = e.message
@@ -560,21 +561,33 @@ class SshVpnService : VpnService() {
                 "VPN Service",
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = "SSHInjector VPN 连接状态"
+                description = getString(R.string.notification_channel_description)
                 setShowBadge(false)
             }
         notificationManager?.createNotificationChannel(channel)
     }
 
     private fun startForegroundWithNotification(config: ServerConfig) {
-        val notification = buildNotification(config, "连接中...")
+        val notification = buildNotification(config, connectingLabel())
         // 不传递 foregroundServiceType，让系统使用 manifest 中声明的类型
         startForeground(NOTIFICATION_ID, notification)
     }
 
+    /**
+     * 通知栏文案一律经 [StatusDisplay] (与状态卡同源): 这里曾各写各的 `status_connecting`/
+     * `status_verifying`/`status_connected`, 连接阶段一变 (LOAD/TUN/TUNNEL/DNS/ROUTES)
+     * 通知栏就停在"正在连接"与状态卡对不上。[connectingLabel] 只用于**尚无任何状态**的
+     * 前台启动瞬间 (此时没有 state 可渲染), 语义 = StatusDisplay 的 Connecting 分支。
+     */
+    private fun connectingLabel(): String =
+        StatusDisplay.build(
+            DomainVpnState(status = DomainVpnState.VpnStatus.Connecting),
+            this::getString,
+        )
+
     private fun updateNotification(
         config: ServerConfig,
-        status: String = "已连接",
+        status: String,
     ) {
         val notification = buildNotification(config, status)
         notificationManager?.notify(NOTIFICATION_ID, notification)
@@ -590,18 +603,7 @@ class SshVpnService : VpnService() {
             return
         }
         val config = currentServer ?: return
-        val label =
-            when (state.status) {
-                DomainVpnState.VpnStatus.Connected ->
-                    when {
-                        state.failedStep != null -> "连接异常 · ${state.failedStep?.label}"
-                        !state.verified -> "网络验证中"
-                        else -> "已连接"
-                    }
-                DomainVpnState.VpnStatus.Connecting ->
-                    state.connectStage?.label ?: "连接中..."
-                else -> return
-            }
+        val label = StatusDisplay.build(state, this::getString)
         updateNotification(config, label)
     }
 

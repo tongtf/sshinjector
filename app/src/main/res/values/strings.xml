@@ -327,4 +327,35 @@ SOFTWARE.</string>
     <string name="log_export_done">已导出到下载: %1$s</string>
     <string name="log_export_failed">导出失败</string>
     <string name="log_cleared">日志已清空</string>
+
+    <!-- 状态展示 (StatusDisplay: 状态卡 + 通知栏共用) -->
+    <string name="status_connected">已连接</string>
+    <string name="status_verifying">网络验证中</string>
+    <string name="status_connecting">连接中</string>
+    <string name="status_disconnecting">断开中</string>
+    <string name="status_failed">连接失败</string>
+    <string name="status_disconnected">未连接</string>
+    <string name="status_degraded">连接异常 · %1$s</string>
+    <string name="status_failed_step">连接失败 · %1$s</string>
+    <string name="server_none">未连接</string>
+    <string name="notification_channel_description">SSHInjector VPN 连接状态</string>
+    <string name="notification_action_disconnect">断开</string>
+
+    <!-- 连接流程阶段 (ConnectStage) -->
+    <string name="connect_stage_load">正在加载服务器配置</string>
+    <string name="connect_stage_tun">正在创建 VPN 接口</string>
+    <string name="connect_stage_tunnel">正在连接 SSH</string>
+    <string name="connect_stage_dns">正在配置 DNS 拦截</string>
+    <string name="connect_stage_routes">正在配置路由规则</string>
+
+    <!-- 健康归因步骤 (HealthStep) -->
+    <string name="health_step_ssh">SSH 连接</string>
+    <string name="health_step_auth">身份认证</string>
+    <string name="health_step_proxy">本地代理</string>
+    <string name="health_step_tunnel">隧道通道</string>
+    <string name="health_step_dns">DNS 解析</string>
+    <string name="health_step_remote">远端网络</string>
+    <string name="health_step_tun">虚拟网卡</string>
+    <string name="health_step_forward">数据转发</string>
+    <string name="network_type_mobile">移动网络</string>
 </resources>

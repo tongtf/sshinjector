@@ -7,7 +7,8 @@ sealed class TunnelConfig {
 
     data class CommonConfig(
         val connectTimeout: Int = 10000,
-        val keepAliveInterval: Int = 30000,
+        /** 秒 (与 ServerEntity/UI 一致, 见 DomainModels.ServerConfig.keepAliveInterval) */
+        val keepAliveInterval: Int = 30,
     )
 
     data class Socks5(

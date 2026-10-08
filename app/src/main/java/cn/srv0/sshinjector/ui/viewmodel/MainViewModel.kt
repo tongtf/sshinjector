@@ -18,6 +18,7 @@ import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import cn.srv0.sshinjector.domain.usecase.VpnController
+import cn.srv0.sshinjector.ui.StatusDisplay
 import cn.srv0.sshinjector.vpn.SshVpnService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -109,20 +110,21 @@ class MainViewModel
             val hasDefaultServer: Boolean = false,
             val defaultServerId: Long = 0,
             val defaultServerName: String = "",
-            val currentServer: String = "未连接",
+            val currentServer: String = "",
             val currentServerId: Long = 0,
             val currentServerHost: String = "",
             val currentServerUser: String = "",
-            val connectionStatus: String = "断开",
-            /** 状态展示文案 (含验证/降级/失败步骤, spec connectivity-health); connectionStatus 保留机器名供逻辑判断。 */
-            val statusDisplay: String = "断开",
+            // 机器名 (state.status.name), 供逻辑判断; 用户可见文案走 statusDisplay
+            val connectionStatus: String = "Disconnected",
+            /** 状态展示文案 (含验证/降级/失败步骤, spec connectivity-health), 多语言由 StatusDisplay 渲染。 */
+            val statusDisplay: String = "",
             val errorMessage: String? = null,
             // 网络信息
             val deviceIpv4: String = "-",
             val deviceIpv6: String = "-",
             /** 隧道出口 IP (IP 回显, 会话级); "-" = 未取回/未连接。 */
             val exitIp: String = "-",
-            val dnsMode: String = "默认",
+            val dnsMode: String = "",
             val proxyAddress: String = "-",
             val networkType: String = "-",
             val networkDetail: String = "-",
@@ -144,6 +146,13 @@ class MainViewModel
         )
 
         init {
+            // 多语言默认值 (data class 默认字段拿不到 Context): 首帧不显示硬编码占位
+            _uiState.update {
+                it.copy(
+                    statusDisplay = context.getString(R.string.status_disconnected),
+                    currentServer = context.getString(R.string.server_none),
+                )
+            }
             observeVpnState()
             loadDefaultServer()
             loadNetworkInfo()
@@ -259,7 +268,7 @@ class MainViewModel
                                 TelephonyManager.NETWORK_TYPE_GPRS,
                                 TelephonyManager.NETWORK_TYPE_EDGE,
                                 -> "2G"
-                                else -> "移动网络"
+                                else -> context.getString(R.string.network_type_mobile)
                             }
                         Pair(type, type)
                     } catch (_: Exception) {
@@ -350,8 +359,8 @@ class MainViewModel
                         _uiState.update {
                             it.copy(
                                 isConnected = isConnected,
-                                statusDisplay = buildStatusDisplay(state),
-                                currentServer = state.server?.name ?: "未连接",
+                                statusDisplay = buildStatusDisplay(state, context::getString),
+                                currentServer = state.server?.name ?: context.getString(R.string.server_none),
                                 currentServerId = serverId,
                                 currentServerHost = state.server?.host ?: "",
                                 currentServerUser = state.server?.username ?: "",
@@ -511,31 +520,12 @@ class MainViewModel
             }
 
             /**
-             * 状态展示文案: Connected 也分「已验证可用/验证中/异常·步骤」; 连接失败带步骤归因。
-             * 纯函数 (按现有测试形态可在 MainViewModelFormatTest 直测)。
+             * 状态展示文案 (状态卡 + 通知栏统一入口, 实现见 [cn.srv0.sshinjector.ui.StatusDisplay])。
              */
-            fun buildStatusDisplay(state: cn.srv0.sshinjector.domain.model.VpnState): String {
-                val step = state.failedStep
-                return when (state.status) {
-                    cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Connected ->
-                        when {
-                            step != null -> "连接异常 · ${step.label}"
-                            !state.verified -> "网络验证中"
-                            else -> "已连接"
-                        }
-                    cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Connecting ->
-                        when {
-                            // 连接期失败 (如 TUN 建立失败) 归因补写时 status 仍停留 Connecting, 必须优先显示
-                            step != null -> "连接失败 · ${step.label}"
-                            else -> state.connectStage?.label ?: "连接中"
-                        }
-                    cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Disconnecting -> "断开中"
-                    cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Failed ->
-                        if (step != null) "连接失败 · ${step.label}" else "连接失败"
-                    cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Disconnected ->
-                        if (step != null) "连接失败 · ${step.label}" else "未连接"
-                }
-            }
+            fun buildStatusDisplay(
+                state: cn.srv0.sshinjector.domain.model.VpnState,
+                resolve: (Int) -> String,
+            ): String = StatusDisplay.build(state, resolve)
 
             @JvmStatic
             fun ratioLevel(ratio: Float): RatioLevel =
@@ -865,8 +855,8 @@ class MainViewModel
                 _uiState.update {
                     it.copy(
                         isConnected = isConnected,
-                        statusDisplay = buildStatusDisplay(state),
-                        currentServer = state.server?.name ?: "未连接",
+                        statusDisplay = buildStatusDisplay(state, context::getString),
+                        currentServer = state.server?.name ?: context.getString(R.string.server_none),
                         currentServerId = serverId,
                         currentServerHost = state.server?.host ?: "",
                         currentServerUser = state.server?.username ?: "",

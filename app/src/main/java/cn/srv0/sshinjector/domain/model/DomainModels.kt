@@ -1,6 +1,8 @@
 package cn.srv0.sshinjector.domain.model
 
-import java.util.*
+import androidx.annotation.StringRes
+import cn.srv0.sshinjector.R
+import java.util.Date
 
 data class ServerConfig(
     val id: Long = 0,
@@ -15,7 +17,8 @@ data class ServerConfig(
     var updatedAt: Date = Date(),
     var lastConnectedAt: Date? = null,
     val connectTimeout: Int = 10000,
-    val keepAliveInterval: Int = 30000,
+    /** SSH keepAlive 周期, 单位: 秒 (与 ServerEntity/UI 一致 — 曾因按毫秒 delay 导致每 30ms 一个心跳包) */
+    val keepAliveInterval: Int = 30,
     val mtu: Int = 1500,
     val enableIPv6: Boolean = true,
     val dnsMode: DnsMode = DnsMode.Remote,
@@ -52,29 +55,30 @@ data class ConnectionStats(
 
 /**
  * 连接链路健康归因步骤: 运行期端到端探测失败或连接期失败时, 告诉用户是哪一步出了问题。
- * label 为用户可见文案 (与代码库既有惯例一致, UI 文案在 VM 层硬编码中文)。
+ * 文案经 [labelRes] 走字符串资源 (多语言), 由 StatusDisplay 统一渲染。
  */
 enum class HealthStep(
-    val label: String,
+    @StringRes val labelRes: Int,
 ) {
-    SSH("SSH 连接"),
-    AUTH("身份认证"),
-    PROXY("本地代理"),
-    TUNNEL("隧道通道"),
-    DNS("DNS 解析"),
-    REMOTE("远端网络"),
-    TUN("虚拟网卡"),
+    SSH(R.string.health_step_ssh),
+    AUTH(R.string.health_step_auth),
+    PROXY(R.string.health_step_proxy),
+    TUNNEL(R.string.health_step_tunnel),
+    DNS(R.string.health_step_dns),
+    REMOTE(R.string.health_step_remote),
+    TUN(R.string.health_step_tun),
+    FORWARD(R.string.health_step_forward),
 }
 
-/** 连接流程阶段 (仅 Connecting 期间有意义); label 为状态栏/通知栏展示文案, 与 HealthStep.label 同风格。 */
+/** 连接流程阶段 (仅 Connecting 期间有意义); 文案经 [labelRes] 走字符串资源, 与 HealthStep 同风格。 */
 enum class ConnectStage(
-    val label: String,
+    @StringRes val labelRes: Int,
 ) {
-    LOAD("正在加载服务器配置"),
-    TUN("正在创建 VPN 接口"),
-    TUNNEL("正在连接 SSH"),
-    DNS("正在配置 DNS 拦截"),
-    ROUTES("正在配置路由规则"),
+    LOAD(R.string.connect_stage_load),
+    TUN(R.string.connect_stage_tun),
+    TUNNEL(R.string.connect_stage_tunnel),
+    DNS(R.string.connect_stage_dns),
+    ROUTES(R.string.connect_stage_routes),
 }
 
 data class VpnState(

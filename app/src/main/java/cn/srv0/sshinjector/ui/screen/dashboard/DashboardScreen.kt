@@ -985,11 +985,16 @@ private fun ratioLevelColor(level: MainViewModel.RatioLevel): Color {
 @Composable
 private fun dnsModeColors(dnsMode: String): Pair<Color, Color> {
     val colors = MaterialTheme.extendedColors
+    // 按资源文案匹配而非硬编码中文: stringResource 配置感知, 切换语言后 chip 配色仍生效
+    val remote = stringResource(cn.srv0.sshinjector.R.string.dashboard_dns_remote)
+    val direct = stringResource(cn.srv0.sshinjector.R.string.dashboard_dns_direct)
+    val whitelist = stringResource(cn.srv0.sshinjector.R.string.dashboard_dns_whitelist)
+    val domain = stringResource(cn.srv0.sshinjector.R.string.dashboard_dns_domain)
     return when (dnsMode) {
-        "远程代理" -> colors.dnsRemoteProxy to Color.White
-        "本地直连" -> colors.dnsLocalDirect to Color.White
-        "白名单模式" -> colors.dnsWhitelist to Color.White
-        "域名分流" -> colors.dnsDomainSplit to Color.White
+        remote -> colors.dnsRemoteProxy to Color.White
+        direct -> colors.dnsLocalDirect to Color.White
+        whitelist -> colors.dnsWhitelist to Color.White
+        domain -> colors.dnsDomainSplit to Color.White
         else ->
             MaterialTheme.colorScheme.surfaceVariant to
                 MaterialTheme.colorScheme.onSurface

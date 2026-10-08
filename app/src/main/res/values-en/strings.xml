@@ -306,4 +306,35 @@
     <string name="log_export_done">Exported: %1$s</string>
     <string name="log_export_failed">Export failed</string>
     <string name="log_cleared">Logs cleared</string>
+
+    <!-- Status display (shared by status card + notification) -->
+    <string name="status_connected">Connected</string>
+    <string name="status_verifying">Verifying network</string>
+    <string name="status_connecting">Connecting</string>
+    <string name="status_disconnecting">Disconnecting</string>
+    <string name="status_failed">Connection failed</string>
+    <string name="status_disconnected">Not connected</string>
+    <string name="status_degraded">Connection issue · %1$s</string>
+    <string name="status_failed_step">Connection failed · %1$s</string>
+    <string name="server_none">Not connected</string>
+    <string name="notification_channel_description">SSHInjector VPN connection status</string>
+    <string name="notification_action_disconnect">Disconnect</string>
+
+    <!-- Connect stages -->
+    <string name="connect_stage_load">Loading server config</string>
+    <string name="connect_stage_tun">Creating VPN interface</string>
+    <string name="connect_stage_tunnel">Connecting to SSH</string>
+    <string name="connect_stage_dns">Configuring DNS interception</string>
+    <string name="connect_stage_routes">Configuring routes</string>
+
+    <!-- Health attribution steps -->
+    <string name="health_step_ssh">SSH connection</string>
+    <string name="health_step_auth">Authentication</string>
+    <string name="health_step_proxy">Local proxy</string>
+    <string name="health_step_tunnel">Tunnel</string>
+    <string name="health_step_dns">DNS resolution</string>
+    <string name="health_step_remote">Remote network</string>
+    <string name="health_step_tun">VPN interface</string>
+    <string name="health_step_forward">Data forwarding</string>
+    <string name="network_type_mobile">Mobile network</string>
 </resources>

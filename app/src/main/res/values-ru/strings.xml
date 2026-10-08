@@ -306,4 +306,35 @@
     <string name="log_export_done">Экспортировано: %1$s</string>
     <string name="log_export_failed">Ошибка экспорта</string>
     <string name="log_cleared">Журнал очищен</string>
+
+    <!-- Отображение статуса (карточка + уведомление) -->
+    <string name="status_connected">Подключено</string>
+    <string name="status_verifying">Проверка сети</string>
+    <string name="status_connecting">Подключение</string>
+    <string name="status_disconnecting">Отключение</string>
+    <string name="status_failed">Ошибка подключения</string>
+    <string name="status_disconnected">Не подключено</string>
+    <string name="status_degraded">Сбой подключения · %1$s</string>
+    <string name="status_failed_step">Ошибка подключения · %1$s</string>
+    <string name="server_none">Не подключено</string>
+    <string name="notification_channel_description">Статус VPN-подключения SSHInjector</string>
+    <string name="notification_action_disconnect">Отключить</string>
+
+    <!-- Этапы подключения -->
+    <string name="connect_stage_load">Загрузка конфигурации сервера</string>
+    <string name="connect_stage_tun">Создание VPN-интерфейса</string>
+    <string name="connect_stage_tunnel">Подключение к SSH</string>
+    <string name="connect_stage_dns">Настройка перехвата DNS</string>
+    <string name="connect_stage_routes">Настройка маршрутов</string>
+
+    <!-- Шаги диагностики -->
+    <string name="health_step_ssh">SSH-соединение</string>
+    <string name="health_step_auth">Аутентификация</string>
+    <string name="health_step_proxy">Локальный прокси</string>
+    <string name="health_step_tunnel">Туннель</string>
+    <string name="health_step_dns">Разрешение DNS</string>
+    <string name="health_step_remote">Удалённая сеть</string>
+    <string name="health_step_tun">VPN-интерфейс</string>
+    <string name="health_step_forward">Передача данных</string>
+    <string name="network_type_mobile">Мобильная сеть</string>
 </resources>
