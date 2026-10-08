@@ -132,12 +132,12 @@ export JAVA_HOME=/path/to/jdk-17
 
 # 编译 Debug APK（按平台 ABI 拆分）
 ./gradlew assembleDebug
-#   app/build/outputs/apk/debug/sshinjector-<版本>-debug-<abi>.apk
+#   app/build/outputs/apk/debug/app-<abi>-debug.apk
 
-# 编译 Release APK（默认 debug keystore 签名，按平台 ABI 拆分）
+# 编译 Release APK（统一签名：仓库根 keystore.properties + keystore 文件，未配置时回退本机 debug key）
 ./gradlew assembleRelease
-#   app/build/outputs/apk/release/sshinjector-<版本>-<abi>.apk
-#   ABI: arm64-v8a / armeabi-v7a / x86_64
+#   app/build/outputs/apk/release/app-<abi>-release.apk
+#   ABI: arm64-v8a / armeabi-v7a
 
 # 编译 Release AAB (配置环境变量后使用自定义签名)
 #   KEYSTORE_PATH / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD

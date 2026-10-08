@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -27,23 +29,28 @@ android {
         vectorDrawables.useSupportLibrary = true
     }
 
+    // 统一签名 (跨机器/CI 一致): 仓库根 keystore.properties + keystore 文件 (均 gitignored, 各环境放同一份)
+    // → 其次 KEYSTORE_* 环境变量 → 都没有则回退本机 debug key 并告警 (防止误以为已统一)。
+    val unifiedProps =
+        rootProject.file("keystore.properties").takeIf { it.exists() }?.let { propFile ->
+            Properties().apply { propFile.inputStream().use { load(it) } }
+        }
+    val unifiedStorePath = (unifiedProps?.getProperty("storeFile") ?: System.getenv("KEYSTORE_PATH"))?.takeIf { it.isNotBlank() }
+    val unifiedStorePass = (unifiedProps?.getProperty("storePassword") ?: System.getenv("KEYSTORE_PASSWORD"))?.takeIf { it.isNotBlank() }
+    val unifiedKeyAlias = (unifiedProps?.getProperty("keyAlias") ?: System.getenv("KEY_ALIAS"))?.takeIf { it.isNotBlank() }
+    val unifiedKeyPass = (unifiedProps?.getProperty("keyPassword") ?: System.getenv("KEY_PASSWORD"))?.takeIf { it.isNotBlank() }
+    val unifiedSigningReady = unifiedStorePath != null && unifiedStorePass != null && unifiedKeyAlias != null
+    if (!unifiedSigningReady) {
+        logger.warn("[signing] keystore.properties / KEYSTORE_* 未配置 — 将使用本机各自生成的 debug key, 跨机器签名不一致!")
+    }
+
     signingConfigs {
         create("release") {
-            val storeFileEnv = System.getenv("KEYSTORE_PATH") ?: ""
-            val storePasswordEnv = System.getenv("KEYSTORE_PASSWORD") ?: ""
-            val keyAliasEnv = System.getenv("KEY_ALIAS") ?: ""
-            val keyPasswordEnv = System.getenv("KEY_PASSWORD") ?: ""
-            if (storeFileEnv.isNotBlank() && storePasswordEnv.isNotBlank() && keyAliasEnv.isNotBlank() && keyPasswordEnv.isNotBlank()) {
-                this.storeFile = file(storeFileEnv)
-                this.storePassword = storePasswordEnv
-                this.keyAlias = keyAliasEnv
-                this.keyPassword = keyPasswordEnv
-            } else {
-                // Use debug keystore for local builds
-                this.storeFile = file("debug.keystore")
-                this.storePassword = "android"
-                this.keyAlias = "androiddebugkey"
-                this.keyPassword = "android"
+            if (unifiedSigningReady) {
+                storeFile = rootProject.file(requireNotNull(unifiedStorePath))
+                storePassword = requireNotNull(unifiedStorePass)
+                keyAlias = requireNotNull(unifiedKeyAlias)
+                keyPassword = unifiedKeyPass ?: requireNotNull(unifiedStorePass)
             }
         }
     }
@@ -56,17 +63,22 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (unifiedSigningReady) "release" else "debug")
         }
         debug {
             isMinifyEnabled = false
             isDebuggable = true
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            // 统一签名: .debug 包同样使用共享 key, 跨机器一致
+            if (unifiedSigningReady) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
-    // 按平台 (ABI) 拆分 APK, 减小安装包体积; x86 已无 Android 14+ 设备, 不打包。
+    // 按平台 (ABI) 拆分 APK, 减小安装包体积; x86 与 x86_64 都不打包 —— Android 14+ 真机
+    // 只有 arm64/armeabi (x86_64 仅模拟器, 不走 Play/侧载分发)。
     // -PforBundle 时禁用: AGP 9 下 splits+shrinkResources 与 bundleRelease 冲突
     // (issuetracker 402800800 — buildReleasePreBundle 收到多份 per-ABI shrunk resources)。
     // AAB 在 Play 侧本就按 ABI 自动分发, 不需要 APK splits。
@@ -74,7 +86,7 @@ android {
         abi {
             isEnable = !project.hasProperty("forBundle")
             reset()
-            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            include("arm64-v8a", "armeabi-v7a")
             isUniversalApk = false
         }
     }

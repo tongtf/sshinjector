@@ -8,7 +8,7 @@ on:
     branches: [main, develop]
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   GRADLE_OPTS: "-Xmx3072m -Dorg.gradle.jvmargs=-Xmx3072m -Dorg.gradle.workers.max=2 -Dkotlin.compiler.execution.strategy=in-process"
@@ -106,7 +106,24 @@ jobs:
       
       - name: Grant execute permission
         run: chmod +x ./gradlew
-      
+
+      # PR 跑的 job 不碰 release secrets (哪怕同仓 PR 也不给); push 无 secrets 时
+      # debug 构建回退 runner debug key 并告警 (与发布无关)
+      - name: Restore unified signing keystore (optional, push only)
+        if: github.event_name == 'push'
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+          RELEASE_KEYSTORE_PROPERTIES_B64: ${{ secrets.RELEASE_KEYSTORE_PROPERTIES_B64 }}
+        run: |
+          if [ -n "$RELEASE_KEYSTORE_B64" ] && [ -n "$RELEASE_KEYSTORE_PROPERTIES_B64" ]; then
+            mkdir -p keystore
+            printf '%s' "$RELEASE_KEYSTORE_B64" | base64 -d > keystore/release.jks
+            printf '%s' "$RELEASE_KEYSTORE_PROPERTIES_B64" | base64 -d > keystore.properties
+            echo "unified signing keystore restored"
+          else
+            echo "::warning::RELEASE_KEYSTORE_* secrets not set - will sign with runner debug key (mismatch vs servers)"
+          fi
+
       - name: Build Debug APK
         run: ./gradlew assembleDebug
       
@@ -122,6 +139,10 @@ jobs:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # 只有发布 job 需要写权限 (创建 GitHub Release); 其余 job 默认只读,
+    # 同仓 PR 跑的 job 拿不到 contents:write
+    permissions:
+      contents: write
     
     steps:
       - name: Checkout code
@@ -152,7 +173,24 @@ jobs:
       
       - name: Grant execute permission
         run: chmod +x ./gradlew
-      
+
+      # 统一签名: build-release 必须用共享 keystore — 缺 secrets 直接失败,
+      # 绝不回退 runner debug key (会静默发布与所有设备都不一致的签名)
+      - name: Restore unified signing keystore (required)
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+          RELEASE_KEYSTORE_PROPERTIES_B64: ${{ secrets.RELEASE_KEYSTORE_PROPERTIES_B64 }}
+        run: |
+          if [ -n "$RELEASE_KEYSTORE_B64" ] && [ -n "$RELEASE_KEYSTORE_PROPERTIES_B64" ]; then
+            mkdir -p keystore
+            printf '%s' "$RELEASE_KEYSTORE_B64" | base64 -d > keystore/release.jks
+            printf '%s' "$RELEASE_KEYSTORE_PROPERTIES_B64" | base64 -d > keystore.properties
+            echo "unified signing keystore restored"
+          else
+            echo "::error::RELEASE_KEYSTORE_* secrets not set - refusing to publish a debug-key-signed release"
+            exit 1
+          fi
+
       - name: Build Release APK (ABI splits)
         run: ./gradlew assembleRelease
       
@@ -160,7 +198,23 @@ jobs:
       # 冲突 (issuetracker.google.com/402800800)。AAB 在 Play 侧本就按 ABI 自动分发。
       - name: Build Release AAB (no APK splits)
         run: ./gradlew bundleRelease -PforBundle
-      
+
+      # 兜底断言: APK 签名证书必须 = 共享 keystore 指纹。上一步已强制 secrets 必填,
+      # 这里防配置漂移 (keystore.properties 指错文件 / gradle 签名逻辑改动) 静默换签名。
+      - name: Verify APK signing certificate fingerprint
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | tail -n1)
+          EXPECTED="45cec24fbdfcaccbfa7ef558fa262fda83ffc2eabba18efdb7a3487682ae4db7"
+          # apksigner 单次只接一个 APK, 循环收集所有产物的签名摘要
+          DIGESTS=$(for apk in app/build/outputs/apk/release/*.apk; do
+            "$APKSIGNER" verify --print-certs "$apk" | grep -oiE '\b[0-9a-f]{64}\b'
+          done | sort -u)
+          echo "signer SHA-256 digests: $DIGESTS"
+          if [ "$DIGESTS" != "$EXPECTED" ]; then
+            echo "::error::APK signed with unexpected certificate (expected $EXPECTED, got: $DIGESTS)"
+            exit 1
+          fi
+
       - name: Upload Release Artifacts
         uses: actions/upload-artifact@v5
         with:
