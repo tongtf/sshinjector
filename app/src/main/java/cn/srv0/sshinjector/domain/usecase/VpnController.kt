@@ -16,6 +16,8 @@ import cn.srv0.sshinjector.domain.vpn.GfwListMatcher
 import cn.srv0.sshinjector.domain.vpn.PacketProcessor
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelConfig
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
+import cn.srv0.sshinjector.ui.viewmodel.LogLevel
+import cn.srv0.sshinjector.ui.viewmodel.LogLine
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -37,8 +39,12 @@ import java.net.InetAddress
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/** 每包级 DEBUG 日志门: 开启后才进应用内日志, 否则只走 logcat (防刷穿 replay 缓存)。 */
+private val IS_DEBUG = android.util.Log.isLoggable("VpnController", android.util.Log.DEBUG)
 
 /**
  * VPN 控制器 - 管理 VPN 连接的完整生命周期
@@ -92,6 +98,9 @@ class VpnController
         init {
             // TCP bypass 策略实时读 excludedRoutes/transportMode (无需随配置变化重挂)
             packetProcessor.setTcpBypass(::shouldBypassTcp) { socket -> protectTcpSocket?.invoke(socket) ?: false }
+            // 数据面 (TcpStateMachine/UdpRelay) 由 DI 独立提供、拿不到本实例,
+            // 经静态 sink 写应用内诊断日志 (VpnController 是 @Singleton, 注册一次即可)
+            setAppLogSink { message, level -> addLog(message, level) }
         }
 
         /**
@@ -131,16 +140,21 @@ class VpnController
             }
 
         fun setProtectTcpFunction(protectSocket: ((java.net.Socket) -> Boolean)?) {
-            addLog(">>> [VpnController] setProtectTcpFunction 被调用", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
+            addLog(">>> [VpnController] setProtectTcpFunction 被调用", LogLevel.DEBUG)
             protectTcpSocket = protectSocket
         }
 
         val vpnState = MutableStateFlow<VpnState>(VpnState())
         val connectionStats = MutableStateFlow<ConnectionStats>(ConnectionStats())
 
+        // replay=500: 日志界面未打开时保留最近 500 条 (无订阅者时 replay 缓存是唯一副本);
+        // 界面打开时订阅者先收到 replay 批量, 再持续接收增量。
         private val _logFlow =
-            MutableSharedFlow<Pair<String, cn.srv0.sshinjector.ui.viewmodel.LogLevel>>(extraBufferCapacity = 10)
-        val logFlow: SharedFlow<Pair<String, cn.srv0.sshinjector.ui.viewmodel.LogLevel>> = _logFlow.asSharedFlow()
+            MutableSharedFlow<LogLine>(
+                replay = 500,
+                extraBufferCapacity = 10,
+            )
+        val logFlow: SharedFlow<LogLine> = _logFlow.asSharedFlow()
 
         private var currentServer: ServerConfig? = null
 
@@ -148,20 +162,66 @@ class VpnController
         private var excludedRoutes: List<CidrRoute> = emptyList()
         private var transportMode: DnsInterceptor.DnsTransport = DnsInterceptor.DnsTransport.REMOTE
 
+        // 白名单模式 (dnsMode=2) 的启用应用; 空名单 → DNS 退化为本地直连解析 (见 dnsTransportFor)
+        @Volatile private var whitelistPackages: List<String> = emptyList()
+
         // 用于 SYSTEM 模式 DNS 转发的线程池
         // R5: daemon 线程, 进程退出不被 DNS bypass 任务挂住
         private val executor = Executors.newCachedThreadPool { r -> Thread(r, "dns-bypass").apply { isDaemon = true } }
 
         fun setProtectFunction(protectDatagramChannel: ((java.net.DatagramSocket) -> Boolean)?) {
-            addLog(">>> [VpnController] setProtectFunction 被调用", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
+            addLog(">>> [VpnController] setProtectFunction 被调用", LogLevel.DEBUG)
             this.protectDatagramChannel = protectDatagramChannel
+        }
+
+        /**
+         * 注入白名单模式的启用应用 (SshVpnService 在 establish 前 / 白名单增删重建时调用)。
+         * 空名单 = 全部流量不走隧道, DNS 必须退化为本地直连解析 —— 否则假 IP 无路由会破坏直连。
+         *
+         * @param whitelistEnabled 是否处于白名单模式 (dnsMode==2)。非白名单模式下调用方**本来就传
+         *   空列表** (它只代表"没有白名单"), 此时必须为 false —— 否则默认 REMOTE 模式每次连接都会
+         *   打出「白名单为空 · 所有应用均直连 (DNS 退化为 SYSTEM)」这条**完全相反**的 WARNING,
+         *   在"日志是唯一诊断面"的前提下等于主动误导排障。
+         */
+        fun setWhitelistPackages(
+            packages: List<String>,
+            whitelistEnabled: Boolean = false,
+        ) {
+            whitelistPackages = packages
+            if (!whitelistEnabled) {
+                // 中性表述: 非白名单模式下"空列表"只代表没有白名单, 流量其实**全部走隧道**,
+                // 说成"所有应用均直连"是反的 (这条曾是 WARNING, 会直接把排障带偏)
+                addLog("白名单未启用 · 全部应用流量走隧道", LogLevel.INFO)
+                return
+            }
+            // 记录名单本身 (连接/重建/白名单变更时): 无需口述即可核对某应用是否走隧道
+            if (packages.isEmpty()) {
+                addLog(
+                    "白名单为空 · 所有应用均直连 (DNS 退化为 SYSTEM 模式)",
+                    LogLevel.WARNING,
+                )
+            } else {
+                addLog(
+                    "白名单生效 · ${packages.size} 个应用走隧道: ${packages.joinToString()}",
+                    LogLevel.INFO,
+                )
+            }
         }
 
         fun addLog(
             message: String,
-            level: cn.srv0.sshinjector.ui.viewmodel.LogLevel,
+            level: LogLevel,
         ) {
-            _logFlow.tryEmit(message to level)
+            // 时间戳在写入侧生成: LogViewModel 打开界面时回放 replay 缓存不会把历史条目
+            // 全部伪造成 "现在"; clear 也能按 cutoff 精确剔除存量
+            _logFlow.tryEmit(
+                LogLine(System.currentTimeMillis(), level, message),
+            )
+        }
+
+        /** 清空日志 (replay 缓存 + 订阅方各自的列表由 LogViewModel 同步清理)。 */
+        fun clearLogs() {
+            _logFlow.resetReplayCache()
         }
 
         companion object {
@@ -172,6 +232,72 @@ class VpnController
             private const val CONNECTION_CLEANUP_INTERVAL_MS = 60000L
             private const val STALE_CONNECTION_TIMEOUT_MS = 300000L
             private const val STATS_FLUSH_INTERVAL_MS = 100L
+
+            /** 最小合法 IP 包长度 (IPv4 头 20 / IPv6 头 40); 小于此视为无法解析的残留字节。 */
+            private const val MIN_IP_PACKET_BYTES = 20
+
+            /** 数据面快照周期: 60s 一条, 让"隧道此刻是否还在搬数据"可见 (应用内日志唯一诊断面)。 */
+            private const val DATA_SNAPSHOT_INTERVAL_MS = 60_000L
+
+            // ---- 数据面静态诊断日志: TcpStateMachine/UdpRelay 由 DI 独立提供, 无本实例引用 ----
+            private const val APP_LOG_THROTTLE_MS = 10_000L
+
+            /** 节流表淘汰阈值: 取最大节流窗口 (SOCKS 失败/零回程等) 的 6 倍, 安全起见取 60s。 */
+            private const val APP_LOG_THROTTLE_PRUNE_MS = 60_000L
+
+            private var appLogSink: ((String, LogLevel) -> Unit)? = null
+
+            /** 由 [init] 注册 (companion 无法引用实例 addLog, 只能走 sink)。 */
+            private fun setAppLogSink(sink: (String, LogLevel) -> Unit) {
+                appLogSink = sink
+            }
+
+            /**
+             * 应用内日志 (用户无 adb, 这是唯一可见的诊断面)。
+             * 默认 INFO —— **异常必须显式声明级别**, 否则正常的生命周期/观测日志会被刷成警告,
+             * 真正的故障反而淹没在噪声里 (曾把"隧道通道就绪/连接结束"全标成 WARNING)。
+             */
+            fun appLog(
+                message: String,
+                level: LogLevel =
+                    LogLevel.INFO,
+            ) {
+                appLogSink?.invoke(message, level)
+            }
+
+            // 同文案节流表: Play 下载失败会按秒级重试, 不节流会把应用内日志刷穿
+            private val appLogThrottleMap = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+            /**
+             * 同 [appLog], 同文案节流窗口内只记一次 (高频故障/重试风暴会刷穿 replay 缓存)。
+             *
+             * @param throttleKey 节流表的键, 默认 = [message]。**文案里拼进了动态内容
+             *   (域名/IP/异常信息/计数) 的失败类日志必须传静态前缀**: 默认键随每条动态内容变化,
+             *   重试风暴 (Play 每秒重连、每条连接的异常文案都不同) 会同时造成两件事 ——
+             *   节流形同虚设 (每条都放行), 以及节流表被不同键灌爆后触发整表 clear,
+             *   把其它文案已建立的节流窗口一次性全部解除, 正好刷穿 replay=500 日志缓存。
+             *   生命周期类 (每连接一条、需要看域名区分) 的 INFO 日志保持默认键即可。
+             *   节流表只存 Long 时间戳, 键短而固定才安全; [message] 仍按原样输出 (含动态细节)。
+             */
+            fun appLogThrottled(
+                message: String,
+                windowMs: Long = APP_LOG_THROTTLE_MS,
+                level: LogLevel =
+                    LogLevel.INFO,
+                throttleKey: String = message,
+            ) {
+                val now = System.currentTimeMillis()
+                val last = appLogThrottleMap[throttleKey]
+                if (last != null && now - last < windowMs) return
+                // 溢出时**只淘汰过期条目**, 不能整表 clear: 那会一次性解除所有节流窗口,
+                // 让积压的高频文案同时放行, 正好刷穿 replay=500 缓存
+                if (appLogThrottleMap.size > 512) {
+                    appLogThrottleMap.entries.removeIf { now - it.value > APP_LOG_THROTTLE_PRUNE_MS }
+                }
+                if (appLogThrottleMap.size > 2048) appLogThrottleMap.clear()
+                appLogThrottleMap[throttleKey] = now
+                appLog(message, level)
+            }
 
             /**
              * 纯策略函数 (可单测): 排除路由命中 → 直连; DOMAIN_SPLIT 非假 IP → 直连。
@@ -234,14 +360,14 @@ class VpnController
                 // 1. 启动隧道插件 (内含 SSH TCP+握手, 连接流程中最慢阶段)
                 val tunnelConfig = TunnelConfig.forSocks5(server, password)
                 updateState { it.copy(connectStage = ConnectStage.TUNNEL) }
-                addLog("正在连接隧道 (socks5)...", cn.srv0.sshinjector.ui.viewmodel.LogLevel.INFO)
+                addLog("正在连接隧道 (socks5)...", LogLevel.INFO)
                 val tunnelResult = tunnelManager.startPlugin("socks5", tunnelConfig)
                 if (tunnelResult.isFailure) {
                     val errorMsg = tunnelResult.exceptionOrNull()?.message ?: "Tunnel connection failed"
-                    addLog("隧道连接失败: $errorMsg", cn.srv0.sshinjector.ui.viewmodel.LogLevel.ERROR)
+                    addLog("隧道连接失败: $errorMsg", LogLevel.ERROR)
                     throw Exception(errorMsg)
                 }
-                addLog("隧道连接成功: socks5", cn.srv0.sshinjector.ui.viewmodel.LogLevel.SUCCESS)
+                addLog("隧道连接成功: socks5", LogLevel.SUCCESS)
 
                 // 3. 设置 DNS 拦截器
                 updateState { it.copy(connectStage = ConnectStage.DNS) }
@@ -295,16 +421,16 @@ class VpnController
                         val needRefresh = domainListManager.shouldRefresh()
                         addLog(
                             "域名列表刷新检查: ${if (needRefresh) "需要" else "无需"}",
-                            cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG,
+                            LogLevel.DEBUG,
                         )
                         if (needRefresh) {
-                            addLog("正在更新域名列表...", cn.srv0.sshinjector.ui.viewmodel.LogLevel.INFO)
+                            addLog("正在更新域名列表...", LogLevel.INFO)
                             domainListManager.update()
                         }
                     }
                 }
 
-                addLog("DNS 拦截器已配置 (模式: $transportMode)", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
+                addLog("DNS 拦截器已配置 (模式: $transportMode)", LogLevel.INFO)
 
                 // 4. 解析排除路由 (CIDR)
                 updateState { it.copy(connectStage = ConnectStage.ROUTES) }
@@ -318,16 +444,16 @@ class VpnController
                             val addr = InetAddress.getByName(dnsIp)
                             excludedRoutes += CidrRoute(addr, if (addr is java.net.Inet6Address) 128 else 32)
                         } catch (e: Exception) {
-                            addLog("解析 DNS IP 失败: $dnsIp", cn.srv0.sshinjector.ui.viewmodel.LogLevel.WARNING)
+                            addLog("解析 DNS IP 失败: $dnsIp", LogLevel.WARNING)
                         }
                     }
                     if (systemDns.isNotEmpty()) {
                         addLog(
                             "SYSTEM 模式: 绕过 VPN 的 DNS 服务器: ${systemDns.joinToString(", ")}",
-                            cn.srv0.sshinjector.ui.viewmodel.LogLevel.INFO,
+                            LogLevel.INFO,
                         )
                     } else {
-                        addLog("SYSTEM 模式: 未获取到系统 DNS，使用默认 8.8.8.8", cn.srv0.sshinjector.ui.viewmodel.LogLevel.WARNING)
+                        addLog("SYSTEM 模式: 未获取到系统 DNS，使用默认 8.8.8.8", LogLevel.WARNING)
                         // 兜底：添加常用公共 DNS 到排除路由
                         for (dnsIp in listOf("8.8.8.8", "1.1.1.1", "114.114.114.114")) {
                             try {
@@ -340,24 +466,24 @@ class VpnController
                 }
 
                 if (excludedRoutes.isNotEmpty()) {
-                    addLog("排除路由: ${excludedRoutes.size} 条规则", cn.srv0.sshinjector.ui.viewmodel.LogLevel.INFO)
+                    addLog("排除路由: ${excludedRoutes.size} 条规则", LogLevel.INFO)
                 }
 
                 // 5. 注册 TUN 写回回调
                 packetProcessor.setTunWriter { data -> writeToTun(data) }
-                addLog("TUN 写回通道已就绪", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
+                addLog("TUN 写回通道已就绪", LogLevel.DEBUG)
 
                 // 6. 启动连接清理定时任务
                 launch { connectionCleanupLoop() }
-                addLog("连接清理任务已启动", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
+                addLog("连接清理任务已启动", LogLevel.DEBUG)
 
                 // 6.1 启动独立 DNS 响应投递协程 (修复 DNS 死锁)
                 launch { dnsResponseDeliveryLoop() }
-                addLog("DNS 响应投递协程已启动", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
+                addLog("DNS 响应投递协程已启动", LogLevel.DEBUG)
 
                 // 6.2 启动统计节流发布协程
                 launch { statsFlushLoop() }
-                addLog("统计发布协程已启动", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
+                addLog("统计发布协程已启动", LogLevel.DEBUG)
 
                 updateState {
                     it.copy(
@@ -366,7 +492,7 @@ class VpnController
                     )
                 }
 
-                addLog("VPN 连接已建立，开始处理数据包", cn.srv0.sshinjector.ui.viewmodel.LogLevel.SUCCESS)
+                addLog("VPN 连接已建立，开始处理数据包", LogLevel.SUCCESS)
 
                 // 7. 启动数据包处理循环
                 packetLoopJob?.cancel()
@@ -374,7 +500,7 @@ class VpnController
 
                 Result.success(Unit)
             } catch (e: Exception) {
-                addLog("连接失败: ${e.message}", cn.srv0.sshinjector.ui.viewmodel.LogLevel.ERROR)
+                addLog("连接失败: ${e.message}", LogLevel.ERROR)
                 disconnect()
                 Result.failure(e)
             }
@@ -389,7 +515,7 @@ class VpnController
             setProtectTcpFunction(null)
             if (!isRunning) return
 
-            addLog("正在断开 VPN 连接...", cn.srv0.sshinjector.ui.viewmodel.LogLevel.WARNING)
+            addLog("正在断开 VPN 连接...", LogLevel.INFO)
             isRunning = false
             updateState { it.copy(status = VpnState.VpnStatus.Disconnecting) }
 
@@ -397,7 +523,7 @@ class VpnController
             coroutineContext.cancelChildren()
             packetLoopJob?.cancel()
             packetLoopJob = null
-            addLog("已取消所有子任务", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
+            addLog("已取消所有子任务", LogLevel.DEBUG)
 
             // 排空 DNS 残留响应, 避免旧会话数据泄漏到下一次连接
             dnsInterceptor.clearPendingResponses()
@@ -408,18 +534,18 @@ class VpnController
             // 断开 SSH 连接
             // 停止所有隧道插件
             try {
-                addLog("正在断开隧道连接...", cn.srv0.sshinjector.ui.viewmodel.LogLevel.INFO)
+                addLog("正在断开隧道连接...", LogLevel.INFO)
                 tunnelManager.stopAll()
-                addLog("隧道连接已断开", cn.srv0.sshinjector.ui.viewmodel.LogLevel.SUCCESS)
+                addLog("隧道连接已断开", LogLevel.INFO)
             } catch (e: Exception) {
-                addLog("隧道断开错误: ${e.message}", cn.srv0.sshinjector.ui.viewmodel.LogLevel.ERROR)
+                addLog("隧道断开错误: ${e.message}", LogLevel.ERROR)
             }
 
             // 关闭输入输出流
             try {
                 inputStream?.close()
                 outputStream?.close()
-                addLog("TUN 数据流已关闭", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
+                addLog("TUN 数据流已关闭", LogLevel.DEBUG)
             } catch (_: Exception) {
             }
 
@@ -439,7 +565,7 @@ class VpnController
                         ),
                 )
             }
-            addLog("VPN 连接已完全断开", cn.srv0.sshinjector.ui.viewmodel.LogLevel.WARNING)
+            addLog("VPN 连接已完全断开", LogLevel.INFO)
         }
 
         /**
@@ -465,15 +591,22 @@ class VpnController
             ) {
                 addLog(
                     ">>> [VpnController] updateDnsMode: 设置 DNS Interceptor 保护函数 ($transportMode)",
-                    cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG,
+                    LogLevel.DEBUG,
                 )
                 dnsInterceptor.setProtectFunction { socket ->
-                    addLog(
-                        ">>> [VpnController] 保护函数被调用: socket=$socket",
-                        cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG,
-                    )
+                    if (IS_DEBUG) {
+                        addLog(
+                            ">>> [VpnController] 保护函数被调用: socket=$socket",
+                            LogLevel.DEBUG,
+                        )
+                    }
                     val result = protectDatagramChannel?.invoke(socket) ?: false
-                    addLog(">>> [VpnController] 保护函数返回: $result", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
+                    if (IS_DEBUG) {
+                        addLog(
+                            ">>> [VpnController] 保护函数返回: $result",
+                            LogLevel.DEBUG,
+                        )
+                    }
                     result
                 }
             }
@@ -549,7 +682,7 @@ class VpnController
             outputStream = FileOutputStream(fd)
             packetLoopJob?.cancel()
             packetLoopJob = launch { packetLoop(generation) }
-            addLog("TUN 接口已重建", cn.srv0.sshinjector.ui.viewmodel.LogLevel.DEBUG)
+            addLog("TUN 接口已重建", LogLevel.INFO)
         }
 
         /**

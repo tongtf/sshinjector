@@ -294,4 +294,16 @@
     <string name="dns_direct_desc">Весь трафик через физический интерфейс, минуя VPN</string>
     <string name="dns_whitelist_desc">Выбранные приложения через VPN, остальные напрямую</string>
     <string name="dns_domain_desc">Трафик по доменам через туннель, остальной напрямую</string>
+    <string name="settings_logs">Журнал</string>
+    <string name="settings_logs_desc">Просмотр, копирование и экспорт журналов</string>
+    <string name="log_title">Журнал</string>
+    <string name="log_all">Все</string>
+    <string name="log_empty">Пока нет записей</string>
+    <string name="log_copy">Копировать</string>
+    <string name="log_export">Экспорт</string>
+    <string name="log_clear">Очистить</string>
+    <string name="log_copied">Скопировано записей: %1$d</string>
+    <string name="log_export_done">Экспортировано: %1$s</string>
+    <string name="log_export_failed">Ошибка экспорта</string>
+    <string name="log_cleared">Журнал очищен</string>
 </resources>

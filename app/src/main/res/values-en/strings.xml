@@ -294,4 +294,16 @@
     <string name="dns_direct_desc">All traffic through physical interface, bypassing VPN</string>
     <string name="dns_whitelist_desc">Whitelisted apps through VPN, others direct</string>
     <string name="dns_domain_desc">Domain-matched traffic through tunnel, others direct</string>
+    <string name="settings_logs">Logs</string>
+    <string name="settings_logs_desc">View, copy and export app logs</string>
+    <string name="log_title">Logs</string>
+    <string name="log_all">All</string>
+    <string name="log_empty">No logs yet</string>
+    <string name="log_copy">Copy</string>
+    <string name="log_export">Export</string>
+    <string name="log_clear">Clear</string>
+    <string name="log_copied">Copied %1$d log entries</string>
+    <string name="log_export_done">Exported: %1$s</string>
+    <string name="log_export_failed">Export failed</string>
+    <string name="log_cleared">Logs cleared</string>
 </resources>

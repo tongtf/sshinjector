@@ -1,6 +1,8 @@
 package cn.srv0.sshinjector.domain.vpn.tunnel
 
 import android.util.Log
+import cn.srv0.sshinjector.domain.usecase.VpnController
+import cn.srv0.sshinjector.ui.viewmodel.LogLevel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.util.concurrent.ConcurrentHashMap
@@ -45,6 +47,10 @@ class TunnelManager
                 _activePlugin.value = plugin
             } else {
                 Log.e(TAG, "Failed to start $pluginId: ${result.exceptionOrNull()?.message}")
+                VpnController.appLog(
+                    "隧道插件启动失败 · $pluginId — ${result.exceptionOrNull()?.message}",
+                    level = LogLevel.ERROR,
+                )
             }
             return result
         }

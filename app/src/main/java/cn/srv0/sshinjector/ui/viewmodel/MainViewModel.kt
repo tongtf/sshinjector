@@ -898,28 +898,26 @@ enum class LogLevel {
     WARNING,
 }
 
+/** 应用日志条目: 时间戳在 VpnController.addLog 写入时生成 (回放/打开界面不再改写历史时间)。 */
+data class LogLine(
+    val timestamp: Long,
+    val level: LogLevel,
+    val message: String,
+)
+
 internal fun nextDnsMode(current: Int): Int = (current + 1) % 4
 
 internal fun dnsModeLabel(
     mode: Int,
-    context: Context? = null,
+    context: Context,
 ): String {
-    if (context != null) {
-        val resId =
-            when (mode) {
-                0 -> R.string.dashboard_dns_remote
-                1 -> R.string.dashboard_dns_direct
-                2 -> R.string.dashboard_dns_whitelist
-                3 -> R.string.dashboard_dns_domain
-                else -> R.string.dashboard_dns_remote
-            }
-        return context.getString(resId)
-    }
-    return when (mode) {
-        0 -> "远程代理"
-        1 -> "本地直连"
-        2 -> "白名单模式"
-        3 -> "域名分流"
-        else -> "远程代理"
-    }
+    val resId =
+        when (mode) {
+            0 -> R.string.dashboard_dns_remote
+            1 -> R.string.dashboard_dns_direct
+            2 -> R.string.dashboard_dns_whitelist
+            3 -> R.string.dashboard_dns_domain
+            else -> R.string.dashboard_dns_remote
+        }
+    return context.getString(resId)
 }

@@ -16,6 +16,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
@@ -59,6 +60,7 @@ fun SettingsScreen(
     onNavigateToWhitelist: () -> Unit = {},
     onNavigateToServerManagement: () -> Unit = {},
     onNavigateToKeyManagement: () -> Unit = {},
+    onNavigateToLogs: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val biometricUnlock by viewModel.biometricUnlock.collectAsState()
@@ -144,6 +146,18 @@ fun SettingsScreen(
                         )
                     },
                     onClick = onNavigateToWhitelist,
+                )
+                SettingsRow(
+                    title = stringResource(R.string.settings_logs),
+                    subtitle = stringResource(R.string.settings_logs_desc),
+                    trailing = {
+                        Icon(
+                            Icons.AutoMirrored.Filled.List,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    onClick = onNavigateToLogs,
                 )
                 SettingsRow(
                     title = stringResource(R.string.settings_language),
