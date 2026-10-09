@@ -11,8 +11,14 @@ import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.android.components.ActivityComponent
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
 import javax.inject.Inject
 import javax.inject.Singleton
+import java.security.KeyStore
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 
 @Singleton
 class BiometricAuth
@@ -42,7 +48,12 @@ class BiometricAuth
                     executor,
                     object : BiometricPrompt.AuthenticationCallback() {
                         override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                            onSuccess()
+                            val cipher = result.cryptoObject?.cipher
+                            if (cipher != null) {
+                                onSuccess()
+                            } else {
+                                onCancelled()
+                            }
                         }
 
                         override fun onAuthenticationError(
@@ -66,7 +77,46 @@ class BiometricAuth
                     .setAllowedAuthenticators(
                         BiometricManager.Authenticators.BIOMETRIC_STRONG,
                     ).build()
-            prompt.authenticate(promptInfo)
+
+            val cipher = try {
+                createAuthCipher()
+            } catch (_: Exception) {
+                onCancelled()
+                return
+            }
+
+            prompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(cipher))
+        }
+
+        private fun createAuthCipher(): Cipher {
+            val cipher = Cipher.getInstance(cipherTransformation)
+            val secretKey = getOrCreateBiometricSecretKey()
+            cipher.init(Cipher.ENCRYPT_MODE, secretKey)
+            return cipher
+        }
+
+        private fun getOrCreateBiometricSecretKey(): SecretKey {
+            val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            val existingKey = keyStore.getKey(biometricKeyAlias, null) as? SecretKey
+            if (existingKey != null) return existingKey
+
+            val keyGenerator =
+                KeyGenerator.getInstance(
+                    KeyProperties.KEY_ALGORITHM_AES,
+                    "AndroidKeyStore",
+                )
+            val spec =
+                KeyGenParameterSpec
+                    .Builder(
+                        biometricKeyAlias,
+                        KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+                    ).setBlockModes(KeyProperties.BLOCK_MODE_CBC)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_PKCS7)
+                    .setUserAuthenticationRequired(true)
+                    .setInvalidatedByBiometricEnrollment(true)
+                    .build()
+            keyGenerator.init(spec)
+            return keyGenerator.generateKey()
         }
 
         /**
