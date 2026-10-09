@@ -25,33 +25,13 @@ class SettingsIntegrationTest {
     @Test
     fun `test auto connect setting`() =
         runBlocking {
-            // Test reading default value
-            val defaultValue = settingsDataStore.autoConnect.first()
-            assertFalse(defaultValue)
-
-            // Test setting value
-            settingsDataStore.setAutoConnect(true)
-            val updatedValue = settingsDataStore.autoConnect.first()
-            assertTrue(updatedValue)
-
-            // Reset
+            // 不断言"默认值": DataStore 持久化, 上一次运行的 Reset 会留下显式存储值,
+            // "读默认"在第二次运行必然不等于默认 (生产默认为 true)。只验证读写往返。
             settingsDataStore.setAutoConnect(false)
-        }
+            assertFalse(settingsDataStore.autoConnect.first())
 
-    @Test
-    fun `test notification setting`() =
-        runBlocking {
-            // Test reading default value
-            val defaultValue = settingsDataStore.notificationEnabled.first()
-            assertTrue(defaultValue) // Default is true
-
-            // Test setting value
-            settingsDataStore.setNotificationEnabled(false)
-            val updatedValue = settingsDataStore.notificationEnabled.first()
-            assertFalse(updatedValue)
-
-            // Reset
-            settingsDataStore.setNotificationEnabled(true)
+            settingsDataStore.setAutoConnect(true)
+            assertTrue(settingsDataStore.autoConnect.first())
         }
 
     @Test

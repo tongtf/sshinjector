@@ -4,18 +4,15 @@
 
     <!-- General -->
     <string name="cancel">Cancel</string>
-    <string name="confirm">OK</string>
     <string name="save">Save</string>
     <string name="delete">Delete</string>
     <string name="copy">Copy</string>
     <string name="back">Back</string>
-    <string name="refresh">Refresh</string>
     <string name="close">Close</string>
     <string name="search">Search</string>
     <string name="clear">Clear</string>
     <string name="import_">Import</string>
     <string name="generate">Generate</string>
-    <string name="connecting">Connecting…</string>
 
     <!-- Main Navigation -->
     <string name="nav_main">Home</string>
@@ -52,8 +49,6 @@
     <string name="dashboard_add_key">Add Key</string>
     <string name="dashboard_no_keys">No Keys</string>
     <string name="dashboard_no_keys_hint">Generate or import an SSH key for authentication</string>
-    <string name="dashboard_edit">Edit</string>
-    <string name="dashboard_pair_key">Generate &amp; associate key</string>
     <string name="dashboard_key_copied">Public key copied</string>
     <string name="dashboard_copy_success">Copied</string>
     <string name="dashboard_copy_failed">Failed</string>
@@ -107,13 +102,8 @@
     <string name="settings_ad_block_desc">Block ads and tracking domains for common apps</string>
     <string name="settings_ad_block_custom_title">Custom ad domains</string>
     <string name="settings_ad_block_custom_desc">One domain per line; matched domains resolve to 0.0.0.0 (merged with built-in list)</string>
-    <string name="settings_ad_block_custom_hint">e.g. ad.qq.com</string>
-    <string name="settings_ad_block_custom_save">Save</string>
-    <string name="settings_ad_block_custom_reset">Clear</string>
-    <string name="settings_ad_block_custom_empty">No custom ad domains added</string>
     <string name="settings_domain_list_desc">Configure domain split list (only effective in domain split mode)</string>
     <string name="settings_language">Language</string>
-    <string name="settings_language_desc">Change the app display language</string>
     <string name="settings_security">Security</string>
     <string name="settings_biometric_unlock">Biometric Unlock</string>
     <string name="settings_biometric_unlock_desc">Protect keys with fingerprint/face</string>
@@ -124,7 +114,6 @@
     <string name="settings_license_dialog_title">MIT License</string>
     <string name="settings_github">GitHub</string>
     <string name="settings_github_url">https://github.com/tongtf/sshinjector</string>
-    <string name="settings_github_desc">View source code</string>
     <string name="settings_biometric_disable_title">Disable Biometric Unlock</string>
     <string name="settings_biometric_disable_msg">You will no longer use biometric protection for keys. Please verify your identity to confirm.</string>
     <string name="settings_biometric_verify">Verify &amp; Disable</string>

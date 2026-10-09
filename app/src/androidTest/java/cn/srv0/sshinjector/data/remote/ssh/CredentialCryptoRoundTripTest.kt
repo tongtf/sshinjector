@@ -27,7 +27,8 @@ class CredentialCryptoRoundTripTest {
     fun `encrypt then decrypt restores original password`() {
         val plain = "S3cret!密码😀 with spaces and special chars: @#$%^&*"
         val stored = crypto.encrypt(plain)
-        assertTrue(crypto.isEncrypted(stored))
+        // CredentialCrypto 没有 isEncrypted (那在 AesGcmCipher 上), 直接断言密文前缀形态
+        assertTrue(stored!!.startsWith(AesGcmCipher.ENCRYPTED_PREFIX))
         assertNotEquals(plain, stored)
         assertEquals(plain, crypto.decrypt(stored))
     }
@@ -88,7 +89,7 @@ class CredentialCryptoRoundTripTest {
                         ),
                     )
                 val raw = db.serverDao().getByIdBlocking(id)
-                assertTrue(crypto.isEncrypted(raw?.password))
+                assertTrue(raw?.password!!.startsWith(AesGcmCipher.ENCRYPTED_PREFIX))
                 assertNotEquals("P@ss!w0rd", raw?.password)
                 assertEquals("P@ss!w0rd", repo.getServerById(id)?.password)
             } finally {

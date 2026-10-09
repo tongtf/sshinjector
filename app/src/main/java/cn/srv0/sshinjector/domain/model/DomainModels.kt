@@ -15,42 +15,30 @@ data class ServerConfig(
     var isActive: Boolean = false,
     val createdAt: Date = Date(),
     var updatedAt: Date = Date(),
-    var lastConnectedAt: Date? = null,
     val connectTimeout: Int = 10000,
     /** SSH keepAlive 周期, 单位: 秒 (与 ServerEntity/UI 一致 — 曾因按毫秒 delay 导致每 30ms 一个心跳包) */
     val keepAliveInterval: Int = 30,
     val mtu: Int = 1500,
     val enableIPv6: Boolean = true,
-    val dnsMode: DnsMode = DnsMode.Remote,
-    val allowedPackages: List<String> = emptyList(),
     val excludedRoutes: List<String> = emptyList(),
     val password: String? = null, // 可选：SSH 密码认证
     val socksPort: Int = 1080, // 本地 SOCKS5 监听端口
     val hostKeyFingerprint: String? = null, // SSH Host Key 指纹 (SHA256)
-    val keyPassphrase: String? = null, // 私钥 passphrase（遗留，由 SshKeyManager 独立管理）
-    val remoteDnsServer: String = "8.8.8.8", // REMOTE 模式 DNS 解析服务器
 ) {
     enum class KeyAlgorithm { Ed25519, RSA4096, ECDSA_P256 }
-
-    enum class DnsMode { Remote, Local, System }
 }
 
 data class WhitelistApp(
     val packageName: String,
     val appName: String,
-    val iconHash: String = "",
     var isEnabled: Boolean = true,
     val addedAt: Date = Date(),
-    var lastUsedAt: Date? = null,
 )
 
 data class ConnectionStats(
     val bytesSent: Long = 0,
     val bytesReceived: Long = 0,
-    val packetsSent: Long = 0,
-    val packetsReceived: Long = 0,
     val startTime: Date = Date(),
-    val lastUpdate: Date = Date(),
 )
 
 /**

@@ -25,9 +25,6 @@ class AdBlocker
         // 顶层总开关, 由 DnsInterceptor.setEnabledAdBlock 在连接时注入; 关闭时直接放行。
         @Volatile private var enabled = true
 
-        /** 当前是否已开启过滤 (供日志 / UI 查询)。 */
-        fun isEnabled(): Boolean = enabled
-
         fun setEnabled(enabled: Boolean) {
             this.enabled = enabled
             Log.d(TAG, "AdBlocker enabled=$enabled")

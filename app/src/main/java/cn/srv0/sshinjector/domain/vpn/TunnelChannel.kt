@@ -52,7 +52,6 @@ interface SshChannelFactory {
 
     data class ConnectionResult(
         val success: Boolean,
-        val localSocksPort: Int = 0,
         val error: String? = null,
     )
 }

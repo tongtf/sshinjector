@@ -1,24 +1,13 @@
 package cn.srv0.sshinjector.domain.vpn.tunnel
 
 import cn.srv0.sshinjector.domain.vpn.TunnelChannel
-import kotlinx.coroutines.flow.StateFlow
 
 interface TunnelPlugin {
     val id: String
 
-    val displayName: String
-
-    val iconResId: Int
-
-    val capabilities: Set<TunnelCapability>
-
-    val configDescriptor: TunnelConfigDescriptor
-
     suspend fun connect(config: TunnelConfig): Result<Unit>
 
     suspend fun disconnect()
-
-    val state: StateFlow<TunnelState>
 
     fun openTcpChannel(
         host: String,
@@ -38,14 +27,6 @@ interface TunnelPlugin {
      * null = 未提供认证能力; 服务端 fail-closed 拒绝一切连接, 客户端也会拒绝发起。
      */
     val socksAuth: Pair<String, String>? get() = null
-
-    fun sendUdp(
-        dstHost: String,
-        dstPort: Int,
-        payload: ByteArray,
-    ): Unit = throw UnsupportedOperationException("UDP not supported by $id")
-
-    suspend fun forwardDns(query: ByteArray): ByteArray? = null
 
     /**
      * 注册回向直通回调: 远端数据不经本地 SOCKS socket 中转,
@@ -85,6 +66,4 @@ interface TunnelPlugin {
     fun removeTargetEofCallback(clientPort: Int) {
         // 默认无操作
     }
-
-    val stats: StateFlow<TunnelStats>
 }

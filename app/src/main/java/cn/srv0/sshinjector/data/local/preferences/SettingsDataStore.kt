@@ -9,6 +9,8 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_REMOTE
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -21,7 +23,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 class SettingsDataStore
     @Inject
     constructor(
-        private val context: Context,
+        @ApplicationContext private val context: Context,
     ) {
         companion object {
             private val KEY_AUTO_CONNECT = booleanPreferencesKey("auto_connect")
@@ -39,7 +41,6 @@ class SettingsDataStore
             private val KEY_DOMAIN_LIST_URL = stringPreferencesKey("domain_list_url")
             private val KEY_DOMAIN_LIST_LAST_UPDATE = longPreferencesKey("domain_list_last_update")
             private val KEY_LANGUAGE = stringPreferencesKey("language")
-            private const val KEY_KEYSTORE_ALIAS_PREFIX = "keystore_alias_"
 
             const val DEFAULT_DOMAIN_LIST_URL = "https://gitlab.com/gfwlist/gfwlist/raw/master/gfwlist.txt"
 
@@ -81,7 +82,7 @@ class SettingsDataStore
 
         val dnsMode: Flow<Int> =
             context.dataStore.data
-                .map { it[KEY_DNS_MODE] ?: 0 } // 默认远程代理模式
+                .map { it[KEY_DNS_MODE] ?: DNS_MODE_REMOTE } // 默认远程代理模式
 
         // 广告过滤总开关, 默认开启
         val adBlockEnabled: Flow<Boolean> =
@@ -206,25 +207,5 @@ class SettingsDataStore
                 .edit()
                 .putString("language", code)
                 .apply()
-        }
-
-        suspend fun setKeyAlias(
-            serverId: Long,
-            alias: String,
-        ) {
-            val key = stringPreferencesKey("${KEY_KEYSTORE_ALIAS_PREFIX}$serverId")
-            context.dataStore.edit { it[key] = alias }
-        }
-
-        suspend fun getKeyAlias(serverId: Long): String? {
-            val key = stringPreferencesKey("${KEY_KEYSTORE_ALIAS_PREFIX}$serverId")
-            return context.dataStore.data
-                .map { it[key] }
-                .first()
-        }
-
-        suspend fun removeKeyAlias(serverId: Long) {
-            val key = stringPreferencesKey("${KEY_KEYSTORE_ALIAS_PREFIX}$serverId")
-            context.dataStore.edit { it.remove(key) }
         }
     }

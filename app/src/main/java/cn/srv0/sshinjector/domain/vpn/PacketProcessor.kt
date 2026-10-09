@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -39,8 +40,6 @@ class PacketProcessor
         private val udpRelay = UdpRelay(stats)
         private val icmpv6Responder = Icmpv6Responder({ tunWriter })
 
-        val packetsProcessed: StateFlow<Long> = stats.packetsProcessed
-        val bytesProcessed: StateFlow<Long> = stats.bytesProcessed
         val errors: StateFlow<Long> = stats.errors
 
         init {
@@ -66,11 +65,7 @@ class PacketProcessor
         // S5: IPv6 关闭时 TUN 捕获到的 v6 包一律丢弃 —— 关闭 = 不用 IPv6, 而非让其逃逸物理网卡
         @Volatile private var enableIPv6 = true
         private val droppedIpv6Count =
-            java.util.concurrent.atomic
-                .AtomicLong(0)
-
-        val droppedIpv6: Long
-            get() = droppedIpv6Count.get()
+            AtomicLong(0)
 
         fun setEnableIPv6(enable: Boolean) {
             enableIPv6 = enable
@@ -189,4 +184,10 @@ class PacketProcessor
          * 「下载慢」里有多少是 QUIC 一直在被丢弃后才回退 TCP。
          */
         fun udpDiagnostics(): String = "UDP 丢弃 ${udpRelay.droppedUdp} 个"
+
+        /**
+         * IPv6 关闭时的丢弃量 (S5)。进 60s 数据面快照: 非 0 说明客户端在持续尝试 v6
+         * (路由没盖住或应用只发 AAAA), 是"某站点打不开"的一眼线索。
+         */
+        fun ipv6Diagnostics(): String = "IPv6 丢弃 ${droppedIpv6Count.get()} 个"
     }

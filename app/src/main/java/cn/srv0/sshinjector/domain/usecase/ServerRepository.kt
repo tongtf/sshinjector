@@ -10,15 +10,15 @@ import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.model.WhitelistApp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.util.Date
 import javax.inject.Inject
-import cn.srv0.sshinjector.data.local.entity.DnsMode as EntityDnsMode
+import javax.inject.Singleton
 
+@Singleton
 class ServerRepository
     @Inject
     constructor(
@@ -67,11 +67,6 @@ class ServerRepository
                 }
             }
 
-        suspend fun updateServer(config: ServerConfig) =
-            withContext(Dispatchers.IO) {
-                serverDao.update(config.toEntity(credentialCrypto))
-            }
-
         /**
          * 编辑/新建服务器并保留表单未展示的字段（已加密密码、指纹、DNS 模式等）。
          *
@@ -105,8 +100,8 @@ class ServerRepository
         /**
          * 编辑合并：以既有实体为基底，仅覆盖表单可编辑字段。密码仅在提供时重新加密，
          * 否则原样保留已加密密文（字节稳定）；存量明文（无 enc:v1: 前缀）在下次保存时惰性重加密，
-         * 读端仍兼容明文。keyAlgorithm/keyPassphrase/hostKeyFingerprint/
-         * dnsMode/remoteDnsServer/allowedPackages/excludedRoutes/createdAt 全部沿用既有值。
+         * 读端仍兼容明文。keyAlgorithm/hostKeyFingerprint/excludedRoutes/createdAt 等
+         * 表单未展示字段全部沿用既有实体值 (Room 列保留, 不参与 domain 往返)。
          */
         private fun mergeForEdit(
             existing: ServerEntity,
@@ -146,19 +141,9 @@ class ServerRepository
 
         // ===== 白名单 =====
 
-        suspend fun getEnabledWhitelist(): List<WhitelistApp> =
-            withContext(Dispatchers.IO) {
-                whitelistDao.getEnabledBlocking().map { it.toDomain() }
-            }
-
         val enabledWhitelistFlow: Flow<List<WhitelistApp>> =
             whitelistDao.getEnabled().map {
                 it.map { it.toDomain() }
-            }
-
-        suspend fun getAllWhitelist(): List<WhitelistApp> =
-            withContext(Dispatchers.IO) {
-                whitelistDao.getAll().first().map { it.toDomain() }
             }
 
         suspend fun addToWhitelist(app: WhitelistApp) =
@@ -169,11 +154,6 @@ class ServerRepository
         suspend fun removeFromWhitelist(packageName: String) =
             withContext(Dispatchers.IO) {
                 whitelistDao.delete(packageName)
-            }
-
-        suspend fun updateWhitelist(app: WhitelistApp) =
-            withContext(Dispatchers.IO) {
-                whitelistDao.update(app.toEntity())
             }
 
         suspend fun getEnabledPackageNames(): List<String> =
@@ -200,24 +180,13 @@ private fun ServerEntity.toDomain(credentialCrypto: CredentialCrypto): ServerCon
         isActive = isActive,
         createdAt = createdAt,
         updatedAt = updatedAt,
-        lastConnectedAt = null,
         connectTimeout = 10000,
         keepAliveInterval = keepAliveInterval,
         mtu = mtu,
         enableIPv6 = enableIPv6,
-        dnsMode =
-            when (dnsMode) {
-                EntityDnsMode.REMOTE -> ServerConfig.DnsMode.Remote
-                EntityDnsMode.LOCAL -> ServerConfig.DnsMode.Local
-                EntityDnsMode.SYSTEM -> ServerConfig.DnsMode.System
-                EntityDnsMode.SPLIT -> ServerConfig.DnsMode.Remote
-            },
-        allowedPackages = parseJsonStringList(allowedPackages),
         excludedRoutes = parseJsonStringList(excludedRoutes),
         socksPort = socksPort,
         hostKeyFingerprint = hostKeyFingerprint,
-        keyPassphrase = keyPassphrase,
-        remoteDnsServer = remoteDnsServer,
     )
 
 private fun ServerConfig.toEntity(credentialCrypto: CredentialCrypto): ServerEntity =
@@ -234,20 +203,11 @@ private fun ServerConfig.toEntity(credentialCrypto: CredentialCrypto): ServerEnt
         mtu = mtu,
         keepAliveInterval = keepAliveInterval,
         enableIPv6 = enableIPv6,
-        dnsMode =
-            when (dnsMode) {
-                ServerConfig.DnsMode.Remote -> EntityDnsMode.REMOTE
-                ServerConfig.DnsMode.Local -> EntityDnsMode.LOCAL
-                ServerConfig.DnsMode.System -> EntityDnsMode.SYSTEM
-            },
-        allowedPackages = toJsonStringList(allowedPackages),
         excludedRoutes = toJsonStringList(excludedRoutes),
         socksPort = socksPort,
         createdAt = createdAt,
         updatedAt = updatedAt,
         hostKeyFingerprint = hostKeyFingerprint,
-        keyPassphrase = keyPassphrase,
-        remoteDnsServer = remoteDnsServer,
     )
 
 private fun parseJsonStringList(json: String?): List<String> {
@@ -269,7 +229,6 @@ private fun WhitelistAppEntity.toDomain(): WhitelistApp =
     WhitelistApp(
         packageName = packageName,
         appName = appName,
-        iconHash = "",
         isEnabled = isEnabled,
         addedAt = addedAt,
     )

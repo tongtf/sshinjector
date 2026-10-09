@@ -86,30 +86,12 @@ interface WhitelistDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(app: WhitelistAppEntity): Long
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAll(apps: List<WhitelistAppEntity>)
-
-    @Update
-    suspend fun update(app: WhitelistAppEntity): Int
-
     @Query("DELETE FROM whitelist_apps WHERE packageName = :packageName")
     suspend fun delete(packageName: String): Int
-
-    @Query("SELECT * FROM whitelist_apps WHERE packageName = :packageName")
-    fun getByPackageName(packageName: String): Flow<WhitelistAppEntity?>
 
     @Query("SELECT * FROM whitelist_apps WHERE isEnabled = 1")
     fun getEnabled(): Flow<List<WhitelistAppEntity>>
 
-    @Query("SELECT * FROM whitelist_apps WHERE isEnabled = 1")
-    suspend fun getEnabledBlocking(): List<WhitelistAppEntity>
-
-    @Query("SELECT * FROM whitelist_apps ORDER BY appName ASC")
-    fun getAll(): Flow<List<WhitelistAppEntity>>
-
     @Query("SELECT packageName FROM whitelist_apps WHERE isEnabled = 1")
     suspend fun getEnabledPackageNames(): List<String>
-
-    @Query("SELECT COUNT(*) FROM whitelist_apps WHERE isEnabled = 1")
-    suspend fun countEnabled(): Int
 }

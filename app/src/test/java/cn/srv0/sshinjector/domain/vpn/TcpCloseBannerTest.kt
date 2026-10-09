@@ -1,13 +1,8 @@
 package cn.srv0.sshinjector.domain.vpn
 
-import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelCapability
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelConfig
-import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelConfigDescriptor
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelPlugin
-import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelState
-import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelStats
-import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -410,13 +405,7 @@ class TcpCloseBannerTest {
         @Volatile var targetEofCallback: ((Boolean) -> Unit)? = null
 
         override val id = "fake-socks"
-        override val displayName = "fake"
-        override val iconResId = 0
-        override val capabilities = setOf(TunnelCapability.TCP)
-        override val configDescriptor = TunnelConfigDescriptor(emptyList())
         override val socksAuth: Pair<String, String> = "user" to "pass"
-        override val state = MutableStateFlow(TunnelState())
-        override val stats = MutableStateFlow(TunnelStats())
 
         override suspend fun connect(config: TunnelConfig): Result<Unit> = Result.success(Unit)
 
