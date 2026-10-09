@@ -11,12 +11,14 @@ import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.model.VpnState
 import cn.srv0.sshinjector.domain.vpn.AdBlocker
 import cn.srv0.sshinjector.domain.vpn.CidrRoute
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_WHITELIST
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
 import cn.srv0.sshinjector.domain.vpn.GfwListMatcher
 import cn.srv0.sshinjector.domain.vpn.IpPacketParser
 import cn.srv0.sshinjector.domain.vpn.PacketProcessor
 import cn.srv0.sshinjector.domain.vpn.StageCounters
 import cn.srv0.sshinjector.domain.vpn.StageHealthEvaluator
+import cn.srv0.sshinjector.domain.vpn.VpnNetwork
 import cn.srv0.sshinjector.domain.vpn.dnsTransportFor
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelConfig
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
@@ -26,12 +28,15 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -39,6 +44,8 @@ import java.io.FileDescriptor
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.net.DatagramSocket
+import java.net.Inet6Address
 import java.net.InetAddress
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -48,7 +55,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /** 每包级 DEBUG 日志门: 开启后才进应用内日志, 否则只走 logcat (防刷穿 replay 缓存)。 */
-private val IS_DEBUG = android.util.Log.isLoggable("VpnController", android.util.Log.DEBUG)
+private val IS_DEBUG = Log.isLoggable("VpnController", Log.DEBUG)
 
 /**
  * VPN 控制器 - 管理 VPN 连接的完整生命周期
@@ -66,7 +73,7 @@ class VpnController
         private val domainListManager: DomainListManager,
         private val adBlockManager: cn.srv0.sshinjector.data.local.AdBlockManager,
         @ApplicationContext private val context: Context,
-    ) : CoroutineScope by CoroutineScope(Dispatchers.IO + Job()) {
+    ) : CoroutineScope by CoroutineScope(Dispatchers.IO + SupervisorJob()) {
         @Volatile private var vpnInterface: FileDescriptor? = null
 
         @Volatile private var inputStream: FileInputStream? = null
@@ -90,17 +97,13 @@ class VpnController
         //   bytesDownCounter = 写 TUN = 隧道下行 (远端 → 应用), 在 writeToTun 累加;
         //   bytesUpCounter   = 读 TUN = 隧道上行 (应用 → 远端), 在 packetLoop 累加。
         private val bytesDownCounter =
-            java.util.concurrent.atomic
-                .AtomicLong(0)
+            AtomicLong(0)
         private val bytesUpCounter =
-            java.util.concurrent.atomic
-                .AtomicLong(0)
+            AtomicLong(0)
         private val packetsSentCounter =
-            java.util.concurrent.atomic
-                .AtomicLong(0)
+            AtomicLong(0)
         private val packetsReceivedCounter =
-            java.util.concurrent.atomic
-                .AtomicLong(0)
+            AtomicLong(0)
 
         // 数据面快照的上一窗口基线 (用于算速率)
         private var lastSnapshotUp = 0L
@@ -109,8 +112,11 @@ class VpnController
         /** 一次 TUN 读取里没能解析成包的残留字节 (批量读取路径的监控点)。 */
         private val trailingBytesDropped = AtomicLong(0)
 
+        /** TUN 接口为空时被整包跳过的计数 —— 隧道看似在线但流量全被吞, 必须进快照可见。 */
+        private val droppedNoTun = AtomicLong(0)
+
         // 用于 SYSTEM 模式 DNS 绕过的 socket 保护函数
-        private var protectDatagramChannel: ((java.net.DatagramSocket) -> Boolean)? = null
+        private var protectDatagramChannel: ((DatagramSocket) -> Boolean)? = null
 
         // F1: TCP 用户态直连的 protect (必须在 connect 前调用, 由 SshVpnService 注入)
         @Volatile private var protectTcpSocket: ((java.net.Socket) -> Boolean)? = null
@@ -156,6 +162,11 @@ class VpnController
                 context.assets.open("adblock.txt").use { it.readBytes().toString(Charsets.UTF_8) }
             } catch (e: Exception) {
                 Log.w("VpnController", "load adblock.txt failed: ${e.message}")
+                appLogThrottled(
+                    "广告清单加载失败 — ${e.message} · 内置规则未生效",
+                    level = LogLevel.WARNING,
+                    throttleKey = "广告清单加载失败",
+                )
                 ""
             }
 
@@ -164,8 +175,11 @@ class VpnController
             protectTcpSocket = protectSocket
         }
 
-        val vpnState = MutableStateFlow<VpnState>(VpnState())
-        val connectionStats = MutableStateFlow<ConnectionStats>(ConnectionStats())
+        // 只读暴露: 注入者 (ViewModel/Service) 只允许 collect/读 value, 状态真相只由本类更新
+        private val _vpnState = MutableStateFlow<VpnState>(VpnState())
+        val vpnState: StateFlow<VpnState> = _vpnState.asStateFlow()
+        private val _connectionStats = MutableStateFlow<ConnectionStats>(ConnectionStats())
+        val connectionStats: StateFlow<ConnectionStats> = _connectionStats.asStateFlow()
 
         // replay=500: 日志界面未打开时保留最近 500 条 (无订阅者时 replay 缓存是唯一副本);
         // 界面打开时订阅者先收到 replay 批量, 再持续接收增量。
@@ -189,7 +203,7 @@ class VpnController
         // R5: daemon 线程, 进程退出不被 DNS bypass 任务挂住
         private val executor = Executors.newCachedThreadPool { r -> Thread(r, "dns-bypass").apply { isDaemon = true } }
 
-        fun setProtectFunction(protectDatagramChannel: ((java.net.DatagramSocket) -> Boolean)?) {
+        fun setProtectFunction(protectDatagramChannel: ((DatagramSocket) -> Boolean)?) {
             addLog(">>> [VpnController] setProtectFunction 被调用", LogLevel.DEBUG)
             this.protectDatagramChannel = protectDatagramChannel
         }
@@ -335,18 +349,7 @@ class VpnController
             /**
              * 判定 IP 是否为 DnsInterceptor 分配的假 IP (198.18.0.0/15, fd00::/8)。
              */
-            internal fun isFakeIp(ip: InetAddress): Boolean {
-                val bytes = ip.address
-                if (bytes.size == 4) {
-                    val b0 = bytes[0].toInt() and 0xFF
-                    val b1 = bytes[1].toInt() and 0xFF
-                    return b0 == 198 && (b1 == 18 || b1 == 19)
-                }
-                if (bytes.size == 16) {
-                    return (bytes[0].toInt() and 0xFF) == 0xFD
-                }
-                return false
-            }
+            internal fun isFakeIp(ip: InetAddress): Boolean = VpnNetwork.isFakeIp(ip)
 
             /** 假 IP 的字符串形式 (是假 IP 才返回, 否则 null); 供引用计数表做 key。 */
             internal fun fakeIpOrNull(ip: InetAddress): String? = ip.hostAddress?.takeIf { isFakeIp(ip) }
@@ -404,7 +407,7 @@ class VpnController
                 val dnsModeValue = settingsDataStore.dnsMode.first()
                 this.transportMode = dnsTransportFor(dnsModeValue, whitelistPackages)
                 dnsInterceptor.setTransportMode(this.transportMode)
-                if (dnsModeValue == 2 && whitelistPackages.isEmpty()) {
+                if (dnsModeValue == DNS_MODE_WHITELIST && whitelistPackages.isEmpty()) {
                     addLog(
                         "白名单为空: 全部流量不走隧道, DNS 按本地直连解析 (避免假 IP 无路由)",
                         LogLevel.INFO,
@@ -462,18 +465,13 @@ class VpnController
 
                 // 4. 解析排除路由 (CIDR)
                 updateState { it.copy(connectStage = ConnectStage.ROUTES) }
-                excludedRoutes = currentServer?.excludedRoutes?.mapNotNull { CidrRoute.parse(it) } ?: emptyList()
+                excludedRoutes = baseExcludedRoutes()
 
                 // SYSTEM 模式: 获取 DHCP 分配的 DNS 服务器，添加到绕过列表
                 if (transportMode == DnsInterceptor.DnsTransport.SYSTEM) {
                     for (dnsIp in systemDns) {
-                        // 将 DNS 服务器 IP 转为 /32 路由加入排除列表
-                        try {
-                            val addr = InetAddress.getByName(dnsIp)
-                            excludedRoutes += CidrRoute(addr, if (addr is java.net.Inet6Address) 128 else 32)
-                        } catch (e: Exception) {
-                            addLog("解析 DNS IP 失败: $dnsIp", LogLevel.WARNING)
-                        }
+                        // 将 DNS 服务器 IP 转为 /32(/128) 路由加入排除列表
+                        dnsHostRouteOrNull(dnsIp)?.let { excludedRoutes += it }
                     }
                     if (systemDns.isNotEmpty()) {
                         addLog(
@@ -484,11 +482,7 @@ class VpnController
                         addLog("SYSTEM 模式: 未获取到系统 DNS，使用默认 8.8.8.8", LogLevel.WARNING)
                         // 兜底：添加常用公共 DNS 到排除路由
                         for (dnsIp in listOf("8.8.8.8", "1.1.1.1", "114.114.114.114")) {
-                            try {
-                                val addr = InetAddress.getByName(dnsIp)
-                                excludedRoutes += CidrRoute(addr, if (addr is java.net.Inet6Address) 128 else 32)
-                            } catch (_: Exception) {
-                            }
+                            dnsHostRouteOrNull(dnsIp)?.let { excludedRoutes += it }
                         }
                     }
                 }
@@ -587,14 +581,27 @@ class VpnController
                 it.copy(
                     status = VpnState.VpnStatus.Disconnected,
                     server = null,
-                    stats =
-                        it.stats.copy(
-                            lastUpdate = java.util.Date(),
-                        ),
                 )
             }
             addLog("VPN 连接已完全断开", LogLevel.INFO)
         }
+
+        /** 当前服务器配置的基础排除路由 (IP 字面量 CIDR, 无法解析的条目跳过)。 */
+        private fun baseExcludedRoutes() = currentServer?.excludedRoutes?.mapNotNull(CidrRoute::parse) ?: emptyList()
+
+        /** DNS 服务器 IP → 单主机排除路由 (/32 或 /128); 解析失败上报并返回 null。 */
+        private fun dnsHostRouteOrNull(dnsIp: String): CidrRoute? =
+            try {
+                val addr = InetAddress.getByName(dnsIp)
+                CidrRoute(addr, if (addr is Inet6Address) 128 else 32)
+            } catch (e: Exception) {
+                appLogThrottled(
+                    "排除路由 DNS 解析失败 · $dnsIp — ${e.message}",
+                    level = LogLevel.WARNING,
+                    throttleKey = "排除路由 DNS 解析失败",
+                )
+                null
+            }
 
         /**
          * 实时更新 DNS 传输模式
@@ -632,12 +639,8 @@ class VpnController
                 }
             }
 
-            // 所有模式都不排除 DNS 服务器，让 DNS 流量走 VPN 隧道
-            val commonDohEndpoints = emptyList<CidrRoute>()
-            val dnsExcludes = emptyList<CidrRoute>()
-
-            val baseRoutes = currentServer?.excludedRoutes?.mapNotNull { CidrRoute.parse(it) } ?: emptyList()
-            excludedRoutes = baseRoutes + commonDohEndpoints + dnsExcludes
+            // 所有模式都不排除 DNS 服务器，让 DNS 流量走 VPN 隧道 (只保留服务器配置的基础排除)
+            excludedRoutes = baseExcludedRoutes()
             addLog(
                 "DNS 模式已切换: $transportMode, 排除路由: ${excludedRoutes.size} 条",
                 LogLevel.INFO,
@@ -647,14 +650,18 @@ class VpnController
         /**
          * 强制重置状态 (超时后调用)
          *
-         * 必须与 [disconnect] 的清理段保持一致 —— 少了下面两项就会跨会话泄漏:
+         * 必须与 [disconnect] 的清理段保持一致 —— 少了任意一项就会跨会话泄漏:
          * ① `clearPendingResponses()` 不做, 未排空的 DNS 应答会在下一次 connect 重开的
          *    dnsResponseDeliveryLoop 里被投给**新会话**的 TUN;
          * ② `resetTcpState()` 不做, 旧连接表原样留到新会话 (新 SYN 虽会关旧重建,
-         *    但关闭包/黑洞统计会算在新会话头上)。
+         *    但关闭包/黑洞统计会算在新会话头上);
+         * ③ `tunnelManager.stopAll()` 不做, SSH 会话池与本地 SOCKS 监听 socket 泄漏 ——
+         *    本函数先置 `isRunning=false`, 之后 Service onDestroy 里的 `disconnect()` 会在
+         *    开头提前 return, 永远轮不到它清理隧道;
+         * ④ TUN 流不关, fd 泄漏 (与 ③ 同因, disconnect 的关闭段也被跳过)。
          * 调用点: 断开卡在 Disconnecting 超 3s 后 MainViewModel 直接 stopService + forceReset。
          */
-        fun forceReset() {
+        suspend fun forceReset() {
             // F12-j: 释放对 VpnService 的 lambda 引用
             setProtectFunction(null)
             setProtectTcpFunction(null)
@@ -669,6 +676,18 @@ class VpnController
             // 投递协程已随 cancelChildren 停掉, 此刻排空不会与新会话竞争
             dnsInterceptor.clearPendingResponses()
             packetProcessor.resetTcpState()
+
+            // 与 disconnect() 的清理段对齐: 先停隧道 (SSH 会话/本地代理), 再关 TUN 流
+            try {
+                tunnelManager.stopAll()
+            } catch (e: Exception) {
+                addLog("隧道断开错误: ${e.message}", LogLevel.ERROR)
+            }
+            try {
+                inputStream?.close()
+                outputStream?.close()
+            } catch (_: Exception) {
+            }
 
             vpnInterface = null
             inputStream = null
@@ -723,7 +742,7 @@ class VpnController
          * @param generation 接口代次, 用于检测接口重建后旧循环退出
          */
         private fun packetLoop(generation: Long) {
-            android.util.Log.d("VpnController", "packetLoop started gen=$generation")
+            Log.d("VpnController", "packetLoop started gen=$generation")
             while (isRunning && inputStream != null && generation == tunGeneration) {
                 try {
                     val bytesRead = inputStream!!.read(readBuffer.array())
@@ -749,7 +768,7 @@ class VpnController
                 } catch (e: Exception) {
                     if (isRunning) {
                         consecutiveReadFailures++
-                        android.util.Log.e("VpnController", "packetLoop error ($consecutiveReadFailures): ${e.message}")
+                        Log.e("VpnController", "packetLoop error ($consecutiveReadFailures): ${e.message}")
                         // 计数不进文案: appLogThrottled 以整条 message 为节流 key,
                         // "#$N" 每次唯一会让节流彻底失效 (>=20 那条 ERROR 才带计数)
                         appLogThrottled(
@@ -762,7 +781,7 @@ class VpnController
                             // 由 SshVpnService 观察到后执行完整清理 (保留 lastServerId 供重连)。
                             // 不在此置 isRunning=false — 否则 disconnect 的资源清理链在
                             // isVpnRunning() 检查处短路, SSH tunnel 会泄漏
-                            android.util.Log.e("VpnController", "packetLoop failing continuously, stopping")
+                            Log.e("VpnController", "packetLoop failing continuously, stopping")
                             appLog(
                                 "TUN 连续读取失败 $consecutiveReadFailures 次 · 数据循环已停止 (接口已死)",
                                 LogLevel.ERROR,
@@ -781,7 +800,7 @@ class VpnController
                     }
                 }
             }
-            android.util.Log.d("VpnController", "packetLoop ended")
+            Log.d("VpnController", "packetLoop ended")
         }
 
         /**
@@ -815,7 +834,7 @@ class VpnController
                 val firstByte = buffer.get(buffer.position()).toInt() and 0xFF
                 val version = firstByte shr 4
                 if (Log.isLoggable(TAG, Log.DEBUG)) {
-                    android.util.Log.d(
+                    Log.d(
                         TAG,
                         "processPacket: firstByte=0x${"%02x".format(firstByte)} " +
                             "version=$version remaining=${buffer.remaining()}",
@@ -826,7 +845,7 @@ class VpnController
                     val origPos = buffer.position()
                     buffer.get(debugBytes)
                     buffer.position(origPos)
-                    android.util.Log.d(
+                    Log.d(
                         TAG,
                         "raw bytes: ${debugBytes.joinToString("") { "%02x".format(it) }}",
                     )
@@ -834,7 +853,13 @@ class VpnController
 
                 val fd = vpnInterface
                 if (fd == null) {
-                    android.util.Log.w("VpnController", "VPN interface is null, skipping packet")
+                    droppedNoTun.incrementAndGet()
+                    Log.w("VpnController", "VPN interface is null, skipping packet")
+                    appLogThrottled(
+                        "TUN 接口为空 · 数据包被丢弃 (计数进快照)",
+                        level = LogLevel.WARNING,
+                        throttleKey = "TUN 接口为空",
+                    )
                     return 0
                 }
 
@@ -853,7 +878,7 @@ class VpnController
                             packetStart += skip
                             workVersion = probeVersion
                             found = true
-                            android.util.Log.d(
+                            Log.d(
                                 "VpnController",
                                 "skipped $skip bytes prefix, version=$probeVersion",
                             )
@@ -862,7 +887,7 @@ class VpnController
                     }
                     if (!found) {
                         val dump = ByteArray(minOf(16, buffer.remaining())) { buffer.get(packetStart + it) }
-                        android.util.Log.d(
+                        Log.d(
                             "VpnController",
                             "unrecognized packet prefix, first bytes: ${dump.joinToString("") { "%02x".format(it) }}",
                         )
@@ -922,7 +947,7 @@ class VpnController
                     buffer.limit(outerLimit)
                 } catch (_: Exception) {
                 }
-                android.util.Log.e("VpnController", "processPacket error: ${e.message}")
+                Log.e("VpnController", "processPacket error: ${e.message}")
                 appLogThrottled(
                     "数据包处理异常 · ${e::class.simpleName}: ${e.message}",
                     level = LogLevel.WARNING,
@@ -993,7 +1018,7 @@ class VpnController
         private fun shouldBypassVpn(dstIp: InetAddress): Boolean {
             val result = excludedRoutes.any { CidrRoute.matches(dstIp, it) }
             if (result) {
-                android.util.Log.d(
+                Log.d(
                     "VpnController",
                     "shouldBypassVpn: TRUE for $dstIp (excludedRoutes=${excludedRoutes.size})",
                 )
@@ -1027,7 +1052,7 @@ class VpnController
                     StageCounters.onDnsDelivered()
                 }
             } catch (e: Exception) {
-                android.util.Log.e("VpnController", "writeDnsResponse failed: ${e.message}", e)
+                Log.e("VpnController", "writeDnsResponse failed: ${e.message}", e)
                 // src/dst 不进文案 (每条 DNS 应答都不同 → 节流 key 唯一, TUN 持续故障时
                 // 会刷穿 replay=500 缓存把真正要看的日志挤掉); 详情只进 logcat
                 appLogThrottled(
@@ -1090,7 +1115,7 @@ class VpnController
                 true
             } catch (e: Exception) {
                 StageCounters.onTunWrite(success = false)
-                android.util.Log.e("VpnController", "writeToTun FAILED: ${e.message}")
+                Log.e("VpnController", "writeToTun FAILED: ${e.message}")
                 appLogThrottled(
                     "TUN 写入失败 · ${e::class.simpleName}: ${e.message}",
                     level = LogLevel.WARNING,
@@ -1118,13 +1143,10 @@ class VpnController
                 // 最后一帧、60s 数据面快照永久消失 —— 而这是无 adb 现场唯一的观测面。
                 // delay 留在 try 之外: 取消时必须直接抛出, 不能被下面的 catch 吞掉。
                 try {
-                    connectionStats.update {
+                    _connectionStats.update {
                         it.copy(
                             bytesSent = bytesDownCounter.get(),
                             bytesReceived = bytesUpCounter.get(),
-                            packetsSent = packetsSentCounter.get(),
-                            packetsReceived = packetsReceivedCounter.get(),
-                            lastUpdate = java.util.Date(),
                         )
                     }
                     // 每 60s 一条数据面快照 (应用内日志是唯一可见面, 无 adb):
@@ -1152,14 +1174,16 @@ class VpnController
                             "数据面快照 · 上行 $up B / 下行 $down B · 包 ↑${packetsReceivedCounter.get()} " +
                                 "↓${packetsSentCounter.get()} · $rateText · " +
                                 "TUN 残留未解析 ${trailingBytesDropped.get()}B · " +
+                                "TUN 接口空丢包 ${droppedNoTun.get()} · " +
                                 "${packetProcessor.tcpDiagnostics()} · " +
-                                "${packetProcessor.udpDiagnostics()} · $tunnelStats",
+                                "${packetProcessor.udpDiagnostics()} · " +
+                                "${packetProcessor.ipv6Diagnostics()} · $tunnelStats",
                         )
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    android.util.Log.e("VpnController", "statsFlushLoop failed: ${e.message}", e)
+                    Log.e("VpnController", "statsFlushLoop failed: ${e.message}", e)
                     appLogThrottled(
                         "统计发布异常 · ${e::class.simpleName}: ${e.message} — 循环继续",
                         level = LogLevel.WARNING,
@@ -1182,21 +1206,28 @@ class VpnController
             buffer.duplicate().get(packetData)
 
             executor.submit {
-                var socket: java.net.DatagramSocket? = null
+                var socket: DatagramSocket? = null
                 try {
-                    addLog(
-                        ">>> [VpnController] forwardDnsBypassPacket: dstIp=$dstIp, version=$version, " +
-                            "packetSize=${packetData.size}",
-                        LogLevel.DEBUG,
-                    )
-                    socket = java.net.DatagramSocket()
+                    if (IS_DEBUG) {
+                        addLog(
+                            "DNS 绕过转发 · 发起 dstIp=$dstIp version=$version size=${packetData.size}",
+                            LogLevel.DEBUG,
+                        )
+                    }
+                    socket = DatagramSocket()
                     val protected = protectDatagramChannel?.invoke(socket!!) ?: false
-                    addLog(
-                        ">>> [VpnController] VpnService.protect()=$protected",
-                        LogLevel.DEBUG,
-                    )
+                    if (IS_DEBUG) {
+                        addLog(
+                            "DNS 绕过转发 · protect()=$protected",
+                            LogLevel.DEBUG,
+                        )
+                    }
                     if (!protected) {
-                        addLog("SYSTEM DNS: VpnService.protect() 失败", LogLevel.WARNING)
+                        appLogThrottled(
+                            "DNS 绕过保护失败 · protect() 返回 false — 查询可能被 VPN 回环",
+                            level = LogLevel.WARNING,
+                            throttleKey = "DNS 绕过保护失败",
+                        )
                     }
                     socket!!.soTimeout = SOCKET_TIMEOUT_MS
 
@@ -1206,9 +1237,10 @@ class VpnController
                     val ipHeaderLen = IpPacketParser.ipHeaderLength(packetData, version)
                     val payloadStart = IpPacketParser.udpPayloadOffset(packetData, version)
                     if (payloadStart < 0) {
-                        addLog(
-                            ">>> [VpnController] UDP 载荷偏移非法 (ipHeaderLen=$ipHeaderLen), 返回",
-                            LogLevel.WARNING,
+                        appLogThrottled(
+                            "DNS 绕过转发失败 · UDP 载荷偏移非法 (ipHeaderLen=$ipHeaderLen)",
+                            level = LogLevel.WARNING,
+                            throttleKey = "DNS 绕过转发失败",
                         )
                         return@submit
                     }
@@ -1225,28 +1257,24 @@ class VpnController
                         )
                     if (IS_DEBUG) {
                         addLog(
-                            ">>> [VpnController] 发送 DNS 查询到 $dnsServer:53, payload=${payload.size} bytes",
+                            "DNS 绕过转发 · 发送查询到 $dnsServer:53 payload=${payload.size}B",
                             LogLevel.DEBUG,
                         )
                     }
                     socket!!.send(packet)
-                    if (IS_DEBUG) {
-                        addLog(
-                            ">>> [VpnController] 已发送，等待响应...",
-                            LogLevel.DEBUG,
-                        )
-                    }
 
                     // 接收响应
                     val responseBuf = ByteArray(512)
                     val responsePacket = java.net.DatagramPacket(responseBuf, responseBuf.size)
                     socket!!.receive(responsePacket)
                     val responseData = responseBuf.copyOfRange(0, responsePacket.length)
-                    addLog(
-                        "<<< [VpnController] 收到 DNS 响应来自 ${responsePacket.address}:" +
-                            "${responsePacket.port} (${responseData.size} bytes)",
-                        LogLevel.DEBUG,
-                    )
+                    if (IS_DEBUG) {
+                        addLog(
+                            "DNS 绕过转发 · 收到响应 ${responsePacket.address}:${responsePacket.port} " +
+                                "(${responseData.size}B)",
+                            LogLevel.DEBUG,
+                        )
+                    }
 
                     // 从复制的原始包提取源 IP 和源端口
                     var srcIp: InetAddress
@@ -1262,16 +1290,19 @@ class VpnController
                         // 源端口 = IP 头之后的 UDP 头前 2 字节。用 ipHeaderLen 而非硬编码 20:
                         // IPv4 带选项时 IHL > 20, 硬编码会读到选项字节 → 应答发错端口。
                         srcPort = IpPacketParser.readU16(packetData, ipHeaderLen)
-                        addLog(
-                            ">>> [VpnController] 解析原始包: srcIp=$srcIp, srcPort=$srcPort",
-                            LogLevel.DEBUG,
-                        )
+                        if (IS_DEBUG) {
+                            addLog(
+                                "DNS 绕过转发 · 解析源地址 srcIp=$srcIp srcPort=$srcPort",
+                                LogLevel.DEBUG,
+                            )
+                        }
                     } catch (e: Exception) {
-                        addLog(
-                            ">>> [VpnController] 解析源 IP/端口失败: ${e.message}",
-                            LogLevel.ERROR,
+                        appLogThrottled(
+                            "DNS 绕过转发失败 · 解析源 IP/端口异常 — ${e.message}",
+                            level = LogLevel.ERROR,
+                            throttleKey = "DNS 绕过转发失败",
                         )
-                        srcIp = InetAddress.getByName("10.0.0.1")
+                        srcIp = InetAddress.getByName(VpnNetwork.TUN_GATEWAY)
                         srcPort = 53
                     }
 
@@ -1286,8 +1317,7 @@ class VpnController
                         )
                     if (IS_DEBUG) {
                         addLog(
-                            ">>> [VpnController] 构造响应包完成: srcPort=53, dstPort=$srcPort, " +
-                                "packetSize=${responsePkt.size}",
+                            "DNS 绕过转发 · 构造响应包 dstPort=$srcPort size=${responsePkt.size}",
                             LogLevel.DEBUG,
                         )
                     }
@@ -1296,23 +1326,19 @@ class VpnController
                     if (writeToTun(responsePkt)) {
                         StageCounters.onDnsDelivered()
                     }
-                    if (IS_DEBUG) {
-                        addLog(
-                            ">>> [VpnController] 已写回 TUN",
-                            LogLevel.DEBUG,
-                        )
-                    }
                 } catch (e: java.net.SocketTimeoutException) {
-                    addLog(
-                        ">>> [VpnController] DNS 响应超时 (SocketTimeoutException)",
-                        LogLevel.WARNING,
+                    appLogThrottled(
+                        "DNS 绕过响应超时 · 服务器 $dstIp — 客户端将按自身重试退避",
+                        level = LogLevel.WARNING,
+                        throttleKey = "DNS 绕过响应超时",
                     )
                 } catch (e: Exception) {
-                    addLog(
-                        ">>> [VpnController] forwardDnsBypassPacket exception: ${e.message}",
-                        LogLevel.ERROR,
+                    appLogThrottled(
+                        "DNS 绕过转发失败 · ${e::class.simpleName}: ${e.message}",
+                        level = LogLevel.ERROR,
+                        throttleKey = "DNS 绕过转发失败",
                     )
-                    android.util.Log.e("VpnController", "forwardDnsBypassPacket exception", e)
+                    Log.e("VpnController", "forwardDnsBypassPacket exception", e)
                 } finally {
                     try {
                         socket?.close()
@@ -1333,7 +1359,7 @@ class VpnController
                     packetProcessor.cleanupStaleConnections(STALE_CONNECTION_TIMEOUT_MS)
                 } catch (e: Exception) {
                     if (isRunning) {
-                        android.util.Log.e("VpnController", "Connection cleanup error: ${e.message}")
+                        Log.e("VpnController", "Connection cleanup error: ${e.message}")
                     }
                 }
             }
@@ -1359,7 +1385,12 @@ class VpnController
                 dnsList.addAll(v4)
                 dnsList.addAll(v6)
             } catch (e: Exception) {
-                android.util.Log.w("VpnController", "获取系统 DNS 失败: ${e.message}")
+                Log.w("VpnController", "获取系统 DNS 失败: ${e.message}")
+                appLogThrottled(
+                    "获取系统 DNS 失败 — ${e.message} · DNS 绕过路由将缺失",
+                    level = LogLevel.WARNING,
+                    throttleKey = "获取系统 DNS 失败",
+                )
             }
             return dnsList
         }
@@ -1402,6 +1433,6 @@ class VpnController
         }
 
         private fun updateState(block: (VpnState) -> VpnState) {
-            vpnState.update(block)
+            _vpnState.update(block)
         }
     }

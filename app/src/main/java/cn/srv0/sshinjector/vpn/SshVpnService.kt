@@ -14,8 +14,8 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
+import android.util.Log
 import cn.srv0.sshinjector.R
-import cn.srv0.sshinjector.data.local.dao.WhitelistDao
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
 import cn.srv0.sshinjector.domain.model.ConnectStage
 import cn.srv0.sshinjector.domain.model.ConnectionStats
@@ -24,6 +24,10 @@ import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import cn.srv0.sshinjector.domain.usecase.VpnController
 import cn.srv0.sshinjector.domain.vpn.ConnectivityProber
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_DOMAIN_SPLIT
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_REMOTE
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_SYSTEM
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_WHITELIST
 import cn.srv0.sshinjector.domain.vpn.HealthTracker
 import cn.srv0.sshinjector.domain.vpn.VpnNetwork
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
@@ -52,8 +56,6 @@ class SshVpnService : VpnService() {
     @Inject lateinit var vpnController: VpnController
 
     @Inject lateinit var serverRepository: ServerRepository
-
-    @Inject lateinit var whitelistDao: WhitelistDao
 
     @Inject lateinit var settingsDataStore: SettingsDataStore
 
@@ -122,11 +124,16 @@ class SshVpnService : VpnService() {
                     // 解锁后先补一次端到端探测 (锁屏期隧道可能已死但未被 keepAlive 发现)
                     triggerHealthProbeNow()
                     if (jschSshClient.hasUnhealthySession()) {
-                        android.util.Log.d("SshVpnService", "ACTION_USER_PRESENT: ssh unhealthy, reconnecting")
+                        Log.d("SshVpnService", "ACTION_USER_PRESENT: ssh unhealthy, reconnecting")
                         scope.launch { autoReconnect() }
                     }
                 } catch (e: Exception) {
-                    android.util.Log.e("SshVpnService", "ACTION_USER_PRESENT handler failed", e)
+                    Log.e("SshVpnService", "ACTION_USER_PRESENT handler failed", e)
+                    VpnController.appLogThrottled(
+                        "解锁重连处理失败 — ${e::class.simpleName}:${e.message}",
+                        level = LogLevel.WARNING,
+                        throttleKey = "解锁重连处理失败",
+                    )
                 }
             }
         }
@@ -135,7 +142,12 @@ class SshVpnService : VpnService() {
         try {
             registerReceiver(unlockReconnectReceiver, IntentFilter(Intent.ACTION_USER_PRESENT))
         } catch (e: Exception) {
-            android.util.Log.e("SshVpnService", "Failed to register ACTION_USER_PRESENT receiver", e)
+            Log.e("SshVpnService", "Failed to register ACTION_USER_PRESENT receiver", e)
+            VpnController.appLogThrottled(
+                "解锁重连接收器注册失败 — ${e.message}",
+                level = LogLevel.WARNING,
+                throttleKey = "解锁接收器注册失败",
+            )
         }
     }
 
@@ -198,15 +210,15 @@ class SshVpnService : VpnService() {
                     if (vpnController.vpnState.value.exitIp == null) {
                         prober.fetchExitIp()?.let { ip ->
                             vpnController.reportExitIp(ip)
-                            android.util.Log.d("SshVpnService", "exit ip: $ip")
+                            Log.d("SshVpnService", "exit ip: $ip")
                         }
                     }
-                    android.util.Log.d("SshVpnService", "health probe ok (verified)")
+                    Log.d("SshVpnService", "health probe ok (verified)")
                 }
                 is ConnectivityProber.Result.Failed -> {
                     val step = if (!sshOk) HealthStep.SSH else result.step
                     healthTracker.onFailure(step, immediate = !sshOk)
-                    android.util.Log.w("SshVpnService", "health probe failed: step=$step reason=${result.reason}")
+                    Log.w("SshVpnService", "health probe failed: step=$step reason=${result.reason}")
                     VpnController.appLogThrottled(
                         "网络探测失败 · ${getString(step.labelRes)} — reason: ${result.reason}",
                         level = LogLevel.WARNING,
@@ -219,7 +231,7 @@ class SshVpnService : VpnService() {
             throw e
         } catch (e: Exception) {
             // 探测自身异常 (如读配置失败) 不影响连接, 只记日志; 分阶段归因仍上报
-            android.util.Log.e("SshVpnService", "health probe error: ${e.message}")
+            Log.e("SshVpnService", "health probe error: ${e.message}")
             VpnController.appLogThrottled(
                 "健康探测自身异常 — ${e.message}",
                 level = LogLevel.WARNING,
@@ -311,13 +323,13 @@ class SshVpnService : VpnService() {
     }
 
     override fun onRevoke() {
-        android.util.Log.d("SshVpnService", "onRevoke called")
+        Log.d("SshVpnService", "onRevoke called")
         // 系统回收 VPN (非用户意图): 保留 lastServerId, 重启后仍可续连
         scope.launch { disconnect(userInitiated = false) }
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        android.util.Log.d("SshVpnService", "onTaskRemoved called")
+        Log.d("SshVpnService", "onTaskRemoved called")
         scope.launch { disconnect() }
     }
 
@@ -336,7 +348,7 @@ class SshVpnService : VpnService() {
             try {
                 vpnController.disconnect()
             } catch (e: Exception) {
-                android.util.Log.e("SshVpnService", "cleanup on destroy failed", e)
+                Log.e("SshVpnService", "cleanup on destroy failed", e)
             }
             try {
                 vpnInterface?.close()
@@ -356,9 +368,9 @@ class SshVpnService : VpnService() {
 
     private suspend fun connect(serverId: Long) {
         connectMutex.withLock {
-            android.util.Log.d("SshVpnService", "Connecting to server $serverId")
+            Log.d("SshVpnService", "Connecting to server $serverId")
             if (vpnController.isVpnRunning()) {
-                android.util.Log.w("SshVpnService", "VPN already running")
+                Log.w("SshVpnService", "VPN already running")
                 return
             }
             serviceVpnState.value = DomainVpnState(status = DomainVpnState.VpnStatus.Connecting)
@@ -374,15 +386,9 @@ class SshVpnService : VpnService() {
                 val merged = mergeGlobalSettings(config)
                 currentServer = merged
 
-                val dnsMode = settingsDataStore.dnsMode.first()
-                val allowedPackages =
-                    if (dnsMode == 2) {
-                        whitelistDao.getEnabledPackageNames()
-                    } else {
-                        emptyList()
-                    }
+                val (dnsMode, allowedPackages) = whitelistSelection()
                 // 供 VpnController 决定 DNS 传输策略 (空名单 → 不劫持 DNS, 见 dnsTransportFor)
-                vpnController.setWhitelistPackages(allowedPackages, whitelistEnabled = dnsMode == 2)
+                vpnController.setWhitelistPackages(allowedPackages, whitelistEnabled = dnsMode == DNS_MODE_WHITELIST)
 
                 // 启动前台服务
                 startForegroundWithNotification(merged)
@@ -440,6 +446,22 @@ class SshVpnService : VpnService() {
         )
     }
 
+    /**
+     * 当前 dnsMode + 启用白名单应用 (WHITELIST 模式外恒为空)。
+     * connect / rebuild / autoReconnect 三处共用; 调用方自行决定与 establish 的先后顺序
+     * (rebuild 必须先 establish 再 setWhitelistPackages, 见 rebuildVpnInterfaceInternal 注释)。
+     */
+    private suspend fun whitelistSelection(): Pair<Int, List<String>> {
+        val dnsMode = settingsDataStore.dnsMode.first()
+        val packages =
+            if (dnsMode == DNS_MODE_WHITELIST) {
+                serverRepository.getEnabledPackageNames()
+            } else {
+                emptyList()
+            }
+        return dnsMode to packages
+    }
+
     private fun establishVpnInterface(
         config: ServerConfig,
         allowedPackages: List<String>,
@@ -485,25 +507,19 @@ class SshVpnService : VpnService() {
                 return
             }
         try {
-            val dnsMode = settingsDataStore.dnsMode.first()
-            val allowedPackages =
-                if (dnsMode == 2) {
-                    whitelistDao.getEnabledPackageNames()
-                } else {
-                    emptyList()
-                }
+            val (dnsMode, allowedPackages) = whitelistSelection()
             // 先建新接口、成功后再套用 DNS 策略: 顺序反过来时若 establish 抛异常,
             // 策略已切到新状态而 TUN 还是旧的 —— 空名单翻成非空的瞬间假 IP 没有路由,
             // 正是 DnsTransportPolicy 注释里那个 "DNS_PROBE_FINISHED_NO_INTERNET" 黑洞。
             // establishVpnInterface 只依赖入参 (allowedPackages/dnsMode), 不读 controller 状态。
             val fd = establishVpnInterface(config, allowedPackages, dnsMode)
             // 白名单增删会翻转"空↔非空" → DNS 策略跟着变 (空名单不得劫持 DNS), 与路由变更同步重算
-            vpnController.setWhitelistPackages(allowedPackages, whitelistEnabled = dnsMode == 2)
+            vpnController.setWhitelistPackages(allowedPackages, whitelistEnabled = dnsMode == DNS_MODE_WHITELIST)
             vpnController.updateDnsMode()
             // 关闭旧 TUN 接口并更新 VpnController 的流 (由 rebuildTunInterface 处理旧流关闭)
             vpnController.rebuildTunInterface(fd)
         } catch (e: Exception) {
-            android.util.Log.e("SshVpnService", "rebuildVpnInterfaceInternal failed", e)
+            Log.e("SshVpnService", "rebuildVpnInterfaceInternal failed", e)
             // 只写 logcat 等于没报: 设备上没有 adb, 半应用状态必须进应用内日志
             VpnController.appLogThrottled(
                 "VPN 接口重建失败 · ${e::class.simpleName}: ${e.message}",
@@ -525,8 +541,7 @@ class SshVpnService : VpnService() {
         rebuildInProgress = false
         whitelistObserverJob =
             scope.launch {
-                whitelistDao
-                    .getEnabled()
+                serverRepository.enabledWhitelistFlow
                     .map { list -> list.map { it.packageName }.toSet() }
                     .distinctUntilChanged()
                     .collectLatest { packages ->
@@ -536,7 +551,7 @@ class SshVpnService : VpnService() {
                             return@collectLatest
                         }
                         val mode = settingsDataStore.dnsMode.first()
-                        if (mode == 2 && vpnController.isVpnRunning() && !rebuildInProgress) {
+                        if (mode == DNS_MODE_WHITELIST && vpnController.isVpnRunning() && !rebuildInProgress) {
                             rebuildInProgress = true
                             try {
                                 // 与 connect/disconnect/autoReconnect 串行: 热重建 TUN
@@ -558,34 +573,34 @@ class SshVpnService : VpnService() {
         val builder =
             Builder()
                 .setSession("SSHInjector VPN")
-                .addAddress("10.0.0.1", 24)
+                .addAddress(VpnNetwork.TUN_GATEWAY, VpnNetwork.TUN_PREFIX_LEN)
                 .addDnsServer(VpnNetwork.TUN_IP)
                 .setMtu(config.mtu)
                 .setBlocking(true)
 
         if (config.enableIPv6) {
-            builder.addAddress("fd00::1", 64)
+            builder.addAddress(VpnNetwork.IPV6_GATEWAY, VpnNetwork.IPV6_PREFIX_LEN)
         }
 
         // 白名单模式使用 addAllowedApplication 限定允许应用, 与 addDisallowedApplication 互斥,
         // 因此该模式下不排除自身 (自身不在白名单内时自然走直连, 不进 TUN)。
-        val isWhitelistMode = dnsMode == 2 && allowedPackages.isNotEmpty()
+        val isWhitelistMode = dnsMode == DNS_MODE_WHITELIST && allowedPackages.isNotEmpty()
         if (!isWhitelistMode) {
             builder.addDisallowedApplication(packageName)
         }
 
-        android.util.Log.d("SshVpnService", "buildVpnBuilder: dnsMode=$dnsMode allowedPackages=${allowedPackages.size}")
+        Log.d("SshVpnService", "buildVpnBuilder: dnsMode=$dnsMode allowedPackages=${allowedPackages.size}")
         when (dnsMode) {
-            0 -> {
+            DNS_MODE_REMOTE -> {
                 // REMOTE 模式: 全部流量走 VPN 隧道
                 builder.addRoute("0.0.0.0", 0)
                 // S5: IPv6 关闭也捕获 ::/0 后在 TUN 内丢弃 —— 关闭 = 不用 IPv6, 而非逃逸物理网卡
                 builder.addRoute("::", 0)
             }
-            1 -> {
+            DNS_MODE_SYSTEM -> {
                 // SYSTEM 模式: 不添加路由，所有流量走物理网卡
             }
-            2 -> {
+            DNS_MODE_WHITELIST -> {
                 // WHITELIST 模式: 白名单应用走 VPN，其余透传
                 // 空名单时 VpnService 未设置 allowed list 会放行全部应用进 TUN,
                 // 因此只有白名单非空时才添加全量路由。
@@ -594,11 +609,11 @@ class SshVpnService : VpnService() {
                     builder.addRoute("::", 0)
                 }
             }
-            3 -> {
+            DNS_MODE_DOMAIN_SPLIT -> {
                 // DOMAIN_SPLIT 模式: 只捕获假 IP 段与 DNS, 真实 IP 流量直接走物理网卡, 避免 TUN 循环
-                builder.addRoute("198.18.0.0", 15)
+                builder.addRoute(VpnNetwork.FAKE_V4_ROUTE, VpnNetwork.FAKE_V4_PREFIX_LEN)
                 if (config.enableIPv6) {
-                    builder.addRoute("fd00::", 8)
+                    builder.addRoute(VpnNetwork.FAKE_V6_ROUTE, VpnNetwork.FAKE_V6_PREFIX_LEN)
                 } else {
                     // S5: 关闭 IPv6 → 捕获全部 v6 后丢弃 (无 fd00 假 IP 时真实 v6 不得逃逸)
                     builder.addRoute("::", 0)
@@ -607,7 +622,7 @@ class SshVpnService : VpnService() {
             }
         }
 
-        if (dnsMode == 2 && allowedPackages.isNotEmpty()) {
+        if (dnsMode == DNS_MODE_WHITELIST && allowedPackages.isNotEmpty()) {
             for (pkg in allowedPackages) {
                 // 自身应用加入白名单会走 TUN 形成回路, 跳过
                 if (pkg == packageName) {
@@ -616,7 +631,17 @@ class SshVpnService : VpnService() {
                 try {
                     builder.addAllowedApplication(pkg)
                 } catch (ignored: android.content.pm.PackageManager.NameNotFoundException) {
+                    VpnController.appLogThrottled(
+                        "白名单应用添加失败 · $pkg — 未安装或对 VPN 不可见, 该应用将直连",
+                        level = LogLevel.WARNING,
+                        throttleKey = "白名单应用添加失败",
+                    )
                 } catch (ignored: UnsupportedOperationException) {
+                    VpnController.appLogThrottled(
+                        "白名单应用添加失败 · $pkg — 设备不支持, 该应用将直连",
+                        level = LogLevel.WARNING,
+                        throttleKey = "白名单应用添加失败",
+                    )
                 }
             }
         }
@@ -736,7 +761,7 @@ class SshVpnService : VpnService() {
      *   非用户意图的清理, 保留 lastServerId 供重启后 BootReceiver 续连。
      */
     private suspend fun disconnectInternal(userInitiated: Boolean = true) {
-        android.util.Log.d("SshVpnService", "Starting disconnect... userInitiated=$userInitiated")
+        Log.d("SshVpnService", "Starting disconnect... userInitiated=$userInitiated")
 
         // 0. 停止白名单观察者与健康监测; 用户主动断开时清除健康归因
         //    (失败路径的归因由调用方在 disconnect 返回后补写, 不在此抹掉)
@@ -754,12 +779,12 @@ class SshVpnService : VpnService() {
 
         // 1. 断开 VPN 控制器 (如果正在运行)
         if (vpnController.isVpnRunning()) {
-            android.util.Log.d("SshVpnService", "Disconnecting VPN controller...")
+            Log.d("SshVpnService", "Disconnecting VPN controller...")
             vpnController.disconnect()
         }
 
         // 2. 关闭 VPN 接口
-        android.util.Log.d("SshVpnService", "Closing VPN interface...")
+        Log.d("SshVpnService", "Closing VPN interface...")
         try {
             vpnInterface?.close()
         } catch (_: Exception) {
@@ -772,15 +797,15 @@ class SshVpnService : VpnService() {
         serviceVpnState.value = DomainVpnState()
 
         // 4. 取消通知
-        android.util.Log.d("SshVpnService", "Cancelling notification...")
+        Log.d("SshVpnService", "Cancelling notification...")
         notificationManager?.cancel(NOTIFICATION_ID)
 
         // 5. 停止前台服务
-        android.util.Log.d("SshVpnService", "Stopping foreground service...")
+        Log.d("SshVpnService", "Stopping foreground service...")
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
 
-        android.util.Log.d("SshVpnService", "Disconnect completed")
+        Log.d("SshVpnService", "Disconnect completed")
     }
 
     /**
@@ -843,7 +868,7 @@ class SshVpnService : VpnService() {
                 try {
                     if (poolFailed && canReconnect && backoffElapsed) {
                         lastPoolFailReconnectAt = now
-                        android.util.Log.w("SshVpnService", "SSH session pool failed, auto reconnecting")
+                        Log.w("SshVpnService", "SSH session pool failed, auto reconnecting")
                         // 标记本次失败的收尾由重连负责 + 捕获配置: vpnState=Failed 的观察者
                         // (与本观察者触发顺序不确定) 据此跳过 disconnect, 不拆刚重建的会话
                         poolFailReconnectPending = true
@@ -868,7 +893,7 @@ class SshVpnService : VpnService() {
         source: String,
         e: Exception,
     ) {
-        android.util.Log.e("SshVpnService", "$source observer failed: ${e.message}", e)
+        Log.e("SshVpnService", "$source observer failed: ${e.message}", e)
         VpnController.appLogThrottled(
             "状态观察异常 · $source — ${e::class.simpleName}: ${e.message} (循环继续)",
             level = LogLevel.WARNING,
@@ -904,7 +929,12 @@ class SshVpnService : VpnService() {
             lastNetworkId = initialId
             lastEventWasLost = false
         } catch (e: Exception) {
-            android.util.Log.e("SshVpnService", "Failed to register network callback: ${e.message}")
+            Log.e("SshVpnService", "Failed to register network callback: ${e.message}")
+            VpnController.appLogThrottled(
+                "网络切换监听注册失败 — 网络切换将不会触发重连 (${e.message})",
+                level = LogLevel.WARNING,
+                throttleKey = "网络回调注册失败",
+            )
         }
     }
 
@@ -945,7 +975,7 @@ class SshVpnService : VpnService() {
                 null
             }
         if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
-        android.util.Log.d(
+        Log.d(
             "SshVpnService",
             "Network event: id=$id lost=$isLost last=$lastNetworkId lastLost=$lastEventWasLost " +
                 "running=${vpnController.isVpnRunning()}, reconnecting=$isReconnecting",
@@ -968,7 +998,7 @@ class SshVpnService : VpnService() {
             scope.launch {
                 delay(NETWORK_RECONNECT_DEBOUNCE_MS)
                 if (vpnController.isVpnRunning() && !isReconnecting && currentServer != null) {
-                    android.util.Log.d("SshVpnService", "Triggering auto reconnect after debounce")
+                    Log.d("SshVpnService", "Triggering auto reconnect after debounce")
                     autoReconnect()
                 }
             }
@@ -989,11 +1019,14 @@ class SshVpnService : VpnService() {
                 // 用户主动断开 (lastServerId 清零) → 不再重建; 失败/系统清理路径保留该值,
                 // 因此连接失败重试与开机续连不受影响
                 if ((settingsDataStore.lastServerId.first() ?: 0L) == 0L) {
-                    android.util.Log.d("SshVpnService", "Auto reconnect skipped: user disconnected")
+                    Log.d("SshVpnService", "Auto reconnect skipped: user disconnected")
                     return@withLock
                 }
-                val cfg = config ?: currentServer ?: return@withLock
-                android.util.Log.d("SshVpnService", "Auto reconnecting to ${cfg.name}")
+                val base = config ?: currentServer ?: return@withLock
+                // 重连时重新合并全局设置: 连接后改过全局 MTU/keepAlive/IPv6 的, 下一次重连即生效
+                val cfg = mergeGlobalSettings(base)
+                currentServer = cfg
+                Log.d("SshVpnService", "Auto reconnecting to ${cfg.name}")
                 // 拆旧/建新窗口内探测打的是已经关掉的本地代理, 结果只会把 healthTracker
                 // 打成 PROXY 败; 隧道未就绪时 packetLoopActive=false 又会把 tunVerdict
                 // 记成连续失败窗口 → 降级状态被带进新会话。新会话 startHealthMonitor 重开。
@@ -1015,15 +1048,12 @@ class SshVpnService : VpnService() {
                     tunFd = null
 
                     // 2. 重建接口并重连
-                    val dnsMode = settingsDataStore.dnsMode.first()
-                    val allowedPackages =
-                        if (dnsMode == 2) {
-                            whitelistDao.getEnabledPackageNames()
-                        } else {
-                            emptyList()
-                        }
+                    val (dnsMode, allowedPackages) = whitelistSelection()
                     vpnController.reportConnectStage(ConnectStage.TUN)
-                    vpnController.setWhitelistPackages(allowedPackages, whitelistEnabled = dnsMode == 2)
+                    vpnController.setWhitelistPackages(
+                        allowedPackages,
+                        whitelistEnabled = dnsMode == DNS_MODE_WHITELIST,
+                    )
                     val fd = establishVpnInterface(cfg, allowedPackages, dnsMode)
                     vpnController.setVpnInterface(fd)
                     vpnController.setProtectFunction { socket -> this.protect(socket) }
@@ -1037,7 +1067,7 @@ class SshVpnService : VpnService() {
                     updateNotification(cfg, StatusDisplay.build(serviceVpnState.value, this::getString))
                     startWhitelistObserver()
                     lastError.value = null
-                    android.util.Log.d("SshVpnService", "Auto reconnect succeeded to ${cfg.name}")
+                    Log.d("SshVpnService", "Auto reconnect succeeded to ${cfg.name}")
                 } catch (e: Exception) {
                     lastError.value = e.message
                     serviceVpnState.value =
