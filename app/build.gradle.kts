@@ -9,8 +9,13 @@ plugins {
     id("io.gitlab.arturbosch.detekt")
 }
 
+// 版本号单源: 产出文件名 (archivesName → sshinjector-<ver>-<abi>-<variant>.apk / -<ver>-release.aab)
+// 与 defaultConfig 共用, 升版本只改这两行
+val appVersionCode = 12
+val appVersionName = "1.1.4"
+
 base {
-    archivesName.set("sshinjector")
+    archivesName.set("sshinjector-$appVersionName")
 }
 
 android {
@@ -27,8 +32,8 @@ android {
         applicationId = "cn.srv0.sshinjector"
         minSdk = 34
         targetSdk = 35
-        versionCode = 12
-        versionName = "1.1.4"
+        versionCode = appVersionCode
+        versionName = appVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
     }
