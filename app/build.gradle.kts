@@ -172,7 +172,7 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.9.0")
 
     // SSH Client - mwiede/jsch (维护活跃的 JSch 分支，支持 Ed25519)
-    implementation("com.github.mwiede:jsch:0.2.17")
+    implementation("com.github.mwiede:jsch:2.28.7")
 
     // DNS 解析
     implementation("dnsjava:dnsjava:3.6.5")

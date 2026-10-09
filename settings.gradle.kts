@@ -14,7 +14,7 @@ dependencyResolutionManagement {
         maven("https://mirrors.tuna.tsinghua.edu.cn/maven2/")
         google()
         mavenCentral()
-        maven("https://jitpack.io") // for mwiede/jsch
+        maven("https://jitpack.io") // fallback; jsch 自身走 Maven Central
     }
 }
 rootProject.name = "SSHInjector"

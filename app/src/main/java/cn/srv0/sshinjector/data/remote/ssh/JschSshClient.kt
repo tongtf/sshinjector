@@ -66,6 +66,7 @@ data class ExecResult(
  * SSH Host Key 管理工具
  * 使用 OpenSSH 兼容的 known_hosts 文件格式
  */
+@Singleton
 class KnownHostsManager
     @Inject
     constructor(
@@ -260,6 +261,11 @@ internal class KnownHostsHostKeyRepository(
             onFirstTrust(fingerprint)
         } catch (e: Exception) {
             Log.w("KnownHosts", "TOFU save failed for $host:$port: ${e.message}")
+            VpnController.appLogThrottled(
+                "主机密钥固定失败 · $host:$port — ${e.message}",
+                level = LogLevel.WARNING,
+                throttleKey = "主机密钥固定失败",
+            )
         }
     }
 
@@ -401,7 +407,7 @@ class JschSshClient
                     .filter {
                         it.name == "setLocalWindowSizeMax" ||
                             it.name == "setLocalWindowSize" ||
-                            it.name == "setSendMaxPacketSize"
+                            it.name == "setLocalPacketSize"
                     }.map {
                         it.isAccessible = true
                         it
@@ -447,22 +453,30 @@ class JschSshClient
                     if (pooled != null) {
                         pool.add(pooled)
                         successCount++
-                        android.util.Log.d(TAG, "Session pool [$i/$SESSION_POOL_SIZE] connected")
+                        Log.d(TAG, "Session pool [$i/$SESSION_POOL_SIZE] connected")
                     } else {
-                        android.util.Log.w(TAG, "Session pool [$i/$SESSION_POOL_SIZE] failed")
+                        Log.w(TAG, "Session pool [$i/$SESSION_POOL_SIZE] failed")
                     }
                 }
 
                 if (successCount == 0) {
                     throw Exception("All $SESSION_POOL_SIZE SSH sessions failed to connect")
                 }
+                if (successCount < SESSION_POOL_SIZE) {
+                    // 部分失败不触发 handleError (状态仍 Connected), 但可用会话下降、
+                    // 建连变慢 —— 只打 logcat 用户无从知晓, 必须进应用日志
+                    VpnController.appLog(
+                        "SSH 会话池部分失败 · $successCount/$SESSION_POOL_SIZE 条可用 — 建连可能变慢",
+                        level = LogLevel.WARNING,
+                    )
+                }
 
                 isConnectedFlag.set(true)
                 connectionState.value = ConnectionState.Connected
                 lastError.value = null
 
-                android.util.Log.d(TAG, "Session pool ready: $successCount/$SESSION_POOL_SIZE sessions active")
-                SshChannelFactory.ConnectionResult(true, 1080)
+                Log.d(TAG, "Session pool ready: $successCount/$SESSION_POOL_SIZE sessions active")
+                SshChannelFactory.ConnectionResult(true)
             } catch (e: JSchException) {
                 handleError("SSH connection failed: ${e.message}")
                 SshChannelFactory.ConnectionResult(false, error = e.message)
@@ -500,7 +514,7 @@ class JschSshClient
                                     message: String,
                                 ) {
                                     if (level >= com.jcraft.jsch.Logger.WARN) {
-                                        android.util.Log.w(TAG, "[${levels[level] ?: level}] $message")
+                                        Log.w(TAG, "[${levels[level] ?: level}] $message")
                                     }
                                 }
                             },
@@ -565,7 +579,7 @@ class JschSshClient
                 } catch (_: Exception) {
                 }
                 // 带堆栈记录：暴露 JSch KEX/主机密钥/鉴权的真实异常链，便于区分握手阶段失败原因
-                android.util.Log.e(TAG, "createSession[$index] failed: ${e.message}", e)
+                Log.e(TAG, "createSession[$index] failed: ${e.message}", e)
                 VpnController.appLogThrottled(
                     "SSH 会话创建失败 · pool-$index — ${e.message}",
                     level = LogLevel.ERROR,
@@ -585,6 +599,11 @@ class JschSshClient
                 serverDao.updateHostKeyFingerprint(config.id, fingerprint)
             } catch (e: Exception) {
                 Log.w(TAG, "updateHostKeyFingerprint failed: ${e.message}")
+                VpnController.appLogThrottled(
+                    "主机指纹保存失败 · ${e.message}",
+                    level = LogLevel.WARNING,
+                    throttleKey = "主机指纹保存失败",
+                )
             }
         }
 
@@ -601,7 +620,7 @@ class JschSshClient
             // 0 = 用户关闭保活 (UI 允许 0-3600 秒)。不加这道门会 delay(0) 忙循环:
             // 协程满速发 sendKeepAliveMsg, 3 条会话一起把 CPU 和 SSH 通道刷爆。
             if (intervalSeconds <= 0L) {
-                android.util.Log.i(TAG, "Session pool-$index: keepAlive disabled (interval=$intervalSeconds)")
+                Log.i(TAG, "Session pool-$index: keepAlive disabled (interval=$intervalSeconds)")
                 // 文案不带 pool-$index: appLogThrottled 以整条 message 为节流 key, 动态段会让节流失效
                 VpnController.appLogThrottled("SSH 保活已关闭 · 间隔 0 秒")
                 pooled.keepAliveJob = null
@@ -634,6 +653,7 @@ class JschSshClient
                                                 VpnController.appLogThrottled(
                                                     "SSH 会话往返恢复 · pool-$index",
                                                     level = LogLevel.INFO,
+                                                    throttleKey = "SSH 会话往返恢复",
                                                 )
                                                 pooled.suspect = false
                                             }
@@ -643,6 +663,7 @@ class JschSshClient
                                             VpnController.appLogThrottled(
                                                 "SSH 会话往返心跳超时 · pool-$index — 标记可疑(仅通道也失败才重建)",
                                                 level = LogLevel.WARNING,
+                                                throttleKey = "SSH 会话往返心跳超时",
                                             )
                                         }
                                         else -> {
@@ -650,7 +671,7 @@ class JschSshClient
                                             // **不得**标 suspect —— 否则 exec 受限的服务器上 suspect 常驻为 true,
                                             // 任意一次正常的「远端连不上目标」都会被判成 sessionDead → 整池重建
                                             // → 「重建窗口内新连接全失败 → 再重建」雪崩, 下载全挂 (见 createDirectChannel)。
-                                            android.util.Log.d(
+                                            Log.d(
                                                 TAG,
                                                 "Session pool-$index: exec probe unsupported",
                                             )
@@ -658,10 +679,11 @@ class JschSshClient
                                     }
                                 }
                             } else {
-                                android.util.Log.w(TAG, "Session pool-$index: not connected, attempting reconnect")
+                                Log.w(TAG, "Session pool-$index: not connected, attempting reconnect")
                                 VpnController.appLogThrottled(
                                     "SSH 会话 pool-$index 未连接, 尝试重连",
                                     level = LogLevel.WARNING,
+                                    throttleKey = "SSH 会话未连接",
                                 )
                                 pooled.healthy = false
                                 tryReconnectSession(pooled, index)
@@ -672,10 +694,11 @@ class JschSshClient
                             // checkPoolHealth() 还可能把 Failed 盖到 Disconnected 上。
                             throw e
                         } catch (e: Exception) {
-                            android.util.Log.w(TAG, "Session pool-$index: keepAlive failed, attempting reconnect", e)
+                            Log.w(TAG, "Session pool-$index: keepAlive failed, attempting reconnect", e)
                             VpnController.appLogThrottled(
                                 "SSH 会话 pool-$index keepAlive 失败, 尝试重连",
                                 level = LogLevel.WARNING,
+                                throttleKey = "SSH keepAlive 失败",
                             )
                             pooled.healthy = false
                             tryReconnectSession(pooled, index)
@@ -729,7 +752,7 @@ class JschSshClient
                         // 'true' 在部分受限 shell 上拿不到, 但通道能开就足以证明会话活着)
                         ROUND_TRIP_OK
                     } catch (e: Exception) {
-                        android.util.Log.w(TAG, "round-trip heartbeat failed: ${e.message}")
+                        Log.w(TAG, "round-trip heartbeat failed: ${e.message}")
                         // 撑到慢失败阈值 = 服务器没回应 (黑洞); 秒级被拒 = 服务器不支持 exec
                         val stalled = System.currentTimeMillis() - startedAt >= ROUND_TRIP_SLOW_FAIL_MS
                         if (stalled || e.message?.contains("timeout", ignoreCase = true) == true) {
@@ -756,7 +779,7 @@ class JschSshClient
                 pooled.session.sendKeepAliveMsg()
                 true
             } catch (e: Exception) {
-                android.util.Log.w(TAG, "session heartbeat probe failed: ${e.message}")
+                Log.w(TAG, "session heartbeat probe failed: ${e.message}")
                 false
             }
 
@@ -780,6 +803,7 @@ class JschSshClient
                 VpnController.appLogThrottled(
                     "SSH 会话池整池重建 · 会话层失效 ($affected 个会话)",
                     level = LogLevel.WARNING,
+                    throttleKey = "SSH 整池重建",
                 )
             }
         }
@@ -817,7 +841,7 @@ class JschSshClient
             while (retryCount < maxRetries && isConnectedFlag.get()) {
                 retryCount++
                 val backoffMs = minOf(1000L * retryCount, 10000L)
-                android.util.Log.d(
+                Log.d(
                     TAG,
                     "Session pool-$index: reconnect attempt $retryCount/$maxRetries (backoff ${backoffMs}ms)",
                 )
@@ -841,14 +865,14 @@ class JschSshClient
                     pool.add(newPooled)
 
                     statReconnectOk.incrementAndGet()
-                    android.util.Log.d(TAG, "Session pool-$index: reconnected successfully")
+                    Log.d(TAG, "Session pool-$index: reconnected successfully")
                     // 取消旧 session 的 keepAlive 及其 scope (避免 CoroutineScope 泄漏)
                     pooled.keepAliveJob?.cancel()
                     pooled.scope.cancel()
                     startSessionKeepAlive(newPooled, config.keepAliveInterval.toLong(), index)
                     return
                 } catch (e: Exception) {
-                    android.util.Log.w(TAG, "Session pool-$index: reconnect failed: ${e.message}")
+                    Log.w(TAG, "Session pool-$index: reconnect failed: ${e.message}")
                     VpnController.appLogThrottled(
                         "SSH 会话重连失败 · pool-$index — ${e.message}",
                         level = LogLevel.ERROR,
@@ -857,7 +881,7 @@ class JschSshClient
                 }
             }
 
-            android.util.Log.e(TAG, "Session pool-$index: all reconnect attempts exhausted")
+            Log.e(TAG, "Session pool-$index: all reconnect attempts exhausted")
             statReconnectFail.incrementAndGet()
             VpnController.appLog(
                 "SSH 会话 pool-$index 重连失败 · 已耗尽所有重试",
@@ -869,7 +893,7 @@ class JschSshClient
 
         private fun checkPoolHealth() {
             if (pool.isEmpty() || pool.all { !it.healthy && !it.session.isConnected }) {
-                android.util.Log.e(TAG, "All sessions unhealthy, triggering disconnect")
+                Log.e(TAG, "All sessions unhealthy, triggering disconnect")
                 VpnController.appLog(
                     "SSH 会话全部丢失 · 连接即将断开并触发重连",
                     level = LogLevel.ERROR,
@@ -917,7 +941,7 @@ class JschSshClient
             port: Int,
         ): TunnelChannel? {
             if (pool.isEmpty()) {
-                android.util.Log.w(TAG, "createDirectChannel: session pool is empty")
+                Log.w(TAG, "createDirectChannel: session pool is empty")
                 VpnController.appLogThrottled("SSH 会话池为空 · 无法打开通道", level = LogLevel.WARNING)
                 return null
             }
@@ -937,7 +961,7 @@ class JschSshClient
                     .sortedBy { it.activeChannels.get() }
 
             if (candidates.isEmpty()) {
-                android.util.Log.w(TAG, "createDirectChannel: all sessions failed for $host:$port")
+                Log.w(TAG, "createDirectChannel: all sessions failed for $host:$port")
                 val poolState =
                     pool.joinToString(prefix = "[", postfix = "]") {
                         "conn=${it.session.isConnected}/healthy=${it.healthy}"
@@ -990,7 +1014,7 @@ class JschSshClient
                     }
                 } catch (e: Exception) {
                     val elapsedMs = System.currentTimeMillis() - candidateStartedAt
-                    android.util.Log.w(TAG, "createDirectChannel failed: $host:$port", e)
+                    Log.w(TAG, "createDirectChannel failed: $host:$port", e)
                     lastError = e
                     // 区分「SSH 会话坏了」与「这一个 channel 打不开」:
                     // direct-tcpip 的 channel-open-failure 绝大多数来自**远端连不上目标**(目标层),
@@ -1021,7 +1045,7 @@ class JschSshClient
                     } else {
                         statChannelTargetFail.incrementAndGet()
                     }
-                    android.util.Log.d(
+                    Log.d(
                         TAG,
                         "channel open failed: $host:$port elapsed=${elapsedMs}ms " +
                             "sessionDead=$sessionDead msg=${e.message}",
@@ -1053,14 +1077,19 @@ class JschSshClient
         ) {
             try {
                 CHANNEL_METHODS.forEach { m ->
-                    if (m.name == "setSendMaxPacketSize") {
+                    if (m.name == "setLocalPacketSize") {
                         m.invoke(channel, CHANNEL_SEND_MAX_PACKET_SIZE)
                     } else {
                         m.invoke(channel, windowSize)
                     }
                 }
             } catch (e: Exception) {
-                android.util.Log.w(TAG, "setChannelWindowSize failed: ${e.message}")
+                Log.w(TAG, "setChannelWindowSize failed: ${e.message}")
+                VpnController.appLogThrottled(
+                    "SSH 通道窗口设置失败 — ${e.message}",
+                    level = LogLevel.WARNING,
+                    throttleKey = "SSH 通道窗口设置失败",
+                )
             }
         }
 
@@ -1202,7 +1231,7 @@ class JschSshClient
                     val exitCode = exec.exitStatus
                     ExecResult(exitCode, stdout.toString(Charsets.UTF_8.name()), stderr.toString(Charsets.UTF_8.name()))
                 } catch (e: Exception) {
-                    android.util.Log.w(TAG, "execSingleShot failed: ${e.message}")
+                    Log.w(TAG, "execSingleShot failed: ${e.message}")
                     ExecResult(-1, "", e.message ?: "exec failed")
                 } finally {
                     try {
