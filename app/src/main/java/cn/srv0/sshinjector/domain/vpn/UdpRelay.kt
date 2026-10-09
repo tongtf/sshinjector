@@ -9,7 +9,7 @@ import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
-private val IS_DEBUG = android.util.Log.isLoggable("PacketProcessor", android.util.Log.DEBUG)
+private val IS_DEBUG = Log.isLoggable("PacketProcessor", Log.DEBUG)
 
 /**
  * UDP 处理（降级模式）。
@@ -36,9 +36,6 @@ class UdpRelay(
      * 客户端只能靠自己的重试退避后回退, 实测可达数十秒。
      */
     private val droppedByDstPort = ConcurrentHashMap<Int, Long>()
-
-    /** 应用内日志节流: 丢包是每包级事件, 60s 最多上报一次 */
-    @Volatile private var lastDropLogAt = 0L
 
     val droppedUdp: Long
         get() = droppedUdpCount.get()
@@ -79,19 +76,17 @@ class UdpRelay(
         if (IS_DEBUG) {
             Log.d(TAG, "UDP ${dstIp.hostAddress}:$dstPort dropped (UDP relay not supported)")
         }
-        // 应用内可见 (60s 节流): Play/浏览器下载常走 HTTP/3(UDP)。日志措辞已修正:
+        // 应用内可见 (60s 节流, 走统一 appLogThrottled): Play/浏览器下载常走 HTTP/3(UDP)。日志措辞已修正:
         // 旧文案"(应由应用回退 TCP)"是**未经验证的假设** —— QUIC 不会因 ICMP 错误回退
         // (RFC 9000 §8), 客户端只能靠自身重试退避, 实测可达数十秒, 期间表现为"卡住"。
-        val now = System.currentTimeMillis()
-        if (now - lastDropLogAt >= DROP_LOG_INTERVAL_MS) {
-            lastDropLogAt = now
-            VpnController.appLog(
-                "UDP 包丢弃累计 ${droppedUdpCount.get()} 个 — UDP 中继不支持," +
-                    " 目的端口分布 ${portBreakdown()};" +
-                    " 依赖 HTTP/3(QUIC/443) 的请求需等客户端自行回退 TCP, 期间表现为卡顿",
-                level = LogLevel.WARNING,
-            )
-        }
+        VpnController.appLogThrottled(
+            "UDP 包丢弃累计 ${droppedUdpCount.get()} 个 — UDP 中继不支持," +
+                " 目的端口分布 ${portBreakdown()};" +
+                " 依赖 HTTP/3(QUIC/443) 的请求需等客户端自行回退 TCP, 期间表现为卡顿",
+            windowMs = DROP_LOG_INTERVAL_MS,
+            level = LogLevel.WARNING,
+            throttleKey = "UDP 包丢弃",
+        )
         return true
     }
 
@@ -138,10 +133,15 @@ class UdpRelay(
             if (!interceptor.processDnsQuery(dnsBuffer, srcIp, dstIp, srcPort, dstPort)) {
                 return false
             }
-            stats.addPacket(dnsPayloadLen.toLong())
             return true
         } catch (e: Exception) {
-            android.util.Log.e(TAG, "handleDnsPacket failed", e)
+            Log.e(TAG, "handleDnsPacket failed", e)
+            // DNS 失败 = 应用全断, 只停在 logcat 时用户只看到"无法联网"却无任何应用内信号
+            VpnController.appLogThrottled(
+                "DNS 查询处理失败 · ${e::class.simpleName}: ${e.message}",
+                level = LogLevel.ERROR,
+                throttleKey = "DNS 查询处理失败",
+            )
             stats.addError()
             return false
         }
@@ -179,16 +179,7 @@ class UdpRelay(
         packet.order(ByteOrder.BIG_ENDIAN)
 
         if (isV6) {
-            // IPv6 header (RFC 8200): version=6, payloadLen, nextHeader=UDP(17), hop=64, src, dst
-            packet.put(0x60.toByte())
-            packet.put(0x00)
-            packet.put(0x00)
-            packet.put(0x00)
-            packet.putShort(udpLen.toShort())
-            packet.put(17.toByte())
-            packet.put(64.toByte())
-            packet.put(srcIp)
-            packet.put(dstIp)
+            PacketWriter.writeIpHeader(packet, srcIp, dstIp, totalLen, udpLen, protocol = 17, ipv4Flags = 0)
             // IPv6 UDP 校验和必填 (RFC 8200); IPv4 分支保持 0 (可选)。
             // RFC 8200 §8.1: 算出 0 必须写成 0xFFFF —— 0 在 IPv6 UDP 里表示"无校验和"
             // 是被保留的非法值, 收端直接丢包 (表现为偶发 DNS 无响应)。
@@ -200,26 +191,14 @@ class UdpRelay(
             return packet.array()
         }
 
-        // IPv4 Header
-        packet.put(0x45.toByte())
-        packet.put(0x00)
-        packet.putShort(totalLen.toShort())
-        packet.putShort((System.currentTimeMillis() and 0xFFFF).toShort())
-        packet.putShort(0x4000.toShort())
-        packet.put(64.toByte())
-        packet.put(17.toByte()) // Protocol: UDP
-        packet.putShort(0)
-        packet.put(srcIp)
-        packet.put(dstIp)
+        // IPv4 Header (DF + UDP)
+        PacketWriter.writeIpHeader(packet, srcIp, dstIp, totalLen, udpLen, protocol = 17, ipv4Flags = 0x4000)
 
         // UDP Header (checksum 0, IPv4 可选) + Payload
         packet.put(udp)
 
         // IP 校验和
-        packet.position(0)
-        val ipChecksum = ChecksumCalculator.ipChecksum(packet, ipHeaderLen)
-        packet.position(10)
-        packet.putShort(ipChecksum)
+        PacketWriter.writeIpv4HeaderChecksum(packet, ipHeaderLen)
 
         return packet.array()
     }

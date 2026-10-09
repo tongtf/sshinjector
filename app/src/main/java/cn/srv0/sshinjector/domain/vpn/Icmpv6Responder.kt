@@ -5,7 +5,7 @@ import java.net.InetAddress
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-private val IS_DEBUG = android.util.Log.isLoggable("PacketProcessor", android.util.Log.DEBUG)
+private val IS_DEBUG = Log.isLoggable("PacketProcessor", Log.DEBUG)
 
 /**
  * ICMPv6 邻居发现 (ND) 响应：处理 NS/RS 并回 NA/RA。
@@ -16,7 +16,7 @@ class Icmpv6Responder(
     companion object {
         private const val TAG = "PacketProcessor"
         private const val IPV6_HEADER_WORD = 0x60000000 // Version=6, TC=0, Flow=0
-        private val vpnGatewayIpv6 = InetAddress.getByName("fd00::1")
+        private val vpnGatewayIpv6 = InetAddress.getByName(VpnNetwork.IPV6_GATEWAY)
 
         // 稳定单播本地管理 MAC (02:00:00:00:00:01)，替代全零 MAC (00:00:00:00:00:00 为保留非法地址)
         private val gatewayMac = byteArrayOf(0x02, 0x00, 0x00, 0x00, 0x00, 0x01)

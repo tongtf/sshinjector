@@ -18,10 +18,10 @@ import java.nio.channels.SocketChannel
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
-private val IS_DEBUG = android.util.Log.isLoggable("PacketProcessor", android.util.Log.DEBUG)
+private val IS_DEBUG = Log.isLoggable("PacketProcessor", Log.DEBUG)
 
 /** SOCKS5 握手/认证诊断日志开关 (独立 tag, 便于一次性开两端排查). */
-private val IS_DEBUG_SOCKS = android.util.Log.isLoggable("Socks5Proxy", android.util.Log.DEBUG)
+private val IS_DEBUG_SOCKS = Log.isLoggable("Socks5Proxy", Log.DEBUG)
 
 /**
  * TCP 状态机：解析 TCP 头、维护连接状态、通过隧道/SOCKS5 转发。
@@ -351,6 +351,7 @@ class TcpStateMachine(
                     VpnController.appLogThrottled(
                         "SYN 重传 · 补发 SYN-ACK ${target(conn)} (握手较慢或包丢失)",
                         level = LogLevel.INFO,
+                        throttleKey = "SYN 重传",
                     )
                 }
             }
@@ -381,7 +382,7 @@ class TcpStateMachine(
                             // 重传段 seq 落在 [expected, expected+written) 之外 → 正常续写或 dup 分支, 不重复
                             conn.forwardedBytes += written.toLong()
                             // 立即回纯 ACK，避免浏览器因等待确认而超时重传
-                            sendAckToBrowser(conn, connKey)
+                            sendAckToBrowser(conn)
                         }
                         // written == 0 (SSH 背压/写失败): 不推进不 ACK,
                         // 浏览器超时重传该段, 数据不丢失; 背压停留在本连接, 不阻塞 packetLoop
@@ -394,7 +395,7 @@ class TcpStateMachine(
                                     "fwd=${conn.forwardedBytes}, acking",
                             )
                         }
-                        sendAckToBrowser(conn, connKey)
+                        sendAckToBrowser(conn)
                     } else {
                         // 乱序段 (seq > expected): 尚未能按序转发, 丢弃并回 ACK, 触发浏览器快重传缺失段
                         if (IS_DEBUG) {
@@ -404,7 +405,7 @@ class TcpStateMachine(
                                     "fwd=${conn.forwardedBytes}, acking",
                             )
                         }
-                        sendAckToBrowser(conn, connKey)
+                        sendAckToBrowser(conn)
                     }
                 } else {
                     // pure ACK (three-way handshake completion) — no payload
@@ -414,7 +415,7 @@ class TcpStateMachine(
                     // 按 RTO 退避(1/2/4/8s…)无限重传 FIN —— 每次重传都是无载荷段, 到达时
                     // 条目已删 → 全部落进孤儿桶且恒 0B, 这正是快照"孤儿包 N(0B)"的主源。
                     // 确认后再静默收尾, 不回 RST (F6: 对端是正常关闭的应用, 会看到 ECONNRESET)。
-                    sendAckToBrowser(conn, connKey)
+                    sendAckToBrowser(conn)
                     closeTcpConnection(connKey, conn, notifyBrowser = false)
                 }
             }
@@ -441,7 +442,6 @@ class TcpStateMachine(
             }
         }
 
-        stats.addPacket(payloadLength.toLong())
         return true
     }
 
@@ -504,9 +504,10 @@ class TcpStateMachine(
                         forwardThroughDirectChannel(conn, plugin, channel)
                     } else {
                         Log.e(TAG, "Plugin ${plugin.id} provides neither SOCKS5 port nor direct channel")
-                        VpnController.appLog(
+                        VpnController.appLogThrottled(
                             "隧道插件异常 · ${plugin.id} 既无本地 SOCKS 端口也无直连通道",
                             level = LogLevel.WARNING,
+                            throttleKey = "隧道插件异常",
                         )
                         val connKey = IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort)
                         // F6: 收敛到 closeTcpConnection (内部发 RST + 移除条目, 允许同五元组重建)
@@ -516,9 +517,10 @@ class TcpStateMachine(
             } catch (e: Exception) {
                 // 常开: 该异常 = 连接被 RST 秒断, 是"0% 下载失败"排查的关键现场
                 Log.e(TAG, "forwardSynToTunnel failed conn=${conn.id} dst=${conn.dstIp.hostAddress}:${conn.dstPort}", e)
-                VpnController.appLog(
+                VpnController.appLogThrottled(
                     "隧道转发失败 · ${conn.dstIp.hostAddress}:${conn.dstPort} — ${e.message}",
                     level = LogLevel.ERROR,
+                    throttleKey = "隧道转发失败",
                 )
                 stats.addError()
                 closeTcpConnection(
@@ -542,10 +544,11 @@ class TcpStateMachine(
             // protect 必须在 connect 之前: 未保护的套接字会路由进 VPN, 直连流量再次进 TUN 自环
             if (protect == null || !protect(sc.socket())) {
                 Log.e(TAG, "bypass: protect function missing or VpnService.protect() failed for conn ${conn.id}")
-                VpnController.appLog(
+                VpnController.appLogThrottled(
                     "分流直连失败 · protect 未设置或 VpnService.protect() 失败 " +
                         "(${conn.dstIp.hostAddress}:${conn.dstPort})",
                     level = LogLevel.WARNING,
+                    throttleKey = "分流直连失败",
                 )
                 sc.close()
                 // F6: 收敛到 closeTcpConnection (发 RST + 移除条目)
@@ -672,6 +675,12 @@ class TcpStateMachine(
         }
         if (!writeFully(byteArrayOf(0x05, 0x01, 0x02))) {
             Log.e(TAG, "SOCKS5 handshake write failed for conn=${conn.id}")
+            // 写失败与读失败同等致命, 同键同文案族 —— 只打 logcat 时现场零信号
+            VpnController.appLogThrottled(
+                "本地代理无响应 · SOCKS 握手写入失败 (${conn.dstIp.hostAddress}:${conn.dstPort})",
+                level = LogLevel.WARNING,
+                throttleKey = "本地代理无响应",
+            )
             return false
         }
         val handshakeResp = ByteBuffer.allocate(2)
@@ -715,6 +724,11 @@ class TcpStateMachine(
                 }.array()
         if (!writeFully(authReq)) {
             Log.e(TAG, "SOCKS5 auth write failed for conn=${conn.id}")
+            VpnController.appLogThrottled(
+                "本地代理无响应 · SOCKS 认证写入失败 (${conn.dstIp.hostAddress}:${conn.dstPort})",
+                level = LogLevel.WARNING,
+                throttleKey = "本地代理无响应",
+            )
             return false
         }
         val authResp = ByteBuffer.allocate(2)
@@ -825,9 +839,10 @@ class TcpStateMachine(
         val creds = plugin.socksAuth
         if (creds == null) {
             Log.e(TAG, "SOCKS5 auth credentials missing, refusing connection to ${conn.dstIp}:${conn.dstPort}")
-            VpnController.appLog(
+            VpnController.appLogThrottled(
                 "本地代理配置错误 · SOCKS 认证凭据缺失 (${conn.dstIp.hostAddress}:${conn.dstPort})",
                 level = LogLevel.WARNING,
+                throttleKey = "本地代理配置错误",
             )
             sock.close()
             closeTcpConnection(connKey, conn)
@@ -948,6 +963,7 @@ class TcpStateMachine(
                 "SOCKS 建连偏慢 · ${target(conn)} — ${handshakeMs}ms " +
                     "(SYN-ACK 延迟发送, 客户端在 SYN_SENT 等待; SSH 池饱和/远端握手慢)",
                 level = LogLevel.WARNING,
+                throttleKey = "SOCKS 建连偏慢",
             )
         }
         // 通道就绪 = 现在才能安全发 SYN-ACK (客户端此前只重传 SYN, 不会发应用数据)
@@ -959,7 +975,7 @@ class TcpStateMachine(
         // 握手期间缓存的回程数据 (banner/早到响应) 现在按序下发
         flushPendingReturn(conn)
         // 握手期间缓存的上行数据 (客户端提前发来的请求) 现在送出并补 ACK
-        flushPendingUpstream(conn, connKey)
+        flushPendingUpstream(conn)
         StageCounters.onForwardEstablished()
         VpnController.appLogThrottled(
             "隧道通道就绪 · ${target(conn)} — " +
@@ -972,6 +988,11 @@ class TcpStateMachine(
             sock.configureBlocking(false)
         } catch (e: IOException) {
             Log.w(TAG, "configureBlocking(false) failed for conn ${conn.id}: ${e.message}")
+            VpnController.appLogThrottled(
+                "SOCKS 非阻塞切换失败 · ${target(conn)} — ${e.message}",
+                level = LogLevel.WARNING,
+                throttleKey = "SOCKS 非阻塞切换失败",
+            )
         }
 
         if (!directRelay) {
@@ -1145,10 +1166,7 @@ class TcpStateMachine(
      * ACK 记账与正常路径一致 (forwardedBytes += 实发字节), 因此客户端重传的旧段会走 dup 分支,
      * 不会重复转发。写不进去 (write==0) 时把该段放回队首等下次, 不丢数据。
      */
-    private fun flushPendingUpstream(
-        conn: TcpConnection,
-        connKey: Long,
-    ) {
+    private fun flushPendingUpstream(conn: TcpConnection) {
         val channel = conn.socksChannel ?: return
         while (true) {
             val data: ByteArray
@@ -1166,6 +1184,11 @@ class TcpStateMachine(
                 }
             } catch (e: IOException) {
                 Log.w(TAG, "flushPendingUpstream write failed for conn ${conn.id}: ${e.message}")
+                VpnController.appLogThrottled(
+                    "上行转发失败 · ${target(conn)} — ${e::class.simpleName}:${e.message}",
+                    level = LogLevel.WARNING,
+                    throttleKey = "上行转发失败",
+                )
             }
             if (written < data.size) {
                 // 只发了部分: 未发部分放回队首, 且不推进 forwardedBytes (客户端会重传这部分)
@@ -1177,10 +1200,11 @@ class TcpStateMachine(
             }
             if (written > 0) {
                 synchronized(conn) { conn.forwardedBytes += written.toLong() }
-                sendAckToBrowser(conn, connKey)
+                sendAckToBrowser(conn)
                 VpnController.appLogThrottled(
                     "上行缓存已补发 · ${target(conn)} — ${written}B${if (written < data.size) " (部分)" else ""}",
                     level = LogLevel.INFO,
+                    throttleKey = "上行缓存已补发",
                 )
             }
         }
@@ -1239,11 +1263,12 @@ class TcpStateMachine(
                             "inflight=${conn.serverSeq - conn.clientAck} " +
                             "ack=${conn.clientAck} seq=${conn.serverSeq}",
                     )
-                    VpnController.appLog(
+                    VpnController.appLogThrottled(
                         "回程窗口耗尽 · ${conn.dstIp.hostAddress}:${conn.dstPort} — " +
                             "对端窗口 ${conn.clientWindowRaw}<<${conn.clientWscaleOffered ?: 0}," +
                             " 在途 ${conn.serverSeq - conn.clientAck}B (大流量下载停滞现场)",
                         level = LogLevel.WARNING,
+                        throttleKey = "回程窗口耗尽",
                     )
                 }
                 val waitStartNs = System.nanoTime()
@@ -1347,9 +1372,10 @@ class TcpStateMachine(
         val connected = channel.connect(TUN_CONNECT_TIMEOUT_MS)
         if (!connected) {
             Log.e(TAG, "channel.connect failed for plugin ${plugin.id}")
-            VpnController.appLog(
+            VpnController.appLogThrottled(
                 "SSH 通道连接失败 · ${plugin.id} (${conn.dstIp.hostAddress}:${conn.dstPort})",
                 level = LogLevel.ERROR,
+                throttleKey = "SSH 通道连接失败",
             )
             channel.disconnect()
             // F6: 发 RST + 移除条目, 允许同五元组新 SYN 重建
@@ -1453,48 +1479,23 @@ class TcpStateMachine(
 
             val packet = ByteBuffer.allocate(totalLen).order(ByteOrder.BIG_ENDIAN)
 
-            if (isIPv6) {
-                packet.putInt(0x60000000.toInt())
-                packet.putShort((tcpHeaderLen + payloadLength).toShort())
-                packet.put(6.toByte())
-                packet.put(64.toByte())
-                packet.put(srcIp)
-                packet.put(dstIp)
-            } else {
-                packet.put(0x45.toByte())
-                packet.put(0x00)
-                packet.putShort(totalLen.toShort())
-                packet.putShort((System.currentTimeMillis() and 0xFFFF).toShort())
-                packet.putShort(0x0000.toShort())
-                packet.put(64.toByte())
-                packet.put(6.toByte())
-                packet.putShort(0)
-                packet.put(srcIp)
-                packet.put(dstIp)
-            }
-
-            packet.putShort(srcPort.toShort())
-            packet.putShort(dstPort.toShort())
-            packet.putInt(seqNum.toInt())
-            packet.putInt(ackNum.toInt())
-            packet.putShort(0x5018.toShort())
-            packet.putShort(65535.toShort())
-            packet.putShort(0)
-            packet.putShort(0)
+            PacketWriter.writeIpHeader(
+                packet,
+                srcIp,
+                dstIp,
+                totalLen,
+                l4Len = tcpHeaderLen + payloadLength,
+                protocol = 6,
+                ipv4Flags = 0,
+            )
+            PacketWriter.writeTcpHeader(packet, srcPort, dstPort, seqNum, ackNum, flagsWord = 0x5018, window = 65535)
 
             packet.put(payload, payloadOffset, payloadLength)
 
             if (!isIPv6) {
-                packet.position(0)
-                val ipChecksum = ChecksumCalculator.ipChecksum(packet, ipHeaderLen)
-                packet.position(10)
-                packet.putShort(ipChecksum)
+                PacketWriter.writeIpv4HeaderChecksum(packet, ipHeaderLen)
             }
-
-            val tcpChecksum =
-                ChecksumCalculator.tcpChecksum(srcIp, dstIp, packet.array(), ipHeaderLen, payloadLength + tcpHeaderLen)
-            packet.position(ipHeaderLen + 16)
-            packet.putShort(tcpChecksum)
+            PacketWriter.writeTcpChecksum(packet, ipHeaderLen, payloadLength + tcpHeaderLen, srcIp, dstIp)
 
             if (!isIPv6) {
                 if (IS_DEBUG) Log.d(TAG, "TCP resp (${totalLen}B) conn=${conn.id}")
@@ -1574,35 +1575,25 @@ class TcpStateMachine(
 
             val packet = ByteBuffer.allocate(totalLen).order(ByteOrder.BIG_ENDIAN)
 
-            if (isIPv6) {
-                packet.putInt(0x60000000.toInt())
-                packet.putShort(tcpHeaderLen.toShort())
-                packet.put(6.toByte())
-                packet.put(64.toByte())
-                packet.put(srcIp)
-                packet.put(dstIp)
-            } else {
-                packet.put(0x45.toByte())
-                packet.put(0x00)
-                packet.putShort(totalLen.toShort())
-                packet.putShort((System.currentTimeMillis() and 0xFFFF).toShort())
-                packet.putShort(0x0000.toShort())
-                packet.put(64.toByte())
-                packet.put(6.toByte())
-                packet.putShort(0)
-                packet.put(srcIp)
-                packet.put(dstIp)
-            }
-
+            PacketWriter.writeIpHeader(
+                packet,
+                srcIp,
+                dstIp,
+                totalLen,
+                l4Len = tcpHeaderLen,
+                protocol = 6,
+                ipv4Flags = 0,
+            )
             // TCP Header: SYN+ACK (dataOffset = tcpHeaderLen/4)
-            packet.putShort(srcPort.toShort())
-            packet.putShort(dstPort.toShort())
-            packet.putInt(seqNum.toInt())
-            packet.putInt(ackNum.toInt())
-            packet.putShort(((tcpHeaderLen / 4) shl 12 or 0x12).toShort()) // SYN+ACK
-            packet.putShort(65535.toShort())
-            packet.putShort(0)
-            packet.putShort(0)
+            PacketWriter.writeTcpHeader(
+                packet,
+                srcPort,
+                dstPort,
+                seqNum,
+                ackNum,
+                flagsWord = ((tcpHeaderLen / 4) shl 12) or 0x12,
+                window = 65535,
+            )
             // 选项: [MSS] (+ [NOP WScale 0] 当客户端提供 WS)
             val mss = if (isIPv6) MAX_TCP_SEGMENT_V6 else MAX_TCP_SEGMENT
             packet.put(0x02)
@@ -1616,15 +1607,9 @@ class TcpStateMachine(
             }
 
             if (!isIPv6) {
-                packet.position(0)
-                val ipChecksum = ChecksumCalculator.ipChecksum(packet, ipHeaderLen)
-                packet.position(10)
-                packet.putShort(ipChecksum)
+                PacketWriter.writeIpv4HeaderChecksum(packet, ipHeaderLen)
             }
-
-            val tcpChecksum = ChecksumCalculator.tcpChecksum(srcIp, dstIp, packet.array(), ipHeaderLen, tcpHeaderLen)
-            packet.position(ipHeaderLen + 16)
-            packet.putShort(tcpChecksum)
+            PacketWriter.writeTcpChecksum(packet, ipHeaderLen, tcpHeaderLen, srcIp, dstIp)
 
             if (!isIPv6) {
                 if (IS_DEBUG) {
@@ -1648,10 +1633,7 @@ class TcpStateMachine(
     /**
      * 构建纯 ACK 包 (无 payload), 确认浏览器已发送的数据
      */
-    private fun buildAckPacket(
-        conn: TcpConnection,
-        ignoredConnKey: Long,
-    ): ByteArray? {
+    private fun buildAckPacket(conn: TcpConnection): ByteArray? {
         try {
             val srcPort = conn.dstPort
             val dstPort = conn.srcPort
@@ -1667,46 +1649,22 @@ class TcpStateMachine(
 
             val packet = ByteBuffer.allocate(totalLen).order(ByteOrder.BIG_ENDIAN)
 
-            if (isIPv6) {
-                packet.putInt(0x60000000.toInt())
-                packet.putShort(tcpHeaderLen.toShort())
-                packet.put(6.toByte())
-                packet.put(64.toByte())
-                packet.put(srcIp)
-                packet.put(dstIp)
-            } else {
-                packet.put(0x45.toByte())
-                packet.put(0x00)
-                packet.putShort(totalLen.toShort())
-                packet.putShort((System.currentTimeMillis() and 0xFFFF).toShort())
-                packet.putShort(0x0000.toShort())
-                packet.put(64.toByte())
-                packet.put(6.toByte())
-                packet.putShort(0)
-                packet.put(srcIp)
-                packet.put(dstIp)
-            }
-
+            PacketWriter.writeIpHeader(
+                packet,
+                srcIp,
+                dstIp,
+                totalLen,
+                l4Len = tcpHeaderLen,
+                protocol = 6,
+                ipv4Flags = 0,
+            )
             // TCP Header: ACK (无 payload, 不消耗 seq)
-            packet.putShort(srcPort.toShort())
-            packet.putShort(dstPort.toShort())
-            packet.putInt(seqNum.toInt())
-            packet.putInt(ackNum.toInt())
-            packet.putShort(0x5010.toShort()) // ACK
-            packet.putShort(65535.toShort())
-            packet.putShort(0)
-            packet.putShort(0)
+            PacketWriter.writeTcpHeader(packet, srcPort, dstPort, seqNum, ackNum, flagsWord = 0x5010, window = 65535)
 
             if (!isIPv6) {
-                packet.position(0)
-                val ipChecksum = ChecksumCalculator.ipChecksum(packet, ipHeaderLen)
-                packet.position(10)
-                packet.putShort(ipChecksum)
+                PacketWriter.writeIpv4HeaderChecksum(packet, ipHeaderLen)
             }
-
-            val tcpChecksum = ChecksumCalculator.tcpChecksum(srcIp, dstIp, packet.array(), ipHeaderLen, tcpHeaderLen)
-            packet.position(ipHeaderLen + 16)
-            packet.putShort(tcpChecksum)
+            PacketWriter.writeTcpChecksum(packet, ipHeaderLen, tcpHeaderLen, srcIp, dstIp)
 
             if (IS_DEBUG) Log.d(TAG, "ACK packet (${totalLen}B) conn=${conn.id} ack=$ackNum")
             return packet.array()
@@ -1744,45 +1702,22 @@ class TcpStateMachine(
 
             val packet = ByteBuffer.allocate(totalLen).order(ByteOrder.BIG_ENDIAN)
 
-            if (isIPv6) {
-                packet.putInt(0x60000000.toInt())
-                packet.putShort(tcpHeaderLen.toShort())
-                packet.put(6.toByte())
-                packet.put(64.toByte())
-                packet.put(srcIp)
-                packet.put(dstIp)
-            } else {
-                packet.put(0x45.toByte())
-                packet.put(0x00)
-                packet.putShort(totalLen.toShort())
-                packet.putShort((System.currentTimeMillis() and 0xFFFF).toShort())
-                packet.putShort(0x0000.toShort())
-                packet.put(64.toByte())
-                packet.put(6.toByte())
-                packet.putShort(0)
-                packet.put(srcIp)
-                packet.put(dstIp)
-            }
-
-            packet.putShort(srcPort.toShort())
-            packet.putShort(dstPort.toShort())
-            packet.putInt(seqNum.toInt())
-            packet.putInt(ackNum.toInt())
-            packet.putShort(flagsWord.toShort())
-            packet.putShort(0)
-            packet.putShort(0)
-            packet.putShort(0)
+            PacketWriter.writeIpHeader(
+                packet,
+                srcIp,
+                dstIp,
+                totalLen,
+                l4Len = tcpHeaderLen,
+                protocol = 6,
+                ipv4Flags = 0,
+            )
+            // 关闭包窗口通告 0 (与原实现一致): 对端不会再发数据, 无需开放窗口
+            PacketWriter.writeTcpHeader(packet, srcPort, dstPort, seqNum, ackNum, flagsWord, window = 0)
 
             if (!isIPv6) {
-                packet.position(0)
-                val ipChecksum = ChecksumCalculator.ipChecksum(packet, ipHeaderLen)
-                packet.position(10)
-                packet.putShort(ipChecksum)
+                PacketWriter.writeIpv4HeaderChecksum(packet, ipHeaderLen)
             }
-
-            val tcpChecksum = ChecksumCalculator.tcpChecksum(srcIp, dstIp, packet.array(), ipHeaderLen, tcpHeaderLen)
-            packet.position(ipHeaderLen + 16)
-            packet.putShort(tcpChecksum)
+            PacketWriter.writeTcpChecksum(packet, ipHeaderLen, tcpHeaderLen, srcIp, dstIp)
 
             if (IS_DEBUG) {
                 Log.d(
@@ -1917,12 +1852,9 @@ class TcpStateMachine(
         }
     }
 
-    private fun sendAckToBrowser(
-        conn: TcpConnection,
-        connKey: Long,
-    ) {
+    private fun sendAckToBrowser(conn: TcpConnection) {
         val writer = tunWriterProvider() ?: return
-        val ackPacket = buildAckPacket(conn, connKey) ?: return
+        val ackPacket = buildAckPacket(conn) ?: return
         try {
             writer.invoke(ackPacket)
         } catch (e: Exception) {
@@ -1955,13 +1887,15 @@ class TcpStateMachine(
         graceful: Boolean = false,
         reason: String = "",
     ) {
-        // 幂等占位: 关闭可能由多条路径并发触发 (远端 clean EOF 回调 / 回程 relay finally /
-        // 上行写失败 / 陈旧清理)。state==Closed 只在本函数内置, 且写入与 releaseUnusedFakeIps
-        // 同持 conn 锁 —— 这里也必须持锁读, 否则会漏判正在关闭的那一次。
-        // 不早退会: 重复计黑洞 + 重复发关闭包; 更关键的是下面的 map 删除若已被同五元组
-        // 重建换过新连接, 会把新建的那条摘掉 → 后续包全走孤儿分支, 连接永久卡死。
+        // 幂等占位: 判重与置 Closed 必须在**同一临界区**完成 —— 旧实现读完锁内判断、
+        // 却到 36 行后才写 Closed, check-then-act 让两条并发关闭路径 (远端 clean EOF 回调 /
+        // 回程 relay finally / 上行写失败 / 陈旧清理) 都能通过守卫: 重复计黑洞 + 重复发关闭包。
+        // 置 Closed 提前后, establish 各路径持 conn 锁见 Closed 即跳过 acquire, 与本函数
+        // 尾部 release 同锁配对 (假 IP 纪律不破); map 删除是 identity remove, 并发路径早退
+        // 不会误删同五元组重建的新连接。
         synchronized(conn) {
             if (conn.state == TcpConnection.TcpState.Closed) return
+            conn.state = TcpConnection.TcpState.Closed
         }
         // 生命周期日志: 连接为什么消失是排障必需信息 (曾只看到"同五元组反复重建"却不知原因)。
         // 上行字节取 forwardedBytes (已被隧道接收并转发的), 下行无逐连接计数故只报存活时长。
@@ -1982,7 +1916,8 @@ class TcpStateMachine(
         // F6: 通知浏览器使其立即 abort 而非挂死; 移除条目后同五元组新 SYN 自动重建。
         // graceful=true (远端正常 EOF) 发 FIN+ACK 而非 RST: 对端是正常收尾的应用,
         // RST 会让它看到 connection reset; 出错/拒绝/陈旧/断线清理仍走 RST 立即 abort。
-        if (notifyBrowser && conn.state != TcpConnection.TcpState.Closed) {
+        // 不再复查 state != Closed: 占位已保证本函数是唯一执行者。
+        if (notifyBrowser) {
             try {
                 val flags = if (graceful) TCP_FLAGS_FIN_ACK else TCP_FLAGS_RST_ACK
                 val closePacket = buildClosePacket(conn, flags)
@@ -1999,7 +1934,6 @@ class TcpStateMachine(
         // 与 forwardThroughLocalSocks 的 (check → establish → acquire) 串在同一把 conn 锁内,
         // 否则"close 先跑 release、establish 再 acquire"会让计数永久泄漏 (见 acquire 处注释)。
         synchronized(conn) {
-            conn.state = TcpConnection.TcpState.Closed
             releaseUnusedFakeIps(conn)
         }
         // 唤醒窗口闸门上的回程线程 (先置 volatile state 再 notify; 锁纪律见 awaitFlowCapacity)

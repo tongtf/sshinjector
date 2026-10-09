@@ -7,10 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.IOException
 import java.net.InetSocketAddress
@@ -22,10 +19,8 @@ import java.nio.channels.SocketChannel
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
-import javax.inject.Inject
-import javax.inject.Singleton
 
-private val IS_DEBUG = android.util.Log.isLoggable("Socks5Proxy", android.util.Log.DEBUG)
+private val IS_DEBUG = Log.isLoggable("Socks5Proxy", Log.DEBUG)
 private const val TIMEOUT_CHECK_INTERVAL_MS = 5000L
 
 /** 回程写入 TUN 超过此时长就告警: 它会把 JSch 读线程拖住 (管道 32KB→1MB 后仍是会话级风险)。 */
@@ -34,10 +29,8 @@ private const val SLOW_TUN_WRITE_WARN_MS = 300L
 /** 已写 SSH 但读回 0B 持续这么久 → 打「隧道无回程」, 每条连接只打一次。 */
 private const val ZERO_RETURN_WARN_MS = 5000L
 
-private val FAKE_TUNNEL_HOST_PREFIXES = listOf("198.18.", "198.19.", "fd00:")
-
-/** 是否 DnsInterceptor 分配的假 IP 主机 (198.18.0.0/15 或 fd00::/8) — 必须先映射回域名才能连接。 */
-private fun isFakeTunnelHost(host: String): Boolean = FAKE_TUNNEL_HOST_PREFIXES.any { host.startsWith(it) }
+/** 是否 DnsInterceptor 分配的假 IP 主机 — 判据单源在 [VpnNetwork.isFakeHost], 必须先映射回域名才能连接。 */
+private fun isFakeTunnelHost(host: String): Boolean = VpnNetwork.isFakeHost(host)
 
 // L4: 出向队列 64×32KB=2MB/连接。**实测过小**: 下行卡住时 SSH 写协程随之阻塞, 队列一满就
 // 只能"丢段靠客户端重传", 表现为上行重传风暴 (实测 1 分钟 16MB 上行 / 0.4MB 下行)。128 段留足突发吸收。
@@ -50,9 +43,7 @@ private typealias TunCallback = (ByteArray, Int, Int) -> Unit
  * 接受来自 VPNService 的连接，通过 SSH 隧道转发到远程服务器
  * 支持: TCP CONNECT, UDP ASSOCIATE, IPv4/IPv6/域名
  */
-@Singleton
 class Socks5ProxyServer
-    @Inject
     constructor(
         private val sshChannelFactory: SshChannelFactory,
         private val dnsInterceptor: DnsInterceptor,
@@ -87,9 +78,6 @@ class Socks5ProxyServer
 
         val serverState = MutableStateFlow<ServerState>(ServerState(ServerState.Status.Stopped))
         val boundPort = MutableStateFlow<Int?>(null)
-        val activeConnections = MutableStateFlow(0)
-        val totalBytesUp = MutableStateFlow(0L)
-        val totalBytesDown = MutableStateFlow(0L)
 
         data class ServerState(
             val status: Status = Status.Stopped,
@@ -133,9 +121,10 @@ class Socks5ProxyServer
                 Result.success(actualPort)
             } catch (e: IOException) {
                 serverState.value = ServerState(ServerState.Status.Error, error = e.message)
-                VpnController.appLog(
+                VpnController.appLogThrottled(
                     "本地代理启动失败 · bind $bindAddress:$port — ${e.message} (端口被占用?)",
                     level = LogLevel.ERROR,
+                    throttleKey = "本地代理启动失败",
                 )
                 stop()
                 Result.failure(e)
@@ -165,7 +154,6 @@ class Socks5ProxyServer
             selector = null
             serverChannel = null
             boundPort.value = null
-            activeConnections.value = 0
 
             scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -192,7 +180,7 @@ class Socks5ProxyServer
                                         }
                                     } catch (e: java.nio.channels.CancelledKeyException) {
                                         // 连接关闭与选中键处理的正常竞态 (key 在 select 后、处理前被 cancel)
-                                        android.util.Log.d("Socks5Proxy", "cancelled key (benign)", e)
+                                        Log.d("Socks5Proxy", "cancelled key (benign)", e)
                                     }
                                 }
                             }
@@ -200,7 +188,7 @@ class Socks5ProxyServer
                     }
                 } catch (e: IOException) {
                     if (selector?.isOpen == true) {
-                        android.util.Log.w("Socks5Proxy", "eventLoop IO error", e)
+                        Log.w("Socks5Proxy", "eventLoop IO error", e)
                         VpnController.appLogThrottled(
                             "本地代理事件循环 IO 错误 — ${e.message}",
                             throttleKey = "本地代理事件循环 IO 错误",
@@ -209,7 +197,7 @@ class Socks5ProxyServer
                         stopped = true
                     }
                 } catch (e: Exception) {
-                    android.util.Log.e("Socks5Proxy", "eventLoop unexpected error", e)
+                    Log.e("Socks5Proxy", "eventLoop unexpected error", e)
                     // 单次迭代异常 (非 IO): 循环继续; 带异常类名 — message 可能为 null
                     VpnController.appLogThrottled(
                         "本地代理事件循环单次异常 — $e (循环继续)",
@@ -275,13 +263,10 @@ class Socks5ProxyServer
                     channel = clientChannel,
                     sshChannelFactory = sshChannelFactory,
                     sshIoDispatcher = sshIoDispatcher,
-                    onDataSent = { bytes -> totalBytesUp.update { it + bytes } },
-                    onDataReceived = { bytes -> totalBytesDown.update { it + bytes } },
                     onClosed = {
                         connections.remove(connectionId.toInt())
                         removeTunCallback(clientPort)
                         removeTargetEofCallback(clientPort)
-                        activeConnections.value = connections.size
                     },
                     onDataFromTarget = null,
                     ipToDomainLookup = { dnsInterceptor.lookupDomain(it) },
@@ -294,7 +279,6 @@ class Socks5ProxyServer
             connection.pendingTargetEofCallbacksRef = pendingTargetEofCallbacks
 
             connections[connectionId.toInt()] = connection
-            activeConnections.value = connections.size
 
             connection.startTimeoutChecker()
 
@@ -317,23 +301,6 @@ class Socks5ProxyServer
                 connection.handleWrite(key)
             }
         }
-
-        fun getStats(): ProxyStats =
-            ProxyStats(
-                status = serverState.value.status,
-                port = boundPort.value,
-                activeConnections = activeConnections.value,
-                totalBytesUp = totalBytesUp.value,
-                totalBytesDown = totalBytesDown.value,
-            )
-
-        data class ProxyStats(
-            val status: ServerState.Status,
-            val port: Int?,
-            val activeConnections: Int,
-            val totalBytesUp: Long,
-            val totalBytesDown: Long,
-        )
     }
 
 /**
@@ -346,8 +313,6 @@ private class Socks5Connection(
     val channel: SocketChannel,
     private val sshChannelFactory: SshChannelFactory?,
     private val sshIoDispatcher: SshIoDispatcher,
-    private val onDataSent: (Long) -> Unit,
-    private val onDataReceived: (Long) -> Unit,
     private val onClosed: () -> Unit,
     var onDataFromTarget: ((ByteArray, Int, Int) -> Unit)? = null,
     private val ipToDomainLookup: ((String) -> String?)? = null,
@@ -405,21 +370,29 @@ private class Socks5Connection(
      */
     internal val backpressureCount = AtomicLong()
 
-    // 出向(本地 SOCKS → SSH)有界 Channel: eventLoop trySend 入队, 写协程挂起接收。
-    // 满时挂到连接级单槽 pendingToSshBlock(不丢), 暂停 OP_READ 背压; 写协程腾出空间后回填。
-    private val toSshChannel =
-        Channel<ByteArray>(capacity = SSH_SEND_QUEUE_CAPACITY, onBufferOverflow = BufferOverflow.SUSPEND)
+    // 背压状态锁: 保护 interestOps 的 RMW (OP_READ 暂停/恢复可能来自写协程,
+    // OP_WRITE 增删来自 eventLoop/sshIoDispatcher) —— 拆成多把锁会丢位。
+    // BackpressureGate 的单槽状态与回调也跑在它下面 (竞态纪律见 BackpressureGate KDoc)。
+    private val backpressureLock = Any()
 
-    @Volatile private var pendingToSshBlock: ByteArray? = null
-
-    @Volatile private var pendingToSshFull = false
+    // 出向(本地 SOCKS → SSH)背压闸: eventLoop/sshIo 入队, 写协程挂起接收;
+    // 满时挂连接级单槽(不丢)并经回调暂停 OP_READ, 写协程腾出空间后回填。
+    private val outgoingGate =
+        BackpressureGate(
+            capacity = SSH_SEND_QUEUE_CAPACITY,
+            lock = backpressureLock,
+            onBlocked = {
+                // 必须计数: diagnostics() 的「背压触发 N 次」是上行重传风暴的唯一可见证据,
+                // 不自增就永远打 0 —— 正是历史上"各丢弃计数全 0 但数据真丢了"的形态
+                backpressureCount.incrementAndGet()
+                suspendLocalRead()
+            },
+            onResumed = { resumeLocalReadOps() },
+        )
 
     // CONNECT 请求后剩余于 buffer 的预读数据: eventLoop 在 connectToTarget 时提取,
     // onTargetConnected (sshIoDispatcher) 只读此字段, 避免 buffer 跨线程并发访问。
     @Volatile private var pendingConnectData: ByteArray? = null
-
-    // 背压状态锁: 保护 pendingToSshBlock/pendingToSshFull/OP_READ 切换的原子性
-    private val backpressureLock = Any()
 
     // 超时配置
     @Volatile private var lastActivity = System.currentTimeMillis()
@@ -446,7 +419,7 @@ private class Socks5Connection(
         try {
             // 检查超时
             if (checkTimeout()) {
-                android.util.Log.w("Socks5Proxy", "[conn=$id] handleRead: timeout, closing")
+                Log.w("Socks5Proxy", "[conn=$id] handleRead: timeout, closing")
                 close()
                 return
             }
@@ -455,20 +428,19 @@ private class Socks5Connection(
             val read = channel.read(buffer)
 
             if (read == -1) {
-                if (IS_DEBUG) android.util.Log.d("Socks5Proxy", "[conn=$id] handleRead: EOF (state=$state)")
+                if (IS_DEBUG) Log.d("Socks5Proxy", "[conn=$id] handleRead: EOF (state=$state)")
                 close()
                 return
             }
 
             buffer.flip()
             lastActivity = System.currentTimeMillis()
-            onDataReceived(read.toLong())
 
             // 循环处理 buffer 中所有可用数据; 各 process 返回 false = 半包等待续传/已关闭, 停止空转
             var keepProcessing = true
             while (keepProcessing && buffer.hasRemaining() && state != SocksState.Closed) {
                 if (IS_DEBUG) {
-                    android.util.Log.d(
+                    Log.d(
                         "Socks5Proxy",
                         "[conn=$id] loop state=$state remaining=${buffer.remaining()}",
                     )
@@ -493,7 +465,7 @@ private class Socks5Connection(
                 if (buffer.position() == buffer.limit()) buffer.clear() else buffer.compact()
             }
         } catch (e: Exception) {
-            android.util.Log.e("Socks5Proxy", "[conn=$id] handleRead exception: ${e.message}", e)
+            Log.e("Socks5Proxy", "[conn=$id] handleRead exception: ${e.message}", e)
             val up = bytesToTunnel.get()
             val down = bytesFromTunnel.get()
             val ageSec = (System.currentTimeMillis() - openedAt) / 1000
@@ -513,7 +485,6 @@ private class Socks5Connection(
             if (buf.hasRemaining()) {
                 try {
                     val written = synchronized(writeLock) { channel.write(buf) }
-                    onDataSent(written.toLong())
                     bytesFromTunnel.addAndGet(written.toLong())
                     lastActivity = System.currentTimeMillis()
                     if (buf.hasRemaining()) {
@@ -612,7 +583,7 @@ private class Socks5Connection(
                 MessageDigest.isEqual(auth.first.toByteArray(Charsets.UTF_8), user) &&
                 MessageDigest.isEqual(auth.second.toByteArray(Charsets.UTF_8), pass)
         if (IS_DEBUG) {
-            android.util.Log.d(
+            Log.d(
                 "Socks5Proxy",
                 "[conn=$id] auth: userLen=$userLen passLen=$passLen ok=$ok expected=${auth?.first}",
             )
@@ -715,13 +686,14 @@ private class Socks5Connection(
         var host = remoteHost
         val port = remotePort
 
-        if (IS_DEBUG) android.util.Log.d("Socks5Proxy", "connectToTarget: $host:$port, factory=${factory != null}")
+        if (IS_DEBUG) Log.d("Socks5Proxy", "connectToTarget: $host:$port, factory=${factory != null}")
 
         if (factory == null || host == null) {
-            android.util.Log.e("Socks5Proxy", "connectToTarget failed: factory=$factory host=$host")
-            VpnController.appLog(
+            Log.e("Socks5Proxy", "connectToTarget failed: factory=$factory host=$host")
+            VpnController.appLogThrottled(
                 "本地代理配置错误 · 无 SSH 通道工厂 (host=$host)",
                 level = LogLevel.WARNING,
+                throttleKey = "本地代理配置错误",
             )
             sendErrorReplyAndClose(0x05)
             return
@@ -730,7 +702,7 @@ private class Socks5Connection(
         // 线程池满载时直接拒绝: 避免 CallerRunsPolicy 将阻塞的 SSH 连接操作
         // 回执到 eventLoop 线程, 冻结整个 SOCKS5 代理 (128+ 并发时可能触发)
         if (sshIoDispatcher.isSaturated()) {
-            android.util.Log.w("Socks5Proxy", "connectToTarget rejected: ssh-io pool saturated ($host:$port)")
+            Log.w("Socks5Proxy", "connectToTarget rejected: ssh-io pool saturated ($host:$port)")
             VpnController.appLogThrottled(
                 "连接被拒 · SSH IO 线程池已饱和 ($host:$port)",
                 level = LogLevel.WARNING,
@@ -747,7 +719,7 @@ private class Socks5Connection(
             if (mapped == null || mapped == host) {
                 // 假 IP 无映射 (映射被逐出/VPN 进程重启): 把 198.18.x.x 当真实主机发给远端
                 // 会黑洞超时再重试, 永远"连接中" — 秒拒让客户端立刻重查 DNS 拿新映射
-                android.util.Log.w(
+                Log.w(
                     "Socks5Proxy",
                     "connectToTarget: fake IP has no domain mapping, reject fast: $host:$port",
                 )
@@ -766,7 +738,7 @@ private class Socks5Connection(
         resolvedRemoteHost = resolvedHost
 
         if (resolvedHost != host && IS_DEBUG) {
-            android.util.Log.d("Socks5Proxy", "Resolved fake IP $host to domain $resolvedHost")
+            Log.d("Socks5Proxy", "Resolved fake IP $host to domain $resolvedHost")
         }
 
         // 提取 CONNECT 请求后预读的剩余数据 (当前在 eventLoop 线程, buffer 独占)。
@@ -784,7 +756,7 @@ private class Socks5Connection(
             try {
                 val tunnel = factory.createDirectChannel(resolvedHost, port)
                 if (tunnel == null) {
-                    android.util.Log.e(
+                    Log.e(
                         "Socks5Proxy",
                         "connectToTarget failed: createDirectChannel returned null for $host:$port",
                     )
@@ -799,7 +771,7 @@ private class Socks5Connection(
 
                 val connected = tunnel.connect(5000)
                 if (!connected) {
-                    android.util.Log.e(
+                    Log.e(
                         "Socks5Proxy",
                         "connectToTarget failed: tunnel.connect returned false for $host:$port",
                     )
@@ -813,7 +785,7 @@ private class Socks5Connection(
                     return@launch
                 }
 
-                if (IS_DEBUG) android.util.Log.d("Socks5Proxy", "connectToTarget success: $host:$port")
+                if (IS_DEBUG) Log.d("Socks5Proxy", "connectToTarget success: $host:$port")
                 // close() 可能在这 5s 的阻塞 connect() 里整个跑完: scope.cancel() 打不断非挂起点,
                 // 而此刻 targetTunnel 还是 null, close() 的 targetTunnel?.disconnect() 会空过 ——
                 // 这条通道从此无人 disconnect, 挂在 JSch 静态 Channel.pool 里泄漏, 且它会持续
@@ -830,7 +802,7 @@ private class Socks5Connection(
                         }
                     }
                 if (closedWhileConnecting) {
-                    android.util.Log.w(
+                    Log.w(
                         "Socks5Proxy",
                         "connectToTarget: connection closed during tunnel.connect, discarding channel $host:$port",
                     )
@@ -839,7 +811,7 @@ private class Socks5Connection(
                 }
                 onTargetConnected()
             } catch (e: Exception) {
-                android.util.Log.e("Socks5Proxy", "connectToTarget exception: $host:$port", e)
+                Log.e("Socks5Proxy", "connectToTarget exception: $host:$port", e)
                 VpnController.appLogThrottled(
                     "SSH 通道连接异常 · $host:$port — ${e.message}",
                     level = LogLevel.ERROR,
@@ -893,7 +865,7 @@ private class Socks5Connection(
             }
             val callback = resolvedCallback
             if (IS_DEBUG) {
-                android.util.Log.d(
+                Log.d(
                     "Socks5Proxy",
                     "[conn=$id] relayFromTarget started, callbackKey=$tunCallbackKey " +
                         "callback=${if (callback != null) "set" else "MISSING"}",
@@ -906,7 +878,7 @@ private class Socks5Connection(
                     val read = input.read(readBuffer.array())
                     val readWaitMs = (System.nanoTime() - readStart) / 1000000
                     if (read == -1) {
-                        android.util.Log.w("Socks5Proxy", "[conn=$id] relayFromTarget: EOF from tunnel")
+                        Log.w("Socks5Proxy", "[conn=$id] relayFromTarget: EOF from tunnel")
                         // remove-and-invoke: 与 close() 的 remove 竞争时也只触发一次
                         // (CHM.remove 原子, 谁拿到非 null 谁负责上报)。
                         // 必须先于 close(): close() 走 onClosed 会清掉这条回调。
@@ -924,9 +896,8 @@ private class Socks5Connection(
                         // @Synchronized writeToTun, 可能阻塞; 之后再计数会把"SSH 其实读到了"
                         // 的字节藏起来, 零回程诊断就把"回程堵在 TUN 写"误判成"远端没回话"。
                         fromTunnelTotal.addAndGet(read.toLong())
-                        onDataReceived(read.toLong())
                         if (IS_DEBUG) {
-                            android.util.Log.d(
+                            Log.d(
                                 "Socks5Proxy",
                                 "[conn=$id] relayFromTarget: received ${read}B wait=${readWaitMs}ms " +
                                     "callback=${callback != null}",
@@ -952,7 +923,7 @@ private class Socks5Connection(
                     }
                 }
             } catch (e: Exception) {
-                android.util.Log.e("Socks5Connection", "[conn=$id] relayFromTarget error: ${e.message}", e)
+                Log.e("Socks5Connection", "[conn=$id] relayFromTarget error: ${e.message}", e)
                 VpnController.appLogThrottled(
                     "回程读取异常 · SSH → 浏览器 $remoteHost:$remotePort — ${e.message}",
                     level = LogLevel.WARNING,
@@ -964,7 +935,7 @@ private class Socks5Connection(
                 pendingTargetEofCallbacksRef?.remove(tunCallbackKey)?.invoke(false)
                 this@Socks5Connection.close()
             } finally {
-                if (IS_DEBUG) android.util.Log.d("Socks5Connection", "[conn=$id] relayFromTarget coroutine exiting")
+                if (IS_DEBUG) Log.d("Socks5Connection", "[conn=$id] relayFromTarget coroutine exiting")
             }
         }
     }
@@ -1018,7 +989,13 @@ private class Socks5Connection(
                     attempts++
                 }
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            // 静默 close 会让客户端只看到连接被重置却无从归因 —— 应答写失败必须留痕
+            VpnController.appLogThrottled(
+                "本地代理应答写失败 · ${targetForLog()}:$remotePort — ${e.message} (客户端看到连接被重置)",
+                level = LogLevel.WARNING,
+                throttleKey = "本地代理应答写失败",
+            )
         }
         close()
     }
@@ -1039,7 +1016,12 @@ private class Socks5Connection(
                 // 唤醒阻塞中的 selector, 避免跨线程 interestOps 修改后写入延迟
                 try {
                     selectionKey!!.selector().wakeup()
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    VpnController.appLogThrottled(
+                        "本地代理唤醒失败 · ${targetForLog()} — ${e.message}",
+                        level = LogLevel.WARNING,
+                        throttleKey = "本地代理唤醒失败",
+                    )
                 }
             } else {
                 synchronized(writeLock) {
@@ -1047,6 +1029,11 @@ private class Socks5Connection(
                 }
             }
         } catch (e: Exception) {
+            VpnController.appLogThrottled(
+                "本地代理应答写失败 · ${targetForLog()}:$remotePort — ${e.message} (客户端看到连接被重置)",
+                level = LogLevel.WARNING,
+                throttleKey = "本地代理应答写失败",
+            )
             close()
         }
     }
@@ -1080,25 +1067,12 @@ private class Socks5Connection(
     }
 
     /**
-     * 出向入队统一入口: 双检 trySend, 失败时在锁内挂单槽 + 暂停 OP_READ。
-     * 锁保证 pendingToSshBlock 单槽不被并发覆盖, 且 full 标志与 OP_READ
-     * 状态切换原子, 消除 eventLoop 与 sshIoDispatcher 之间的背压竞态。
+     * 出向入队统一入口: 入闸 (双检 trySend, 满则锁内挂单槽 + 暂停 OP_READ),
+     * 成功/挂槽都算"已接受"。
      */
     private fun enqueueData(data: ByteArray) {
-        if (!toSshChannel.trySend(data).isSuccess) {
-            synchronized(backpressureLock) {
-                if (!toSshChannel.trySend(data).isSuccess) {
-                    pendingToSshBlock = data
-                    pendingToSshFull = true
-                    // 必须计数: diagnostics() 的「背压触发 N 次」是上行重传风暴的唯一可见证据,
-                    // 不自增就永远打 0 —— 正是历史上"各丢弃计数全 0 但数据真丢了"的形态
-                    backpressureCount.incrementAndGet()
-                    suspendLocalRead()
-                }
-            }
-        }
+        outgoingGate.enqueue(data)
         lastActivity = System.currentTimeMillis()
-        onDataSent(data.size.toLong())
         bytesToTunnel.addAndGet(data.size.toLong())
     }
 
@@ -1111,17 +1085,17 @@ private class Socks5Connection(
         val output = tunnel.outputStream ?: return
 
         scope.launch {
-            for (data in toSshChannel) {
+            for (data in outgoingGate.outgoing) {
                 try {
                     output.write(data)
                     // JSch SSH channel 需要 flush 才能真正发送数据包
                     output.flush()
                     toTunnelTotal.addAndGet(data.size.toLong())
                     if (firstSshWriteAt == 0L) firstSshWriteAt = System.currentTimeMillis()
-                    resumeLocalReadIfSpace()
+                    outgoingGate.resumeIfSpace()
                 } catch (e: Exception) {
                     if (state != SocksState.Closed) {
-                        android.util.Log.e("Socks5Proxy", "[conn=$id] ssh write error: ${e.message}", e)
+                        Log.e("Socks5Proxy", "[conn=$id] ssh write error: ${e.message}", e)
                         VpnController.appLogThrottled(
                             "SSH 写入失败 · 浏览器 → SSH $remoteHost:$remotePort — ${e.message}",
                             level = LogLevel.ERROR,
@@ -1136,25 +1110,21 @@ private class Socks5Connection(
     }
 
     /**
-     * 写协程腾出空间后: 回填挂起块, 再恢复本地 OP_READ。
+     * 解除背压: 恢复本地 OP_READ。由 BackpressureGate 在锁内回填单槽成功后回调,
+     * 不直接持有任何闸状态。
      */
-    private fun resumeLocalReadIfSpace() {
-        synchronized(backpressureLock) {
-            if (!pendingToSshFull) return
-            val pending = pendingToSshBlock
-            if (pending != null) {
-                if (!toSshChannel.trySend(pending).isSuccess) return
-                pendingToSshBlock = null
-            }
-            pendingToSshFull = false
-
-            val sk = selectionKey
-            if (sk == null || !sk.isValid) return
-            try {
-                sk.interestOps(sk.interestOps() or SelectionKey.OP_READ)
-                sk.selector().wakeup()
-            } catch (_: Exception) {
-            }
+    private fun resumeLocalReadOps() {
+        val sk = selectionKey
+        if (sk == null || !sk.isValid) return
+        try {
+            sk.interestOps(sk.interestOps() or SelectionKey.OP_READ)
+            sk.selector().wakeup()
+        } catch (e: Exception) {
+            VpnController.appLogThrottled(
+                "本地代理恢复读失败 · ${targetForLog()} — ${e.message} (连接可能卡在背压)",
+                level = LogLevel.WARNING,
+                throttleKey = "本地代理恢复读失败",
+            )
         }
     }
 
@@ -1167,7 +1137,12 @@ private class Socks5Connection(
         if (sk == null || !sk.isValid) return
         try {
             sk.interestOps(sk.interestOps() and SelectionKey.OP_READ.inv())
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            VpnController.appLogThrottled(
+                "本地代理暂停读失败 · ${targetForLog()} — ${e.message}",
+                level = LogLevel.WARNING,
+                throttleKey = "本地代理暂停读失败",
+            )
         }
     }
 
@@ -1232,7 +1207,7 @@ private class Socks5Connection(
                     kotlinx.coroutines.delay(TIMEOUT_CHECK_INTERVAL_MS)
                     reportZeroReturnIfNeeded()
                     if (state != SocksState.Closed && checkTimeout()) {
-                        android.util.Log.w("Socks5Proxy", "Connection $id timed out (state=$state)")
+                        Log.w("Socks5Proxy", "Connection $id timed out (state=$state)")
                         close()
                         break
                     }
