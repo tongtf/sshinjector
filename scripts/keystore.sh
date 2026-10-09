@@ -254,6 +254,15 @@ cmd_install() {
     info "已解密"
   fi
 
+  # 先校验归档成员路径, 拒绝绝对路径/路径穿越
+  while IFS= read -r entry; do
+    case "$entry" in
+      /*|*"/../"*|../*|*/..|..)
+        die "bundle 内含不安全路径: $entry"
+        ;;
+    esac
+  done < <(tar -tzf "$tarball")
+
   tar -C "$tmp" -xzf "$tarball"
   [[ -f "$tmp/$PROPS_NAME" ]] || die "bundle 里没有 $PROPS_NAME"
   # 先确认 bundle 内部指纹正确, 再覆盖目标机文件 —— 避免把坏材料盖上去
@@ -262,6 +271,11 @@ cmd_install() {
   pass=$(props_get "$tmp/$PROPS_NAME" storePassword || true)
   alias=$(props_get "$tmp/$PROPS_NAME" keyAlias || true)
   [[ -n "$store" && -n "$pass" && -n "$alias" ]] || die "bundle 内 $PROPS_NAME 缺字段"
+  case "$store" in
+    /*|*"/../"*|../*|*/..|..)
+      die "bundle 内 storeFile 非法(必须是仓库内相对路径): $store"
+      ;;
+  esac
   [[ -f "$tmp/$store" ]] || die "bundle 内缺少 keystore 文件: $store"
   fp=$(cert_fingerprint "$tmp/$store" "$pass" "$alias")
   [[ -n "$fp" ]] || die "bundle 内 keystore 读不出证书 (密码/alias 错)"
