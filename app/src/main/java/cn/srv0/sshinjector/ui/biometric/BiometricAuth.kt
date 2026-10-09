@@ -19,10 +19,11 @@ class BiometricAuth
     @Inject
     constructor(
         private val keyManager: SshKeyManager,
-    ) { /**
-     * 判断指定密钥是否要求生物识别/锁屏认证才能签名。
-     */
-    fun needsBiometric(keyAlias: String): Boolean = keyAlias.isNotEmpty() && keyManager.isBiometricProtected(keyAlias)
+    ) {
+        /**
+         * 判断指定密钥是否要求生物识别/锁屏认证才能签名。
+         */
+        fun needsBiometric(keyAlias: String): Boolean = keyAlias.isNotEmpty() && keyManager.isBiometricProtected(keyAlias)
 
         /**
          * 弹出生物识别认证框。认证成功后回调 onSuccess。
@@ -63,7 +64,7 @@ class BiometricAuth
                     .setSubtitle(activity.getString(R.string.settings_verify_identity_sub))
                     .setNegativeButtonText(activity.getString(R.string.cancel))
                     .setAllowedAuthenticators(
-                        androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG,
+                        BiometricManager.Authenticators.BIOMETRIC_STRONG,
                     ).build()
             prompt.authenticate(promptInfo)
         }
