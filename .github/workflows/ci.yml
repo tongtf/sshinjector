@@ -64,6 +64,38 @@ jobs:
       - name: Run Unit Tests
         run: ./gradlew testDebugUnitTest
       
+      # 失败时把测试名+首行 message 提为 annotation — 日志接口匿名不可读,
+      # annotation 走公开 API 且直接挂在 run 页面上, 免去翻 artifact
+      - name: Report failed tests
+        if: failure()
+        run: |
+          python3 - <<'PYEOF'
+          import glob, html, os, re
+          found = []
+          for p in glob.glob("app/build/test-results/testDebugUnitTest/*.xml"):
+              s = open(p, encoding="utf-8", errors="replace").read()
+              cm = re.search(r'<testsuite name="([^"]+)"', s)
+              cls = cm.group(1) if cm else p
+              for m in re.finditer(r'<testcase name="([^"]+)"[^>]*>(.*?)</testcase>', s, re.S):
+                  body = m.group(2)
+                  fm = re.search(r'<(?:failure|error)\b[^>]*?message="([^"]*)"', body, re.S)
+                  if fm:
+                      msg = html.unescape(fm.group(1))
+                  elif "<failure" in body or "<error" in body:
+                      inner = re.search(r'<(?:failure|error)\b[^>]*>([^<]*)', body)
+                      msg = inner.group(1) if inner else ""
+                  else:
+                      continue
+                  msg = msg.splitlines()[0].strip()[:300] if msg else "(no message)"
+                  found.append(f"{cls}.{m.group(1)}: {msg}")
+          for line in found:
+              print(f"::error::{line}")
+          if found:
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+                  f.write("### Failed unit tests\n\n")
+                  f.writelines(f"- `{line}`\n" for line in found)
+          PYEOF
+      
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v5
