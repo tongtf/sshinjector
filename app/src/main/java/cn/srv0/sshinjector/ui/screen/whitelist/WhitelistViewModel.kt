@@ -5,8 +5,8 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import cn.srv0.sshinjector.data.local.dao.WhitelistDao
-import cn.srv0.sshinjector.data.local.entity.WhitelistAppEntity
+import cn.srv0.sshinjector.domain.model.WhitelistApp
+import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -22,7 +22,7 @@ class WhitelistViewModel
     @Inject
     constructor(
         @ApplicationContext private val context: Context,
-        private val whitelistDao: WhitelistDao,
+        private val serverRepository: ServerRepository,
     ) : ViewModel() {
         private val _enabledPackages = MutableStateFlow<Set<String>>(emptySet())
         val enabledPackages: StateFlow<Set<String>> = _enabledPackages.asStateFlow()
@@ -39,7 +39,7 @@ class WhitelistViewModel
 
         init {
             viewModelScope.launch {
-                whitelistDao.getEnabled().collect { list ->
+                serverRepository.enabledWhitelistFlow.collect { list ->
                     _enabledPackages.value = list.map { it.packageName }.toSet()
                 }
             }
@@ -52,9 +52,9 @@ class WhitelistViewModel
         ) {
             viewModelScope.launch {
                 if (enabled) {
-                    whitelistDao.insert(WhitelistAppEntity(packageName = packageName, appName = appName))
+                    serverRepository.addToWhitelist(WhitelistApp(packageName = packageName, appName = appName))
                 } else {
-                    whitelistDao.delete(packageName)
+                    serverRepository.removeFromWhitelist(packageName)
                 }
             }
         }

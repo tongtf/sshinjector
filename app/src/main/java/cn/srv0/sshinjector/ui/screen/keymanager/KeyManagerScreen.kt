@@ -16,7 +16,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
@@ -62,6 +61,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.data.remote.ssh.KeyKind
+import cn.srv0.sshinjector.ui.component.BackNavIcon
 import cn.srv0.sshinjector.ui.component.rememberClickGuard
 import kotlinx.coroutines.launch
 
@@ -99,12 +99,7 @@ fun KeyManagerScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.key_title)) },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.back),
-                        )
-                    }
+                    BackNavIcon(onNavigateBack)
                 },
                 actions = {
                     IconButton(onClick = { showGenerateDialog = true }) {
@@ -124,7 +119,7 @@ fun KeyManagerScreen(
     ) { innerPadding ->
         Column(
             modifier =
-                Modifier
+                modifier
                     .fillMaxSize()
                     .padding(innerPadding)
                     .verticalScroll(rememberScrollState())
@@ -503,285 +498,6 @@ fun KeyManagerScreen(
                 },
             )
         }
-    }
-
-    @Composable
-    fun KeyListItem(
-        alias: String,
-        algorithm: String,
-        createdAt: String,
-        kind: KeyKind,
-        isBiometricProtected: Boolean,
-        onCopy: () -> Unit,
-        onDelete: () -> Unit,
-    ) {
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-        ) {
-            Row(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    KeyKindIcon(
-                        kind = kind,
-                        isBiometricProtected = isBiometricProtected,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            alias,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            "$algorithm • $createdAt",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = onCopy,
-                        contentPadding =
-                            PaddingValues(
-                                horizontal = 12.dp,
-                                vertical = 6.dp,
-                            ),
-                    ) {
-                        Text(stringResource(R.string.copy), fontSize = 12.sp)
-                    }
-                    OutlinedButton(
-                        onClick = onDelete,
-                        colors =
-                            ButtonDefaults.outlinedButtonColors(
-                                contentColor = MaterialTheme.colorScheme.error,
-                            ),
-                        contentPadding =
-                            PaddingValues(
-                                horizontal = 12.dp,
-                                vertical = 6.dp,
-                            ),
-                    ) {
-                        Text(stringResource(R.string.delete), fontSize = 12.sp)
-                    }
-                }
-            }
-        }
-    }
-
-    @Composable
-    fun KeyKindIcon(
-        kind: KeyKind,
-        isBiometricProtected: Boolean,
-        modifier: Modifier = Modifier,
-        tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
-    ) {
-        val imageVector: androidx.compose.ui.graphics.vector.ImageVector
-        val color: Color
-        when {
-            kind == KeyKind.GENERATED && isBiometricProtected -> {
-                imageVector = Icons.Default.Lock
-                color = MaterialTheme.colorScheme.primary
-            }
-            kind == KeyKind.GENERATED -> {
-                imageVector = Icons.Default.Lock
-                color = tint
-            }
-            kind == KeyKind.IMPORTED_PRIVATE -> {
-                imageVector = Icons.Default.Edit
-                color = MaterialTheme.colorScheme.tertiary
-            }
-            else -> {
-                imageVector = Icons.AutoMirrored.Filled.Send
-                color = tint
-            }
-        }
-        Icon(
-            imageVector = imageVector,
-            contentDescription = null,
-            modifier = modifier,
-            tint = color,
-        )
-    }
-
-    @Composable
-    fun GenerateKeyDialog(
-        onConfirm: (Int) -> Unit,
-        onDismiss: () -> Unit,
-        selectedAlgorithm: Int,
-        onAlgorithmChange: (Int) -> Unit,
-    ) {
-        val algorithms =
-            listOf(
-                "ECDSA P-256",
-                "RSA 2048",
-                "ECDSA P-384",
-                "Ed25519",
-            )
-
-        AlertDialog(
-            onDismissRequest = onDismiss,
-            title = { Text(stringResource(R.string.key_generate)) },
-            text = {
-                Column {
-                    algorithms.forEachIndexed { index, name ->
-                        Surface(
-                            modifier =
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp),
-                            shape = RoundedCornerShape(8.dp),
-                            color =
-                                if (selectedAlgorithm == index) {
-                                    MaterialTheme.colorScheme.primaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.surfaceVariant.copy(
-                                        alpha = 0.3f,
-                                    )
-                                },
-                            onClick = { onAlgorithmChange(index) },
-                        ) {
-                            Row(
-                                modifier =
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .padding(12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(name, fontSize = 14.sp)
-                                if (selectedAlgorithm == index) {
-                                    Text(
-                                        "✓",
-                                        color = MaterialTheme.colorScheme.primary,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                val guard = rememberClickGuard()
-                Button(onClick = {
-                    guard { onConfirm(selectedAlgorithm) }
-                }) {
-                    Text(stringResource(R.string.generate))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = onDismiss) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-        )
-    }
-
-    @Composable
-    fun ImportKeyDialog(
-        onConfirm: (isPublic: Boolean, keyContent: String) -> Unit,
-        onDismiss: () -> Unit,
-        isPublic: Boolean,
-        onIsPublicChange: (Boolean) -> Unit,
-        keyContent: String,
-        onKeyContentChange: (String) -> Unit,
-    ) {
-        AlertDialog(
-            onDismissRequest = onDismiss,
-            title = { Text(stringResource(R.string.key_import)) },
-            text = {
-                Column {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        listOf(
-                            false to stringResource(R.string.key_private),
-                            true to stringResource(R.string.key_public),
-                        ).forEach { (value, label) ->
-                            Surface(
-                                modifier =
-                                    Modifier
-                                        .weight(1f)
-                                        .clickable { onIsPublicChange(value) },
-                                shape = RoundedCornerShape(8.dp),
-                                color =
-                                    if (isPublic == value) {
-                                        MaterialTheme.colorScheme.primaryContainer
-                                    } else {
-                                        MaterialTheme.colorScheme.surfaceVariant.copy(
-                                            alpha = 0.3f,
-                                        )
-                                    },
-                            ) {
-                                Text(
-                                    text = label,
-                                    fontSize = 14.sp,
-                                    fontWeight =
-                                        if (isPublic == value) {
-                                            FontWeight.Bold
-                                        } else {
-                                            FontWeight.Normal
-                                        },
-                                    color =
-                                        if (isPublic == value) {
-                                            MaterialTheme.colorScheme.onPrimaryContainer
-                                        } else {
-                                            MaterialTheme.colorScheme.onSurfaceVariant
-                                        },
-                                    modifier =
-                                        Modifier.padding(
-                                            horizontal = 16.dp,
-                                            vertical = 10.dp,
-                                        ),
-                                )
-                            }
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    TextField(
-                        value = keyContent,
-                        onValueChange = onKeyContentChange,
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .height(150.dp),
-                        placeholder = {
-                            Text(
-                                if (isPublic) "ssh-rsa AAA..." else "...",
-                            )
-                        },
-                    )
-                }
-            },
-            confirmButton = {
-                val guard = rememberClickGuard()
-                Button(
-                    onClick = { guard { onConfirm(isPublic, keyContent) } },
-                    enabled = keyContent.isNotBlank(),
-                ) {
-                    Text(stringResource(R.string.import_))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = onDismiss) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-        )
     }
 }
 

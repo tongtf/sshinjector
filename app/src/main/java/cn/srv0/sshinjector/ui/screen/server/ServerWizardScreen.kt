@@ -16,7 +16,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Button
@@ -24,7 +23,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -49,9 +47,11 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.domain.model.ServerProvisioning
+import cn.srv0.sshinjector.ui.component.BackNavIcon
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
+// 校验结果 res 由 ViewModel 异步回调给出, 组合期无法用 stringResource 预解析
 @SuppressLint("LocalContextGetResourceValueCall")
 @Composable
 fun ServerWizardScreen(
@@ -85,12 +85,7 @@ fun ServerWizardScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.wizard_title)) },
                 navigationIcon = {
-                    IconButton(onClick = onCancel) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.back),
-                        )
-                    }
+                    BackNavIcon(onCancel)
                 },
                 colors =
                     TopAppBarDefaults.topAppBarColors(

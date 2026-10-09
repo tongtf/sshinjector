@@ -15,7 +15,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Share
@@ -44,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.srv0.sshinjector.R
+import cn.srv0.sshinjector.ui.component.BackNavIcon
 import cn.srv0.sshinjector.ui.theme.extendedColors
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
 import kotlinx.coroutines.launch
@@ -99,12 +99,7 @@ fun LogScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.log_title)) },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.back),
-                        )
-                    }
+                    BackNavIcon(onNavigateBack)
                 },
                 actions = {
                     IconButton(

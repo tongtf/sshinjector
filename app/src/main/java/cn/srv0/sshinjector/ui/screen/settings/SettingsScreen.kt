@@ -1,6 +1,5 @@
 package cn.srv0.sshinjector.ui.screen.settings
 
-import android.annotation.SuppressLint
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -52,13 +51,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.srv0.sshinjector.R
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_DOMAIN_SPLIT
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_REMOTE
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_SYSTEM
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_WHITELIST
 import cn.srv0.sshinjector.ui.locale.LocaleManager
 import cn.srv0.sshinjector.ui.viewmodel.dnsModeLabel
 import java.net.URI
 import java.net.URISyntaxException
 
 @OptIn(ExperimentalMaterial3Api::class)
-@SuppressLint("LocalContextGetResourceValueCall")
 @Composable
 fun SettingsScreen(
     modifier: Modifier = Modifier,
@@ -97,6 +99,9 @@ fun SettingsScreen(
         }
     }
     val context = LocalContext.current
+    // 静态文案在组合期解析 (LocalContext.getString 会被 Android Lint 判定非配置感知)
+    val githubUrl = stringResource(R.string.settings_github_url)
+    val verifyIdentityTitle = stringResource(R.string.settings_verify_identity)
     val fragmentActivity = context as? androidx.fragment.app.FragmentActivity
     val biometricAuth =
         fragmentActivity?.let {
@@ -380,11 +385,16 @@ fun SettingsScreen(
                         val intent =
                             android.content.Intent(
                                 android.content.Intent.ACTION_VIEW,
-                                android.net.Uri.parse(context.getString(R.string.settings_github_url)),
+                                android.net.Uri.parse(githubUrl),
                             )
                         try {
                             context.startActivity(intent)
-                        } catch (_: Exception) {
+                        } catch (e: Exception) {
+                            cn.srv0.sshinjector.domain.usecase.VpnController.appLogThrottled(
+                                "打开源码链接失败 — ${e.message}",
+                                level = cn.srv0.sshinjector.ui.viewmodel.LogLevel.WARNING,
+                                throttleKey = "打开源码链接失败",
+                            )
                         }
                     },
                 )
@@ -472,13 +482,13 @@ fun SettingsScreen(
             text = {
                 Column {
                     listOf(
-                        0 to stringResource(R.string.dashboard_dns_remote) to
+                        DNS_MODE_REMOTE to stringResource(R.string.dashboard_dns_remote) to
                             stringResource(R.string.dns_remote_desc),
-                        1 to stringResource(R.string.dashboard_dns_direct) to
+                        DNS_MODE_SYSTEM to stringResource(R.string.dashboard_dns_direct) to
                             stringResource(R.string.dns_direct_desc),
-                        2 to stringResource(R.string.dashboard_dns_whitelist) to
+                        DNS_MODE_WHITELIST to stringResource(R.string.dashboard_dns_whitelist) to
                             stringResource(R.string.dns_whitelist_desc),
-                        3 to stringResource(R.string.dashboard_dns_domain) to
+                        DNS_MODE_DOMAIN_SPLIT to stringResource(R.string.dashboard_dns_domain) to
                             stringResource(R.string.dns_domain_desc),
                     ).forEach { (item, desc) ->
                         val (value, label) = item
@@ -533,7 +543,7 @@ fun SettingsScreen(
                         if (activity != null && biometricAuth != null) {
                             biometricAuth.authenticate(
                                 activity = activity,
-                                title = context.getString(R.string.settings_verify_identity),
+                                title = verifyIdentityTitle,
                                 onSuccess = { viewModel.setBiometricUnlock(false) },
                                 onCancelled = {},
                             )

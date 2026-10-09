@@ -1,6 +1,5 @@
 package cn.srv0.sshinjector.ui.screen.server
 
-import android.annotation.SuppressLint
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,7 +16,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
@@ -53,9 +51,9 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.domain.model.ServerConfig
+import cn.srv0.sshinjector.ui.component.BackNavIcon
 
 @OptIn(ExperimentalMaterial3Api::class)
-@SuppressLint("LocalContextGetResourceValueCall")
 @Composable
 fun ServerListScreen(
     onAddServer: () -> Unit,
@@ -102,12 +100,7 @@ fun ServerListScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.server_title)) },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.back),
-                        )
-                    }
+                    BackNavIcon(onNavigateBack)
                 },
                 actions = {
                     var showAddMenu by remember { mutableStateOf(false) }

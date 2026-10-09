@@ -20,7 +20,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Done
@@ -68,6 +67,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.srv0.sshinjector.R
+import cn.srv0.sshinjector.ui.component.BackNavIcon
 import cn.srv0.sshinjector.ui.component.rememberClickGuard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -98,7 +98,7 @@ fun WhitelistScreen(
                 context.packageManager.getInstalledApplications(
                     PackageManager.ApplicationInfoFlags.of(0),
                 )
-            apps.isNotEmpty() || true
+            apps.isNotEmpty()
         } catch (_: SecurityException) {
             false
         } catch (_: Exception) {
@@ -112,7 +112,15 @@ fun WhitelistScreen(
                     .apply { data = Uri.parse("package:${context.packageName}") }
             context.startActivity(intent)
         } catch (_: Exception) {
-            context.startActivity(Intent(Settings.ACTION_SETTINGS))
+            try {
+                context.startActivity(Intent(Settings.ACTION_SETTINGS))
+            } catch (e: Exception) {
+                cn.srv0.sshinjector.domain.usecase.VpnController.appLogThrottled(
+                    "打开系统设置失败 — ${e.message}",
+                    level = cn.srv0.sshinjector.ui.viewmodel.LogLevel.WARNING,
+                    throttleKey = "打开系统设置失败",
+                )
+            }
         }
     }
 
@@ -203,12 +211,7 @@ fun WhitelistScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.back),
-                        )
-                    }
+                    BackNavIcon(onNavigateBack)
                 },
                 actions = {
                     if (!isSearchActive) {
