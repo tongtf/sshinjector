@@ -5,6 +5,8 @@ import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
+import cn.srv0.sshinjector.domain.usecase.VpnController
+import cn.srv0.sshinjector.ui.viewmodel.LogLevel
 import cn.srv0.sshinjector.vpn.SshVpnService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -78,7 +80,13 @@ class SettingsViewModel
                             action = SshVpnService.ACTION_REBUILD
                         }
                     context.startService(intent)
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    // 后台 startService 可能被系统限制 → 设置改了却没重建, 零信号
+                    VpnController.appLogThrottled(
+                        "重建 VPN 触发失败 · ${e.message} — 设置改动需重连后生效",
+                        level = LogLevel.WARNING,
+                        throttleKey = "重建 VPN 触发失败",
+                    )
                 }
             }
 

@@ -4,7 +4,10 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import android.util.Log
 import com.jcraft.jsch.JSch
+import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.security.KeyFactory
@@ -14,6 +17,7 @@ import java.security.PrivateKey
 import java.security.PublicKey
 import java.security.spec.ECGenParameterSpec
 import java.util.Date
+import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -28,7 +32,7 @@ enum class KeyKind { GENERATED, IMPORTED_PRIVATE, IMPORTED_PUBLIC }
 class SshKeyManager
     @Inject
     constructor(
-        private val context: Context,
+        @ApplicationContext private val context: Context,
     ) {
         private val keyStore: KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         private val aliasPrefix = "ssh_key_"
@@ -36,9 +40,9 @@ class SshKeyManager
         private val importedKeysDir: File = File(context.filesDir, "imported_keys").apply { mkdirs() }
         private val generatedKeysDir: File = File(context.filesDir, "generated_keys").apply { mkdirs() }
 
-        private val publicKeyCache = java.util.concurrent.ConcurrentHashMap<String, String>()
-        private val algorithmCache = java.util.concurrent.ConcurrentHashMap<String, String>()
-        private val creationDateCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+        private val publicKeyCache = ConcurrentHashMap<String, String>()
+        private val algorithmCache = ConcurrentHashMap<String, String>()
+        private val creationDateCache = ConcurrentHashMap<String, String>()
 
         // Legacy ECDSA 格式支持 (部分服务器使用非标准格式)
         var useLegacyEcdsaFormat: Boolean = false // 使用标准 RFC 5656 格式
@@ -55,7 +59,7 @@ class SshKeyManager
         ): String {
             val fullAlias = "$aliasPrefix$alias"
             if (keyStore.containsAlias(fullAlias)) {
-                android.util.Log.w("SshKeyManager", "Key already exists")
+                Log.w("SshKeyManager", "Key already exists")
                 error("密钥别名已存在")
             }
 
@@ -134,7 +138,7 @@ class SshKeyManager
                     File(generatedKeysDir, "$safeName.pub").writeBytes(keyPair.public.encoded)
                 }
             } else if (!keyStore.containsAlias(fullAlias)) {
-                android.util.Log.e("SshKeyManager", "Key not stored after generation: $fullAlias")
+                Log.e("SshKeyManager", "Key not stored after generation: $fullAlias")
                 error("密钥存储失败")
             }
 
@@ -149,7 +153,7 @@ class SshKeyManager
                     else -> "ECDSA P-256"
                 }
             creationDateCache[fullAlias] = Date().toString().take(10)
-            android.util.Log.d("SshKeyManager", "Key generated successfully: $fullAlias")
+            Log.d("SshKeyManager", "Key generated successfully: $fullAlias")
             return pubKeyStr
         }
 
@@ -277,8 +281,7 @@ class SshKeyManager
             val passBytes = passphrase?.toByteArray(StandardCharsets.UTF_8) ?: ByteArray(0)
             val pemBytes = pem.toByteArray(StandardCharsets.UTF_8)
             val payload =
-                java.io
-                    .ByteArrayOutputStream()
+                ByteArrayOutputStream()
                     .apply {
                         write(passBytes.size shr 24 and 0xFF)
                         write(passBytes.size shr 16 and 0xFF)
@@ -356,7 +359,7 @@ class SshKeyManager
             val algorithm: String,
         )
 
-        private val importedPemCache = java.util.concurrent.ConcurrentHashMap<String, ImportedPem>()
+        private val importedPemCache = ConcurrentHashMap<String, ImportedPem>()
 
         /** 从磁盘解密并加载导入的私钥 PEM, 未找到返回 null */
         private fun loadImportedPem(fullAlias: String): ImportedPem? {
@@ -408,7 +411,7 @@ class SshKeyManager
                 val safeName = fullAlias.replace("/", "_")
                 val keyFile = File(generatedKeysDir, safeName)
                 if (keyFile.exists()) {
-                    android.util.Log.d("SshKeyManager", "Loading Ed25519 key from file")
+                    Log.d("SshKeyManager", "Loading Ed25519 key from file")
                     val data = keyFile.readBytes()
                     val iv = data.copyOfRange(0, 12)
                     val ciphertext = data.copyOfRange(12, data.size)
@@ -420,21 +423,21 @@ class SshKeyManager
                     return kf.generatePrivate(java.security.spec.PKCS8EncodedKeySpec(keyBytes))
                 }
                 if (keyStore.containsAlias(fullAlias)) {
-                    android.util.Log.d("SshKeyManager", "Key exists in KeyStore, attempting to get entry")
+                    Log.d("SshKeyManager", "Key exists in KeyStore, attempting to get entry")
                     val entry = keyStore.getEntry(fullAlias, null) as? KeyStore.PrivateKeyEntry
                     if (entry != null) {
-                        android.util.Log.d("SshKeyManager", "Successfully got private key entry")
+                        Log.d("SshKeyManager", "Successfully got private key entry")
                         entry.privateKey
                     } else {
-                        android.util.Log.e("SshKeyManager", "Failed to get PrivateKeyEntry")
+                        Log.e("SshKeyManager", "Failed to get PrivateKeyEntry")
                         null
                     }
                 } else {
-                    android.util.Log.e("SshKeyManager", "Key not found in KeyStore")
+                    Log.e("SshKeyManager", "Key not found in KeyStore")
                     null
                 }
             } catch (e: Exception) {
-                android.util.Log.e("SshKeyManager", "Failed to get private key: ${e.message}", e)
+                Log.e("SshKeyManager", "Failed to get private key: ${e.message}", e)
                 null
             }
         }
@@ -542,7 +545,7 @@ class SshKeyManager
         fun deleteAllKeys() {
             val aliases = listKeyAliases()
             aliases.forEach { deleteKey(it) }
-            android.util.Log.d("SshKeyManager", "Deleted ${aliases.size} keys")
+            Log.d("SshKeyManager", "Deleted ${aliases.size} keys")
         }
 
         fun listKeyAliases(): List<String> {
@@ -603,7 +606,7 @@ class SshKeyManager
                                 .toByteArray()
                                 .let { AndroidKeyStoreIdentity.trimLeadingZero(it, coordSize) }
 
-                        val blob = java.io.ByteArrayOutputStream()
+                        val blob = ByteArrayOutputStream()
                         writeString(blob, algName.toByteArray())
 
                         if (useLegacyEcdsaFormat) {
@@ -628,7 +631,7 @@ class SshKeyManager
                     is java.security.interfaces.RSAPublicKey -> {
                         // RSA: SSH 格式是 [string 'ssh-rsa'] [mpint e] [mpint n]
                         // 注意: X.509 格式是 (n, e)，SSH 格式是 (e, n)
-                        val blob = java.io.ByteArrayOutputStream()
+                        val blob = ByteArrayOutputStream()
                         writeString(blob, "ssh-rsa".toByteArray())
                         writeString(blob, publicKey.publicExponent.toByteArray())
                         writeString(blob, publicKey.modulus.toByteArray())
@@ -646,14 +649,14 @@ class SshKeyManager
                                     } else {
                                         encoded
                                     }
-                                val blob = java.io.ByteArrayOutputStream()
+                                val blob = ByteArrayOutputStream()
                                 writeString(blob, "ssh-ed25519".toByteArray())
                                 writeString(blob, ed25519KeyBytes)
                                 "ssh-ed25519" to blob.toByteArray()
                             }
                             else -> {
                                 // 其他算法，尝试通用格式
-                                val blob = java.io.ByteArrayOutputStream()
+                                val blob = ByteArrayOutputStream()
                                 val algoBytes = publicKey.algorithm.toByteArray(StandardCharsets.US_ASCII)
                                 writeString(blob, algoBytes)
                                 writeString(blob, publicKey.encoded)
@@ -668,7 +671,7 @@ class SshKeyManager
         }
 
         private fun writeString(
-            out: java.io.ByteArrayOutputStream,
+            out: ByteArrayOutputStream,
             data: ByteArray,
         ) {
             val len = data.size
@@ -694,17 +697,17 @@ class SshKeyManager
                         null,
                         imported.passphrase,
                     )
-                    android.util.Log.d("SshKeyManager", "Added imported identity")
+                    Log.d("SshKeyManager", "Added imported identity")
                     true
                 } catch (e: Exception) {
-                    android.util.Log.e("SshKeyManager", "Failed to add imported identity: ${e.message}", e)
+                    Log.e("SshKeyManager", "Failed to add imported identity: ${e.message}", e)
                     false
                 }
             }
 
             val privateKey = getPrivateKeyForAuth(alias)
             if (privateKey == null) {
-                android.util.Log.e("SshKeyManager", "Private key is null")
+                Log.e("SshKeyManager", "Private key is null")
                 return false
             }
 
@@ -716,12 +719,12 @@ class SshKeyManager
                 if (keyBytes != null) {
                     val pemPrivateKey = convertToPem("PRIVATE KEY", keyBytes)
                     jsch.addIdentity(fullAlias, pemPrivateKey.toByteArray(), null, null)
-                    android.util.Log.d("SshKeyManager", "Added identity using PEM format")
+                    Log.d("SshKeyManager", "Added identity using PEM format")
                     return true
                 }
 
                 // Hardware-backed key: .encoded is null, use AndroidKeyStoreIdentity
-                android.util.Log.d("SshKeyManager", "Private key.encoded is null, using AndroidKeyStoreIdentity")
+                Log.d("SshKeyManager", "Private key.encoded is null, using AndroidKeyStoreIdentity")
                 val entry =
                     keyStore.getEntry(fullAlias, null) as? KeyStore.PrivateKeyEntry
                         ?: error("KeyStore entry not found")
@@ -747,10 +750,10 @@ class SshKeyManager
 
                 val identity = AndroidKeyStoreIdentity(fullAlias, privateKey, publicKeyBytes)
                 jsch.addIdentity(identity, null)
-                android.util.Log.d("SshKeyManager", "Added identity using AndroidKeyStoreIdentity")
+                Log.d("SshKeyManager", "Added identity using AndroidKeyStoreIdentity")
                 return true
             } catch (e: Exception) {
-                android.util.Log.e("SshKeyManager", "Failed to add identity to JSch: ${e.message}", e)
+                Log.e("SshKeyManager", "Failed to add identity to JSch: ${e.message}", e)
                 return false
             }
         }
@@ -763,7 +766,7 @@ class SshKeyManager
                 val kf = KeyFactory.getInstance(privateKey.algorithm, "AndroidKeyStore")
                 val keyInfo = kf.getKeySpec(privateKey, android.security.keystore.KeyInfo::class.java)
                 if (keyInfo != null) {
-                    android.util.Log.d(
+                    Log.d(
                         "SshKeyManager",
                         "KeyInfo: authRequired=${keyInfo.isUserAuthenticationRequired}, " +
                             "authType=0x${keyInfo.userAuthenticationType.toString(16)}, " +
@@ -771,7 +774,7 @@ class SshKeyManager
                     )
                 }
             } catch (e: Exception) {
-                android.util.Log.d("SshKeyManager", "KeyInfo unavailable: ${e.message}")
+                Log.d("SshKeyManager", "KeyInfo unavailable: ${e.message}")
             }
         }
 

@@ -2,6 +2,7 @@ package cn.srv0.sshinjector.ui.screen.server
 
 import android.app.Application
 import android.content.Intent
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import cn.srv0.sshinjector.domain.model.ServerConfig
@@ -85,7 +86,7 @@ class ServerListViewModel
                     }
                 context.startForegroundService(intent)
             } catch (e: Exception) {
-                android.util.Log.e("ServerListViewModel", "Failed to start VPN service: ${e.message}", e)
+                Log.e("ServerListViewModel", "Failed to start VPN service: ${e.message}", e)
                 _connectingServerId.value = null
                 _error.tryEmit("启动 VPN 服务失败: ${e.message}")
             }
@@ -101,7 +102,7 @@ class ServerListViewModel
                     }
                 context.startService(intent)
             } catch (e: Exception) {
-                android.util.Log.e("ServerListViewModel", "Failed to disconnect VPN service: ${e.message}", e)
+                Log.e("ServerListViewModel", "Failed to disconnect VPN service: ${e.message}", e)
                 _error.tryEmit("断开 VPN 服务失败: ${e.message}")
             }
         }

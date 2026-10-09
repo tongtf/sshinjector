@@ -1,5 +1,6 @@
 package cn.srv0.sshinjector.data.remote.ssh
 
+import android.util.Log
 import com.jcraft.jsch.Identity
 import java.io.ByteArrayOutputStream
 import java.security.PrivateKey
@@ -24,7 +25,7 @@ class AndroidKeyStoreIdentity(
 
     override fun getSignature(data: ByteArray?): ByteArray? {
         if (data == null) {
-            android.util.Log.w("AndroidKeyStoreIdentity", "getSignature called with null data")
+            Log.w("AndroidKeyStoreIdentity", "getSignature called with null data")
             return null
         }
         return try {
@@ -50,7 +51,7 @@ class AndroidKeyStoreIdentity(
                 else -> derSig
             }
         } catch (e: Exception) {
-            android.util.Log.e("AndroidKeyStoreIdentity", "Sign failed: ${e.message}", e)
+            Log.e("AndroidKeyStoreIdentity", "Sign failed: ${e.message}", e)
             null
         }
     }

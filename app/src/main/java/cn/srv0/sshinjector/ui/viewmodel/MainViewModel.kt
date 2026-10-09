@@ -11,13 +11,21 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Debug
 import android.telephony.TelephonyManager
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cn.srv0.sshinjector.BuildConfig
 import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
+import cn.srv0.sshinjector.domain.model.ServerConfig
+import cn.srv0.sshinjector.domain.model.VpnState
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import cn.srv0.sshinjector.domain.usecase.VpnController
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_COUNT
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_DOMAIN_SPLIT
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_REMOTE
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_SYSTEM
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_WHITELIST
 import cn.srv0.sshinjector.ui.StatusDisplay
 import cn.srv0.sshinjector.vpn.SshVpnService
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -34,6 +42,7 @@ import kotlinx.coroutines.withContext
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.NetworkInterface
+import java.util.Locale
 import javax.inject.Inject
 
 @HiltViewModel
@@ -59,12 +68,12 @@ class MainViewModel
         private val networkCallback =
             object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
-                    android.util.Log.d("MainViewModel", "Network available: ${network?.networkHandle}")
+                    Log.d("MainViewModel", "Network available: ${network?.networkHandle}")
                     onNetworkChanged()
                 }
 
                 override fun onLost(network: Network) {
-                    android.util.Log.d("MainViewModel", "Network lost: ${network?.networkHandle}")
+                    Log.d("MainViewModel", "Network lost: ${network?.networkHandle}")
                     onNetworkChanged()
                 }
             }
@@ -72,7 +81,7 @@ class MainViewModel
         private fun onNetworkChanged() {
             viewModelScope.launch {
                 kotlinx.coroutines.delay(500)
-                android.util.Log.d("MainViewModel", "Refreshing network info")
+                Log.d("MainViewModel", "Refreshing network info")
                 loadNetworkInfo()
             }
         }
@@ -87,9 +96,9 @@ class MainViewModel
                         .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
                         .build()
                 connectivityManager.registerNetworkCallback(request, networkCallback)
-                android.util.Log.d("MainViewModel", "Network callback registered")
+                Log.d("MainViewModel", "Network callback registered")
             } catch (e: Exception) {
-                android.util.Log.e("MainViewModel", "Failed to register network callback: ${e.message}")
+                Log.e("MainViewModel", "Failed to register network callback: ${e.message}")
             }
         }
 
@@ -295,7 +304,7 @@ class MainViewModel
                     }
                 }
             } catch (e: Exception) {
-                android.util.Log.w("MainViewModel", "Failed to get IPv4: ${e.message}")
+                Log.w("MainViewModel", "Failed to get IPv4: ${e.message}")
             }
             return "---"
         }
@@ -325,7 +334,7 @@ class MainViewModel
                     }
                 }
             } catch (e: Exception) {
-                android.util.Log.w("MainViewModel", "Failed to get IPv6: ${e.message}")
+                Log.w("MainViewModel", "Failed to get IPv6: ${e.message}")
             }
             return "---"
         }
@@ -334,7 +343,7 @@ class MainViewModel
             viewModelScope.launch {
                 launch {
                     vpnController.vpnState.collect { state ->
-                        val isConnected = state.status == cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Connected
+                        val isConnected = state.status == VpnState.VpnStatus.Connected
                         val isHealthy = isConnected && state.verified && state.failedStep == null
                         val serverId = state.server?.id ?: 0
                         val status = state.status.name
@@ -395,7 +404,7 @@ class MainViewModel
                     kotlinx.coroutines.delay(CONNECTED_DURATION_TICK_MS)
                     val vpn = vpnController.vpnState.value
                     val connected =
-                        vpn.status == cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Connected
+                        vpn.status == VpnState.VpnStatus.Connected
                     val durationMs = if (connected) System.currentTimeMillis() - vpn.stats.startTime.time else 0L
                     _uiState.update { it.copy(connectedDurationMs = durationMs) }
                 }
@@ -404,14 +413,14 @@ class MainViewModel
 
         private fun startResourceMonitoring() {
             viewModelScope.launch {
-                if (BuildConfig.DEBUG) android.util.Log.d("MainViewModel", "startResourceMonitoring started")
+                if (BuildConfig.DEBUG) Log.d("MainViewModel", "startResourceMonitoring started")
                 while (true) {
                     kotlinx.coroutines.delay(RESOURCE_MONITOR_TICK_MS)
                     withContext(Dispatchers.IO) {
                         val cpu = readProcessCpuUsage()
                         readProcessMemory()
                         if (BuildConfig.DEBUG) {
-                            android.util.Log.d(
+                            Log.d(
                                 "MainViewModel",
                                 "Resource monitoring: cpu=$cpu javaHeap=${_uiState.value.javaHeapUsage} " +
                                     "nativeHeap=${_uiState.value.nativeHeapUsage}",
@@ -438,12 +447,12 @@ class MainViewModel
                     if (percent > CPU_PERCENT_CAP) percent = CPU_PERCENT_CAP
                     lastCpuTime = cpuTime
                     lastCpuTimeRead = now
-                    return String.format(java.util.Locale.ROOT, "%4.1f%%", percent)
+                    return String.format(Locale.ROOT, "%4.1f%%", percent)
                 }
                 lastCpuTime = cpuTime
                 lastCpuTimeRead = now
             } catch (e: Exception) {
-                android.util.Log.w("MainViewModel", "CPU read failed: ${e.message}")
+                Log.w("MainViewModel", "CPU read failed: ${e.message}")
             }
             return "-"
         }
@@ -459,7 +468,7 @@ class MainViewModel
                     it.copy(javaHeapUsage = javaHeapFormatted, nativeHeapUsage = nativeHeapFormatted)
                 }
             } catch (e: Exception) {
-                android.util.Log.w("MainViewModel", "Memory read failed: ${e.message}")
+                Log.w("MainViewModel", "Memory read failed: ${e.message}")
                 _uiState.update {
                     it.copy(javaHeapUsage = "-", nativeHeapUsage = "-")
                 }
@@ -481,20 +490,20 @@ class MainViewModel
                 when {
                     bytes < 0 -> "-"
                     bytes < 1024L * 1024 * 1024 ->
-                        String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024))
-                    else -> String.format(java.util.Locale.ROOT, "%.1f GB", bytes / (1024.0 * 1024 * 1024))
+                        String.format(Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024))
+                    else -> String.format(Locale.ROOT, "%.1f GB", bytes / (1024.0 * 1024 * 1024))
                 }
 
             @JvmStatic
             fun formatBytes(bytes: Long): String =
                 when {
                     bytes < 0 -> "-"
-                    bytes < 1024 -> String.format(java.util.Locale.ROOT, "%d B", bytes)
+                    bytes < 1024 -> String.format(Locale.ROOT, "%d B", bytes)
                     bytes < 1024L * 1024 ->
-                        String.format(java.util.Locale.ROOT, "%.1f KB", bytes / 1024.0)
+                        String.format(Locale.ROOT, "%.1f KB", bytes / 1024.0)
                     bytes < 1024L * 1024 * 1024 ->
-                        String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024))
-                    else -> String.format(java.util.Locale.ROOT, "%.2f GB", bytes / (1024.0 * 1024 * 1024))
+                        String.format(Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024))
+                    else -> String.format(Locale.ROOT, "%.2f GB", bytes / (1024.0 * 1024 * 1024))
                 }
 
             @JvmStatic
@@ -507,7 +516,7 @@ class MainViewModel
                 val seconds = totalSeconds % 60
                 return if (days > 0) {
                     String.format(
-                        java.util.Locale.ROOT,
+                        Locale.ROOT,
                         "%dd %02d:%02d:%02d",
                         days,
                         hours,
@@ -515,7 +524,7 @@ class MainViewModel
                         seconds,
                     )
                 } else {
-                    String.format(java.util.Locale.ROOT, "%02d:%02d:%02d", hours, minutes, seconds)
+                    String.format(Locale.ROOT, "%02d:%02d:%02d", hours, minutes, seconds)
                 }
             }
 
@@ -523,7 +532,7 @@ class MainViewModel
              * 状态展示文案 (状态卡 + 通知栏统一入口, 实现见 [cn.srv0.sshinjector.ui.StatusDisplay])。
              */
             fun buildStatusDisplay(
-                state: cn.srv0.sshinjector.domain.model.VpnState,
+                state: VpnState,
                 resolve: (Int) -> String,
             ): String = StatusDisplay.build(state, resolve)
 
@@ -549,7 +558,13 @@ class MainViewModel
                                 action = SshVpnService.ACTION_REBUILD
                             }
                         context.startService(intent)
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        // 后台 startService 可能被系统限制 → 设置改了却没重建, 零信号
+                        VpnController.appLogThrottled(
+                            "重建 VPN 触发失败 · ${e.message} — 设置改动需重连后生效",
+                            level = LogLevel.WARNING,
+                            throttleKey = "重建 VPN 触发失败",
+                        )
                     }
                 }
                 runDiagnostics()
@@ -616,7 +631,7 @@ class MainViewModel
             try {
                 val start = System.currentTimeMillis()
                 when (dnsMode) {
-                    0, 2 -> {
+                    DNS_MODE_REMOTE, DNS_MODE_WHITELIST -> {
                         val url = java.net.URL("https://dns.alidns.com/dns-query")
                         val connection = url.openConnection() as javax.net.ssl.HttpsURLConnection
                         try {
@@ -667,7 +682,7 @@ class MainViewModel
                             connection.disconnect()
                         }
                     }
-                    1 ->
+                    DNS_MODE_SYSTEM ->
                         java.net.DatagramSocket().use { socket ->
                             socket.soTimeout = NETWORK_TIMEOUT_MS
                             val query =
@@ -790,7 +805,7 @@ class MainViewModel
         val allServers =
             serverRepository.allServersFlow.map { servers ->
                 servers.sortedWith(
-                    compareByDescending<cn.srv0.sshinjector.domain.model.ServerConfig> { it.isActive }.thenBy { it.id },
+                    compareByDescending<ServerConfig> { it.isActive }.thenBy { it.id },
                 )
             }
 
@@ -832,7 +847,7 @@ class MainViewModel
                 readProcessCpuUsage()
                 readProcessMemory()
                 val state = vpnController.vpnState.first()
-                val isConnected = state.status == cn.srv0.sshinjector.domain.model.VpnState.VpnStatus.Connected
+                val isConnected = state.status == VpnState.VpnStatus.Connected
                 val isHealthy = isConnected && state.verified && state.failedStep == null
                 val serverId = state.server?.id ?: 0
                 val status = state.status.name
@@ -873,20 +888,12 @@ class MainViewModel
             super.onCleared()
             try {
                 connectivityManager.unregisterNetworkCallback(networkCallback)
-                android.util.Log.d("MainViewModel", "Network callback unregistered")
+                Log.d("MainViewModel", "Network callback unregistered")
             } catch (e: Exception) {
-                android.util.Log.w("MainViewModel", "Failed to unregister network callback: ${e.message}")
+                Log.w("MainViewModel", "Failed to unregister network callback: ${e.message}")
             }
         }
     }
-
-enum class LogLevel {
-    INFO,
-    DEBUG,
-    SUCCESS,
-    ERROR,
-    WARNING,
-}
 
 /** 应用日志条目: 时间戳在 VpnController.addLog 写入时生成 (回放/打开界面不再改写历史时间)。 */
 data class LogLine(
@@ -895,7 +902,7 @@ data class LogLine(
     val message: String,
 )
 
-internal fun nextDnsMode(current: Int): Int = (current + 1) % 4
+internal fun nextDnsMode(current: Int): Int = (current + 1) % DNS_MODE_COUNT
 
 internal fun dnsModeLabel(
     mode: Int,
@@ -903,10 +910,10 @@ internal fun dnsModeLabel(
 ): String {
     val resId =
         when (mode) {
-            0 -> R.string.dashboard_dns_remote
-            1 -> R.string.dashboard_dns_direct
-            2 -> R.string.dashboard_dns_whitelist
-            3 -> R.string.dashboard_dns_domain
+            DNS_MODE_REMOTE -> R.string.dashboard_dns_remote
+            DNS_MODE_SYSTEM -> R.string.dashboard_dns_direct
+            DNS_MODE_WHITELIST -> R.string.dashboard_dns_whitelist
+            DNS_MODE_DOMAIN_SPLIT -> R.string.dashboard_dns_domain
             else -> R.string.dashboard_dns_remote
         }
     return context.getString(resId)

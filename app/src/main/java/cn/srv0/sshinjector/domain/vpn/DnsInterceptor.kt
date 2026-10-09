@@ -10,10 +10,17 @@ import org.xbill.DNS.Opcode
 import org.xbill.DNS.Rcode
 import org.xbill.DNS.Record
 import org.xbill.DNS.Section
+import java.net.DatagramSocket
 import java.net.InetAddress
 import java.nio.ByteBuffer
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -104,15 +111,14 @@ class DnsInterceptor
 
         // R5: daemon + 空闲回收 — 等价 newFixedThreadPool(2), 进程退出不被探测线程挂住
         private val executor =
-            java.util.concurrent
-                .ThreadPoolExecutor(
-                    2,
-                    2,
-                    60L,
-                    java.util.concurrent.TimeUnit.SECONDS,
-                    java.util.concurrent.LinkedBlockingQueue(),
-                    { r -> Thread(r, "dns-probe").apply { isDaemon = true } },
-                ).apply { allowCoreThreadTimeOut(true) }
+            ThreadPoolExecutor(
+                2,
+                2,
+                60L,
+                TimeUnit.SECONDS,
+                LinkedBlockingQueue(),
+                { r -> Thread(r, "dns-probe").apply { isDaemon = true } },
+            ).apply { allowCoreThreadTimeOut(true) }
         private val pendingQueries = ConcurrentHashMap<Int, DnsPendingQuery>()
         private val dnsCache = ConcurrentHashMap<String, CacheEntry>()
 
@@ -180,27 +186,21 @@ class DnsInterceptor
         @Volatile private var systemDnsServers: List<String> = emptyList()
 
         val queriesIntercepted =
-            java.util.concurrent.atomic
-                .AtomicLong(0)
+            AtomicLong(0)
         val queriesResolved =
-            java.util.concurrent.atomic
-                .AtomicLong(0)
+            AtomicLong(0)
         val cacheHits =
-            java.util.concurrent.atomic
-                .AtomicLong(0)
+            AtomicLong(0)
         val cacheMisses =
-            java.util.concurrent.atomic
-                .AtomicLong(0)
+            AtomicLong(0)
 
         // 广告拦截命中计数 (命中即回 0.0.0.0, 不进缓存 / 不解析)
         val adBlockCount =
-            java.util.concurrent.atomic
-                .AtomicLong(0)
+            AtomicLong(0)
 
         // 定期清理过期待查 (R5: daemon, 不挂进程退出)
         private val cleanupScheduler =
-            java.util.concurrent.Executors
-                .newSingleThreadScheduledExecutor { r -> Thread(r, "dns-cleanup").apply { isDaemon = true } }
+            Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "dns-cleanup").apply { isDaemon = true } }
 
         init {
             cleanupScheduler.scheduleAtFixedRate({
@@ -220,7 +220,7 @@ class DnsInterceptor
                 domainToIp.trim()
                 // 驱逐后把假 IP 计数器对齐到剩余映射的最大值 (updateAndGet 只升不降, 防竞态回拨)
                 resetFakeIpCounters()
-            }, 30, 30, java.util.concurrent.TimeUnit.SECONDS)
+            }, 30, 30, TimeUnit.SECONDS)
         }
 
         /**
@@ -400,9 +400,9 @@ class DnsInterceptor
         private val fakeIpv6Counter = AtomicInteger(2) // fd00::2 开始 (fd00::1 是 VPN 网关)
 
         // 用于绕过 VPN 的 socket 保护函数 (由 VpnService 提供)
-        private var protectSocket: ((java.net.DatagramSocket) -> Boolean)? = null
+        private var protectSocket: ((DatagramSocket) -> Boolean)? = null
 
-        fun setProtectFunction(protectSocket: (java.net.DatagramSocket) -> Boolean) {
+        fun setProtectFunction(protectSocket: (DatagramSocket) -> Boolean) {
             this.protectSocket = protectSocket
         }
 
@@ -435,11 +435,6 @@ class DnsInterceptor
         }
 
         /**
-         * 获取当前 DNS 传输模式
-         */
-        fun getTransportMode(): DnsTransport = transportMode
-
-        /**
          * 处理 DNS 查询包
          * @return true 表示已拦截，false 表示丢弃（未拦截/解析失败；回注是黑洞，无透传语义）
          */
@@ -458,20 +453,20 @@ class DnsInterceptor
 
                 // 只处理标准查询
                 if (message.header.opcode != Opcode.QUERY) {
-                    android.util.Log.d(
+                    Log.d(
                         TAG,
                         ">>> [DnsInterceptor] processDnsQuery: not QUERY opcode != QUERY, returning false",
                     )
                     return false
                 }
                 if (message.header.rcode != Rcode.NOERROR) {
-                    android.util.Log.d(TAG, ">>> [DnsInterceptor] processDnsQuery: rcode != NOERROR, returning false")
+                    Log.d(TAG, ">>> [DnsInterceptor] processDnsQuery: rcode != NOERROR, returning false")
                     return false
                 }
 
                 val questions = message.getSection(Section.QUESTION)
                 if (questions.isEmpty()) {
-                    android.util.Log.d(TAG, ">>> [DnsInterceptor] processDnsQuery: no questions, returning false")
+                    Log.d(TAG, ">>> [DnsInterceptor] processDnsQuery: no questions, returning false")
                     return false
                 }
 
@@ -605,11 +600,11 @@ class DnsInterceptor
 
                 // 异步发送到远程 DNS (根据传输模式)
                 sendDnsQuery(message.toWire(), queryId)
-                android.util.Log.d(TAG, ">>> [DnsInterceptor] sendDnsQuery 调用完成，返回 true")
+                Log.d(TAG, ">>> [DnsInterceptor] sendDnsQuery 调用完成，返回 true")
 
                 return true
             } catch (e: Exception) {
-                android.util.Log.e(TAG, "processDnsQuery failed: ${e.message}", e)
+                Log.e(TAG, "processDnsQuery failed: ${e.message}", e)
                 VpnController.appLogThrottled(
                     "DNS 查询处理失败 — ${e.message}",
                     level = LogLevel.ERROR,
@@ -663,7 +658,7 @@ class DnsInterceptor
                         )
                     }
 
-                    val socket = java.net.DatagramSocket()
+                    val socket = DatagramSocket()
                     try {
                         // 关键：使用 VpnService.protect() 让此 socket 绕过 VPN
                         val protected = protectSocket?.invoke(socket) ?: false
@@ -672,6 +667,7 @@ class DnsInterceptor
                             VpnController.appLogThrottled(
                                 "DNS protect 返回 false · 查询可能绕回 VPN 形成自环 ($dnsServer)",
                                 level = LogLevel.WARNING,
+                                throttleKey = "DNS protect 失败",
                             )
                         }
 
@@ -858,7 +854,7 @@ class DnsInterceptor
                     )
                     return false
                 }
-                fakeIp = String.format(java.util.Locale.ROOT, "fd00::%04x", counter)
+                fakeIp = String.format(Locale.ROOT, "fd00::%04x", counter)
                 fakeInetAddress = InetAddress.getByName(fakeIp)
                 // 反向表必须存 InetAddress 的规范形 (fd00:0:0:0:0:0:0:42), 与 ipToDomain 的键
                 // (下方 fakeInetAddress.hostAddress) 一致: releaseFakeIp 拿到的是 CONNECT 侧的
