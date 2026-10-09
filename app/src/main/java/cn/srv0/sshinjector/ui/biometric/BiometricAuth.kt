@@ -1,5 +1,7 @@
 package cn.srv0.sshinjector.ui.biometric
 
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.biometric.BiometricPrompt.PromptInfo
@@ -11,25 +13,23 @@ import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.android.components.ActivityComponent
+import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.inject.Inject
 import javax.inject.Singleton
-import java.security.KeyStore
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
 
 @Singleton
 class BiometricAuth
     @Inject
     constructor(
-        private val keyManager: SshKeyManager,
+        private val keys: SshKeyManager,
     ) {
         /**
          * 判断指定密钥是否要求生物识别/锁屏认证才能签名。
          */
-        fun needsBiometric(keyAlias: String): Boolean = keyAlias.isNotEmpty() && keyManager.isBiometricProtected(keyAlias)
+        fun needsBiometric(keyAlias: String): Boolean = keyAlias.isNotEmpty() && keys.isBiometricProtected(keyAlias)
 
         /**
          * 弹出生物识别认证框。认证成功后回调 onSuccess。
@@ -78,18 +78,19 @@ class BiometricAuth
                         BiometricManager.Authenticators.BIOMETRIC_STRONG,
                     ).build()
 
-            val cipher = try {
-                createAuthCipher()
-            } catch (_: Exception) {
-                onCancelled()
-                return
-            }
+            val cipher =
+                try {
+                    createAuthCipher()
+                } catch (_: Exception) {
+                    onCancelled()
+                    return
+                }
 
             prompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(cipher))
         }
 
         private fun createAuthCipher(): Cipher {
-            val cipher = Cipher.getInstance(cipherTransformation)
+            val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
             val secretKey = getOrCreateBiometricSecretKey()
             cipher.init(Cipher.ENCRYPT_MODE, secretKey)
             return cipher
@@ -97,7 +98,7 @@ class BiometricAuth
 
         private fun getOrCreateBiometricSecretKey(): SecretKey {
             val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-            val existingKey = keyStore.getKey(biometricKeyAlias, null) as? SecretKey
+            val existingKey = keyStore.getKey(BIOMETRIC_KEY_ALIAS, null) as? SecretKey
             if (existingKey != null) return existingKey
 
             val keyGenerator =
@@ -108,7 +109,7 @@ class BiometricAuth
             val spec =
                 KeyGenParameterSpec
                     .Builder(
-                        biometricKeyAlias,
+                        BIOMETRIC_KEY_ALIAS,
                         KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
                     ).setBlockModes(KeyProperties.BLOCK_MODE_CBC)
                     .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_PKCS7)
@@ -144,6 +145,9 @@ class BiometricAuth
         }
 
         companion object {
+            private const val BIOMETRIC_KEY_ALIAS = "sshinjector_biometric_key"
+            private const val CIPHER_TRANSFORMATION = "AES/CBC/PKCS7Padding"
+
             fun from(activity: FragmentActivity): BiometricAuth =
                 EntryPointAccessors.fromActivity(activity, BiometricAuthEntryPoint::class.java).biometricAuth()
         }
