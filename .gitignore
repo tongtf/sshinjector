@@ -11,6 +11,10 @@ local.properties
 *.jks
 *.keystore
 keystore.properties
+# 签名材料迁移包 (含 storePassword/keyPassword, 永不入库)
+sshinjector-keystore-*.tar.gz
+sshinjector-keystore-*.enc
+.keystore-bundle.tmp
 
 # Planning scratch files
 docs/plans/
