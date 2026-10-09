@@ -2,6 +2,7 @@ package cn.srv0.sshinjector.ui.screen.dashboard
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,6 +20,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -70,7 +72,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.fragment.app.FragmentActivity
 import androidx.hilt.navigation.compose.hiltViewModel
+import cn.srv0.sshinjector.domain.model.ServerConfig
+import cn.srv0.sshinjector.ui.biometric.BiometricAuth
+import cn.srv0.sshinjector.ui.screen.keymanager.KeyInfo
 import cn.srv0.sshinjector.ui.screen.keymanager.KeyKindIcon
 import cn.srv0.sshinjector.ui.screen.keymanager.KeyManagerViewModel
 import cn.srv0.sshinjector.ui.theme.extendedColors
@@ -144,6 +150,7 @@ fun DashboardScreen(
     val servers by viewModel.allServers.collectAsState(
         initial = emptyList<cn.srv0.sshinjector.domain.model.ServerConfig>(),
     )
+    val keysList by keyViewModel.keys.collectAsState()
 
     Box(
         modifier =
@@ -157,265 +164,11 @@ fun DashboardScreen(
                     .fillMaxSize()
                     .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            stringResource(cn.srv0.sshinjector.R.string.dashboard_status_info),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        IconButton(
-                            onClick = { viewModel.refreshNetworkInfo() },
-                            modifier = Modifier.size(32.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription =
-                                    stringResource(
-                                        cn.srv0.sshinjector.R.string.dashboard_refresh_info,
-                                    ),
-                                modifier = Modifier.size(18.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(
-                            stringResource(cn.srv0.sshinjector.R.string.dashboard_ipv4),
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            state.deviceIpv4,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(
-                            stringResource(cn.srv0.sshinjector.R.string.dashboard_ipv6),
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            state.deviceIpv6,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(
-                            stringResource(cn.srv0.sshinjector.R.string.dashboard_exit_ip),
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            state.exitIp,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            stringResource(cn.srv0.sshinjector.R.string.dashboard_mode),
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        val (dnsBg, dnsFg) = dnsModeColors(state.dnsMode)
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = dnsBg,
-                            modifier = Modifier.clickable { viewModel.switchDnsMode() },
-                        ) {
-                            Text(
-                                text = state.dnsMode,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = dnsFg,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                stringResource(cn.srv0.sshinjector.R.string.dashboard_network),
-                                fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = state.networkDetail,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        Text(
-                            text = state.statusDisplay,
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                stringResource(cn.srv0.sshinjector.R.string.dashboard_cpu),
-                                fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = state.cpuUsage,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                                color =
-                                    ratioLevelColor(
-                                        MainViewModel.ratioLevel(
-                                            if (state.cpuUsage != "-") {
-                                                state.cpuUsage
-                                                    .replace("%", "")
-                                                    .toFloatOrNull()
-                                                    ?.div(10f) ?: 0f
-                                            } else {
-                                                0f
-                                            },
-                                        ),
-                                    ),
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                modifier = Modifier.width(48.dp),
-                            )
-                        }
-                        Text(
-                            text =
-                                if (state.javaHeapUsage != "-" &&
-                                    state.nativeHeapUsage != "-"
-                                ) {
-                                    "Heap:${state.javaHeapUsage} Native:${state.nativeHeapUsage}"
-                                } else {
-                                    "-"
-                                },
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color =
-                                ratioLevelColor(
-                                    MainViewModel.ratioLevel(
-                                        if (state.javaHeapUsage != "-" &&
-                                            state.javaHeapUsage.contains(" MB")
-                                        ) {
-                                            val num =
-                                                state.javaHeapUsage
-                                                    .replace(" MB", "")
-                                                    .replace(" GB", "")
-                                                    .toFloatOrNull() ?: 0f
-                                            val inMb =
-                                                if (state.javaHeapUsage.contains(" GB")) {
-                                                    num * 1024f
-                                                } else {
-                                                    num
-                                                }
-                                            inMb / 50f
-                                        } else {
-                                            0f
-                                        },
-                                    ),
-                                ),
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            stringResource(cn.srv0.sshinjector.R.string.dashboard_traffic),
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            text =
-                                "↑ ${MainViewModel.formatBytes(state.bytesUp)}  " +
-                                    "↓ ${MainViewModel.formatBytes(state.bytesDown)}",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            stringResource(cn.srv0.sshinjector.R.string.dashboard_duration),
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            text =
-                                if (state.connectedDurationMs > 0) {
-                                    MainViewModel.formatDuration(state.connectedDurationMs)
-                                } else {
-                                    "-"
-                                },
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
+            DashboardStatusCard(
+                state = state,
+                onRefresh = { viewModel.refreshNetworkInfo() },
+                onSwitchDnsMode = { viewModel.switchDnsMode() },
+            )
 
             Spacer(modifier = Modifier.height(14.dp))
 
@@ -491,169 +244,24 @@ fun DashboardScreen(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     if (!columnMode) {
-                        if (servers.isEmpty()) {
-                            EmptyState(
-                                icon = Icons.Default.FavoriteBorder,
-                                title =
-                                    stringResource(
-                                        cn.srv0.sshinjector.R.string.dashboard_no_servers,
-                                    ),
-                                subtitle =
-                                    stringResource(
-                                        cn.srv0.sshinjector.R.string.dashboard_no_servers_hint,
-                                    ),
-                                actionText =
-                                    stringResource(
-                                        cn.srv0.sshinjector.R.string.dashboard_add_server,
-                                    ),
-                                onAction = onNavigateToServerAdd,
-                            )
-                        } else {
-                            LazyColumn(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                items(servers, key = { it.id }) { server ->
-                                    val isCurrent = state.currentServerId == server.id
-                                    val isConnectedToThis = state.isConnected && isCurrent
-                                    val serverStatus = serverConnectionStatus[server.id]
-
-                                    ServerListItem(
-                                        serverName = server.name,
-                                        serverInfo = "${server.username}@${server.host}:${server.port}",
-                                        isDefault = server.isActive,
-                                        isConnected = isConnectedToThis,
-                                        connectionStatus = serverStatus,
-                                        onToggleDefault = {
-                                            viewModel.toggleDefaultServer(server.id)
-                                        },
-                                        onClickEdit = { onNavigateToServerEdit(server.id) },
-                                        onClickConnect = {
-                                            if (isConnectedToThis) {
-                                                viewModel.disconnect()
-                                            } else {
-                                                val onGranted = {
-                                                    viewModel.connect(server.id)
-                                                }
-                                                if (fragmentActivity != null &&
-                                                    biometricAuth != null
-                                                ) {
-                                                    biometricAuth.connectIfAllowed(
-                                                        fragmentActivity,
-                                                        server.keyAlias,
-                                                        onGranted,
-                                                    )
-                                                } else {
-                                                    onGranted()
-                                                }
-                                            }
-                                        },
-                                        onLongClick = { showServerMenu = server.id },
-                                    )
-                                }
-                            }
-                        }
+                        ServersSection(
+                            state = state,
+                            servers = servers,
+                            biometricAuth = biometricAuth,
+                            fragmentActivity = fragmentActivity,
+                            viewModel = viewModel,
+                            onNavigateToServerAdd = onNavigateToServerAdd,
+                            onNavigateToServerEdit = onNavigateToServerEdit,
+                            onServerLongClick = { showServerMenu = it },
+                        )
                     } else {
-                        val keysList = keyViewModel.keys.collectAsState().value
-                        if (keysList.isEmpty()) {
-                            EmptyState(
-                                icon = Icons.Default.DateRange,
-                                title =
-                                    stringResource(
-                                        cn.srv0.sshinjector.R.string.dashboard_no_keys,
-                                    ),
-                                subtitle =
-                                    stringResource(
-                                        cn.srv0.sshinjector.R.string.dashboard_no_keys_hint,
-                                    ),
-                                actionText =
-                                    stringResource(
-                                        cn.srv0.sshinjector.R.string.dashboard_add_key,
-                                    ),
-                                onAction = onNavigateToKeyAdd,
-                            )
-                        } else {
-                            LazyColumn(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                items(keysList, key = { it.alias }) { key ->
-                                    Row(
-                                        modifier =
-                                            Modifier
-                                                .fillMaxWidth()
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .clickable { onNavigateToKeys() }
-                                                .padding(vertical = 6.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.weight(1f),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                        ) {
-                                            KeyKindIcon(
-                                                kind = key.kind,
-                                                isBiometricProtected = key.isBiometricProtected,
-                                                modifier = Modifier.size(16.dp),
-                                            )
-                                            Spacer(Modifier.width(8.dp))
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = key.alias,
-                                                    fontSize = 14.sp,
-                                                    fontWeight = FontWeight.Medium,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis,
-                                                )
-                                                Text(
-                                                    text = key.algorithm,
-                                                    fontSize = 11.sp,
-                                                    color =
-                                                        MaterialTheme
-                                                            .colorScheme.onSurfaceVariant,
-                                                )
-                                            }
-                                        }
-                                        Box(
-                                            modifier =
-                                                Modifier
-                                                    .size(32.dp)
-                                                    .clip(RoundedCornerShape(16.dp))
-                                                    .clickable {
-                                                        val success =
-                                                            keyViewModel.copyPublicKey(
-                                                                key.publicKey,
-                                                            )
-                                                        if (success) {
-                                                            val label =
-                                                                context.resources.getString(
-                                                                    cn.srv0.sshinjector.R.string.dashboard_key_copied,
-                                                                )
-                                                            android.widget.Toast
-                                                                .makeText(
-                                                                    context,
-                                                                    label,
-                                                                    android.widget.Toast.LENGTH_SHORT,
-                                                                ).show()
-                                                        }
-                                                    },
-                                            contentAlignment = Alignment.Center,
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.AutoMirrored.Filled.Send,
-                                                contentDescription =
-                                                    stringResource(
-                                                        cn.srv0.sshinjector.R.string.copy,
-                                                    ),
-                                                modifier = Modifier.size(18.dp),
-                                                tint = MaterialTheme.colorScheme.primary,
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        KeysSection(
+                            keysList = keysList,
+                            context = context,
+                            keyViewModel = keyViewModel,
+                            onNavigateToKeys = onNavigateToKeys,
+                            onNavigateToKeyAdd = onNavigateToKeyAdd,
+                        )
                     }
                 }
             }
@@ -680,6 +288,457 @@ fun DashboardScreen(
                 },
                 onDismiss = { showServerMenu = null },
             )
+        }
+    }
+}
+
+@Composable
+private fun DashboardStatusCard(
+    state: MainViewModel.UiState,
+    onRefresh: () -> Unit,
+    onSwitchDnsMode: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(cn.srv0.sshinjector.R.string.dashboard_status_info),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                IconButton(
+                    onClick = onRefresh,
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription =
+                            stringResource(
+                                cn.srv0.sshinjector.R.string.dashboard_refresh_info,
+                            ),
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    stringResource(cn.srv0.sshinjector.R.string.dashboard_ipv4),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    state.deviceIpv4,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    stringResource(cn.srv0.sshinjector.R.string.dashboard_ipv6),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    state.deviceIpv6,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    stringResource(cn.srv0.sshinjector.R.string.dashboard_exit_ip),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    state.exitIp,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(cn.srv0.sshinjector.R.string.dashboard_mode),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                val (dnsBg, dnsFg) = dnsModeColors(state.dnsMode)
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = dnsBg,
+                    modifier = Modifier.clickable { onSwitchDnsMode() },
+                ) {
+                    Text(
+                        text = state.dnsMode,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = dnsFg,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        stringResource(cn.srv0.sshinjector.R.string.dashboard_network),
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = state.networkDetail,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Text(
+                    text = state.statusDisplay,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        stringResource(cn.srv0.sshinjector.R.string.dashboard_cpu),
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = state.cpuUsage,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color =
+                            ratioLevelColor(
+                                MainViewModel.ratioLevel(
+                                    if (state.cpuUsage != "-") {
+                                        state.cpuUsage
+                                            .replace("%", "")
+                                            .toFloatOrNull()
+                                            ?.div(10f) ?: 0f
+                                    } else {
+                                        0f
+                                    },
+                                ),
+                            ),
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        modifier = Modifier.width(48.dp),
+                    )
+                }
+                Text(
+                    text =
+                        if (state.javaHeapUsage != "-" &&
+                            state.nativeHeapUsage != "-"
+                        ) {
+                            "Heap:${state.javaHeapUsage} Native:${state.nativeHeapUsage}"
+                        } else {
+                            "-"
+                        },
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color =
+                        ratioLevelColor(
+                            MainViewModel.ratioLevel(
+                                if (state.javaHeapUsage != "-" &&
+                                    state.javaHeapUsage.contains(" MB")
+                                ) {
+                                    val num =
+                                        state.javaHeapUsage
+                                            .replace(" MB", "")
+                                            .replace(" GB", "")
+                                            .toFloatOrNull() ?: 0f
+                                    val inMb =
+                                        if (state.javaHeapUsage.contains(" GB")) {
+                                            num * 1024f
+                                        } else {
+                                            num
+                                        }
+                                    inMb / 50f
+                                } else {
+                                    0f
+                                },
+                            ),
+                        ),
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(cn.srv0.sshinjector.R.string.dashboard_traffic),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text =
+                        "↑ ${MainViewModel.formatBytes(state.bytesUp)}  " +
+                            "↓ ${MainViewModel.formatBytes(state.bytesDown)}",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(cn.srv0.sshinjector.R.string.dashboard_duration),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text =
+                        if (state.connectedDurationMs > 0) {
+                            MainViewModel.formatDuration(state.connectedDurationMs)
+                        } else {
+                            "-"
+                        },
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ColumnScope.ServersSection(
+    state: MainViewModel.UiState,
+    servers: List<ServerConfig>,
+    biometricAuth: BiometricAuth?,
+    fragmentActivity: FragmentActivity?,
+    viewModel: MainViewModel,
+    onNavigateToServerAdd: () -> Unit,
+    onNavigateToServerEdit: (Long) -> Unit,
+    onServerLongClick: (Long) -> Unit,
+) {
+    if (servers.isEmpty()) {
+        EmptyState(
+            icon = Icons.Default.FavoriteBorder,
+            title =
+                stringResource(
+                    cn.srv0.sshinjector.R.string.dashboard_no_servers,
+                ),
+            subtitle =
+                stringResource(
+                    cn.srv0.sshinjector.R.string.dashboard_no_servers_hint,
+                ),
+            actionText =
+                stringResource(
+                    cn.srv0.sshinjector.R.string.dashboard_add_server,
+                ),
+            onAction = onNavigateToServerAdd,
+        )
+    } else {
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            items(servers, key = { it.id }) { server ->
+                val isCurrent = state.currentServerId == server.id
+                val isConnectedToThis = state.isConnected && isCurrent
+                val serverStatus = state.serverConnectionStatus[server.id]
+
+                ServerListItem(
+                    serverName = server.name,
+                    serverInfo = "${server.username}@${server.host}:${server.port}",
+                    isDefault = server.isActive,
+                    isConnected = isConnectedToThis,
+                    connectionStatus = serverStatus,
+                    onToggleDefault = {
+                        viewModel.toggleDefaultServer(server.id)
+                    },
+                    onClickEdit = { onNavigateToServerEdit(server.id) },
+                    onClickConnect = {
+                        if (isConnectedToThis) {
+                            viewModel.disconnect()
+                        } else {
+                            val onGranted = {
+                                viewModel.connect(server.id)
+                            }
+                            if (fragmentActivity != null &&
+                                biometricAuth != null
+                            ) {
+                                biometricAuth.connectIfAllowed(
+                                    fragmentActivity,
+                                    server.keyAlias,
+                                    onGranted,
+                                )
+                            } else {
+                                onGranted()
+                            }
+                        }
+                    },
+                    onLongClick = { onServerLongClick(server.id) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ColumnScope.KeysSection(
+    keysList: List<KeyInfo>,
+    context: Context,
+    keyViewModel: KeyManagerViewModel,
+    onNavigateToKeys: () -> Unit,
+    onNavigateToKeyAdd: () -> Unit,
+) {
+    if (keysList.isEmpty()) {
+        EmptyState(
+            icon = Icons.Default.DateRange,
+            title =
+                stringResource(
+                    cn.srv0.sshinjector.R.string.dashboard_no_keys,
+                ),
+            subtitle =
+                stringResource(
+                    cn.srv0.sshinjector.R.string.dashboard_no_keys_hint,
+                ),
+            actionText =
+                stringResource(
+                    cn.srv0.sshinjector.R.string.dashboard_add_key,
+                ),
+            onAction = onNavigateToKeyAdd,
+        )
+    } else {
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            items(keysList, key = { it.alias }) { key ->
+                Row(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onNavigateToKeys() }
+                            .padding(vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        KeyKindIcon(
+                            kind = key.kind,
+                            isBiometricProtected = key.isBiometricProtected,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = key.alias,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = key.algorithm,
+                                fontSize = 11.sp,
+                                color =
+                                    MaterialTheme
+                                        .colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Box(
+                        modifier =
+                            Modifier
+                                .size(32.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable {
+                                    val success =
+                                        keyViewModel.copyPublicKey(
+                                            key.publicKey,
+                                        )
+                                    if (success) {
+                                        val label =
+                                            context.resources.getString(
+                                                cn.srv0.sshinjector.R.string.dashboard_key_copied,
+                                            )
+                                        android.widget.Toast
+                                            .makeText(
+                                                context,
+                                                label,
+                                                android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                    }
+                                },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Send,
+                            contentDescription =
+                                stringResource(
+                                    cn.srv0.sshinjector.R.string.copy,
+                                ),
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            }
         }
     }
 }
