@@ -77,8 +77,8 @@ cert_fingerprint() {
   # 否则 keytool 非零 + pipefail + set -e 会让 $(...) 赋值直接把脚本静默干掉,
   # 连 "读取证书失败" 都来不及打。
   out=$(
-    "$kt" -J-Duser.language=en -J-Duser.country=US \
-      -list -v -keystore "$store" -storepass "$pass" -alias "$alias" 2>/dev/null \
+    printf '%s\n' "$pass" | "$kt" -J-Duser.language=en -J-Duser.country=US \
+      -list -v -keystore "$store" -alias "$alias" 2>/dev/null \
       | awk '$1=="SHA256:"{print $2; exit}' \
       | tr -d ':' \
       | tr 'A-F' 'a-f' 2>/dev/null || true
