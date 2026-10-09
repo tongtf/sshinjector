@@ -111,8 +111,8 @@ class BiometricAuth
                     .Builder(
                         BIOMETRIC_KEY_ALIAS,
                         KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
-                    ).setBlockModes(KeyProperties.BLOCK_MODE_CBC)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_PKCS7)
+                    ).setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                     .setUserAuthenticationRequired(true)
                     .setInvalidatedByBiometricEnrollment(true)
                     .build()
@@ -146,7 +146,7 @@ class BiometricAuth
 
         companion object {
             private const val BIOMETRIC_KEY_ALIAS = "sshinjector_biometric_key"
-            private const val CIPHER_TRANSFORMATION = "AES/CBC/PKCS7Padding"
+            private const val CIPHER_TRANSFORMATION = "AES/GCM/NoPadding"
 
             fun from(activity: FragmentActivity): BiometricAuth =
                 EntryPointAccessors.fromActivity(activity, BiometricAuthEntryPoint::class.java).biometricAuth()
