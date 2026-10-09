@@ -1,5 +1,14 @@
 package cn.srv0.sshinjector.domain.vpn
 
+/** DNS 模式持久化整数值 (SettingsDataStore.dnsMode) — 比较/分支一律用这些常量, 不要写字面量。 */
+internal const val DNS_MODE_REMOTE = 0
+internal const val DNS_MODE_SYSTEM = 1
+internal const val DNS_MODE_WHITELIST = 2
+internal const val DNS_MODE_DOMAIN_SPLIT = 3
+
+/** 模式总数 (取值 0..3, nextDnsMode 循环取模用)。 */
+internal const val DNS_MODE_COUNT = 4
+
 /**
  * DNS 模式 → 传输策略 (纯逻辑, 可单测; 供 VpnController.connect / updateDnsMode 共用)。
  *
@@ -16,14 +25,14 @@ internal fun dnsTransportFor(
     whitelistEnabledPackages: List<String>,
 ): DnsInterceptor.DnsTransport =
     when (dnsMode) {
-        0 -> DnsInterceptor.DnsTransport.REMOTE // 全部走隧道
-        1 -> DnsInterceptor.DnsTransport.SYSTEM // 系统默认, 完全透传
-        2 ->
+        DNS_MODE_REMOTE -> DnsInterceptor.DnsTransport.REMOTE // 全部走隧道
+        DNS_MODE_SYSTEM -> DnsInterceptor.DnsTransport.SYSTEM // 系统默认, 完全透传
+        DNS_MODE_WHITELIST ->
             if (whitelistEnabledPackages.isEmpty()) {
                 DnsInterceptor.DnsTransport.SYSTEM
             } else {
                 DnsInterceptor.DnsTransport.WHITELIST
             }
-        3 -> DnsInterceptor.DnsTransport.DOMAIN_SPLIT // 域名分流
+        DNS_MODE_DOMAIN_SPLIT -> DnsInterceptor.DnsTransport.DOMAIN_SPLIT // 域名分流
         else -> DnsInterceptor.DnsTransport.REMOTE
     }
