@@ -387,6 +387,7 @@ class JschSshClient
              * 留 1s 余量给 loopback connect + SOCKS 协商, 保证在代理关连接前收尾。
              */
             private const val CHANNEL_BUDGET_MS = 9000L
+            private const val CHANNEL_BUDGET_PER_CANDIDATE_MS = CHANNEL_BUDGET_MS / SESSION_POOL_SIZE
 
             // 通道健康统计 (排障唯一可见面): 区分「目标层拒绝」与「会话层失效」是本次雪崩 bug 的关键,
             // 只看单条错误日志无法判断是远端连不上目标还是 SSH 会话坏了。
@@ -1013,9 +1014,11 @@ class JschSshClient
 
             var lastError: Exception? = null
             val connectStartedAt = System.currentTimeMillis()
+            val perCandidateBudgetMs = CHANNEL_BUDGET_PER_CANDIDATE_MS
             for (pooled in candidates) {
-                // 共享预算: 超了就不再试后续候选 (代理在 Connecting 10s 就关连接, 再试也是白跑)
-                val budgetLeftMs = connectStartedAt + CHANNEL_BUDGET_MS - System.currentTimeMillis()
+                // 单候选预算: 总预算 / 候选数，防止前几个候选抢尽预算导致后续候选无时间可用
+                val candidateBudgetMs = perCandidateBudgetMs
+                val budgetLeftMs = connectStartedAt + candidateBudgetMs - System.currentTimeMillis()
                 if (budgetLeftMs <= 0) break
                 val candidateStartedAt = System.currentTimeMillis()
                 try {
