@@ -40,6 +40,10 @@
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:exported="true"
             android:foregroundServiceType="specialUse">
+            <!-- specialUse 必须声明子类型, 否则 Play 审核/系统判定用途不明 -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="VPN tunnel maintained while connected" />
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>

@@ -1395,8 +1395,6 @@ class VpnController
             return dnsList
         }
 
-        fun getCurrentServer(): ServerConfig? = currentServer
-
         fun isVpnRunning(): Boolean = isRunning
 
         /**

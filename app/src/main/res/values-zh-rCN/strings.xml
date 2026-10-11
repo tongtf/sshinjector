@@ -119,6 +119,7 @@
     <string name="settings_biometric_verify">验证并关闭</string>
     <string name="settings_verify_identity">验证身份</string>
     <string name="settings_verify_identity_sub">验证身份以解锁 SSH 密钥</string>
+    <string name="biometric_unavailable">无法完成生物识别验证, 已阻止连接 — 请重启应用或在设置中关闭生物识别解锁</string>
 
     <!-- 域名列表设置 -->
     <string name="domain_list_title">域名列表</string>

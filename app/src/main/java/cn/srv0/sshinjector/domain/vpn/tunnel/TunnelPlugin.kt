@@ -1,18 +1,11 @@
 package cn.srv0.sshinjector.domain.vpn.tunnel
 
-import cn.srv0.sshinjector.domain.vpn.TunnelChannel
-
 interface TunnelPlugin {
     val id: String
 
     suspend fun connect(config: TunnelConfig): Result<Unit>
 
     suspend fun disconnect()
-
-    fun openTcpChannel(
-        host: String,
-        port: Int,
-    ): TunnelChannel?
 
     val localSocksPort: Int get() = 0
 

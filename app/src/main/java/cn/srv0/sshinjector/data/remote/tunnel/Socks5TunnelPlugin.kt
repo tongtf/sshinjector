@@ -4,7 +4,6 @@ import cn.srv0.sshinjector.data.remote.ssh.JschSshClient
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
 import cn.srv0.sshinjector.domain.vpn.Socks5ProxyServer
-import cn.srv0.sshinjector.domain.vpn.TunnelChannel
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelConfig
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelPlugin
 import javax.inject.Inject
@@ -91,11 +90,6 @@ class Socks5TunnelPlugin
             }
             return token() to token()
         }
-
-        override fun openTcpChannel(
-            host: String,
-            port: Int,
-        ): TunnelChannel? = jschClient.createDirectChannel(host, port)
 
         override fun registerTunCallback(
             clientPort: Int,

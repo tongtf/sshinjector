@@ -16,8 +16,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.Base64
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -153,13 +151,7 @@ class AdBlockManager
             return null
         }
 
-        private fun fetch(url: String): String {
-            val connection = URL(url).openConnection() as HttpURLConnection
-            connection.connectTimeout = CONNECT_TIMEOUT_MILLIS
-            connection.readTimeout = READ_TIMEOUT_MILLIS
-            connection.setRequestProperty("User-Agent", "SSHInjector/1.0")
-            return connection.inputStream.bufferedReader(Charsets.ISO_8859_1).use { it.readText() }
-        }
+        private fun fetch(url: String): String = fetchListText(url)
 
         /** gfwlist 原始内容是 base64, 若文本全部由 base64 字符组成则解码, 否则按纯文本处理。 */
         private fun decodeBase64OrPlain(text: String): String {
@@ -207,8 +199,6 @@ class AdBlockManager
             // 拉取一次缓存 3 天: 距上次写入 ≥ 此时长才重新拉取。
 
             const val CACHE_INTERVAL_MILLIS = 3L * 24 * 60 * 60 * 1000
-            const val CONNECT_TIMEOUT_MILLIS = 10_000
-            const val READ_TIMEOUT_MILLIS = 15_000
 
             // 刷新间隔约束 (分钟)
             private val MIN_INTERVAL_MINS = SettingsDataStore.MIN_ADBLOCK_REFRESH_MINUTES

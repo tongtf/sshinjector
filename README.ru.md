@@ -12,7 +12,7 @@
 
 <div align="center">
   <img src="https://img.shields.io/badge/Android-14%2B-green.svg?style=flat-square&logo=android" alt="Android 14+">
-  <img src="https://img.shields.io/badge/Kotlin-2.0.21-blue.svg?style=flat-square&logo=kotlin" alt="Kotlin 2.0.21">
+  <img src="https://img.shields.io/badge/Kotlin-2.4.20-blue.svg?style=flat-square&logo=kotlin" alt="Kotlin 2.4.20">
   <img src="https://img.shields.io/badge/Compose-Material3-orange.svg?style=flat-square&logo=jetpackcompose" alt="Jetpack Compose">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="MIT License">
   <img src="https://img.shields.io/badge/SSH-ECDSA-red.svg?style=flat-square" alt="SSH ECDSA">
@@ -81,16 +81,16 @@
 
 | Категория | Технология |
 |-----------|------------|
-| Язык/UI | Kotlin 2.0.21 + Jetpack Compose (Material 3) |
+| Язык/UI | Kotlin 2.4.20 + Jetpack Compose (Material 3) |
 | Архитектура | MVVM + Clean Architecture + Repository |
-| DI | Hilt 2.53.1 (KSP) |
-| База данных | Room 2.6.1 (KSP) |
+| DI | Hilt 2.60.1 (KSP) |
+| База данных | Room 2.8.4 (KSP) |
 | Настройки | DataStore Preferences (Flow) |
-| SSH-клиент | mwiede/jsch:0.2.14 (активный форк, поддержка ECDSA P-256) |
+| SSH-клиент | mwiede/jsch:2.28.7 (активный форк, поддержка Ed25519) |
 | DNS | dnsjava 3.6.5 |
 | Сеть I/O | Java NIO Selector + Kotlinx Coroutines |
 | Keystore | Android Keystore + BiometricPrompt (ключи не экспортируются) |
-| Coroutines | Kotlinx Coroutines 1.9.0 + Flow |
+| Coroutines | Kotlinx Coroutines 1.10.1 + Flow |
 | Навигация | Navigation Compose 2.8.5 |
 
 ---
@@ -305,7 +305,7 @@ SOFTWARE.
 
 ## 🙏 Благодарности
 
-- [mwiede/jsch](https://github.com/mwiede/jsch) — активно поддерживаемый форк JSch с поддержкой ECDSA P-256
+- [mwiede/jsch](https://github.com/mwiede/jsch) — активно поддерживаемый форк JSch с поддержкой Ed25519
 - [dnsjava](https://github.com/dnsjava/dnsjava) — библиотека DNS-протокола для Java
 - [Android Networking Samples](https://github.com/android/networking-samples) — пример VpnService
 - [SocksDroid](https://github.com/6b6b6b/socksdroid) — пример SOCKS5-прокси

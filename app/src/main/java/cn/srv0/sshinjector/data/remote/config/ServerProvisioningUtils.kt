@@ -10,8 +10,11 @@ internal fun extractSha256(stdout: String): String? =
 
 /** 校验 OpenSSH 公钥格式：允许 ssh-ed25519 / ssh-rsa / ecdsa-sha2-*，格式 "<algo> <base64> [comment]" */
 internal fun isValidPublicKey(key: String): Boolean {
+    // 单行约束: key 被写进 authorized_keys 的一行, 含 \n/\r 的输入可夹带第二行(甚至
+    // command=... 前缀) — 公钥由本机 Keystore 生成/导入, 但上传路径不假设输入可信
+    if (key.any { it == '\n' || it == '\r' }) return false
     val parts = key.trim().split(Regex("\\s+"))
-    if (parts.size < 2) return false
+    if (parts.size < 2 || parts.size > 3) return false
     val algo = parts[0]
     if (algo !in setOf("ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521")) {
         return false

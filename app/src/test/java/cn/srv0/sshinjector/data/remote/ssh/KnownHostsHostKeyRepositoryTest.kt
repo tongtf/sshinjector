@@ -43,8 +43,14 @@ class KnownHostsHostKeyRepositoryTest {
         return out
     }
 
-    /** 独立复现指纹公式：SHA256 over base64(blob) ASCII。 */
+    /** 独立复现 OpenSSH 标准指纹公式：SHA256 over raw blob, base64 无填充。 */
     private fun fingerprint(key: ByteArray): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(key)
+        return "SHA256:" + Base64.getEncoder().withoutPadding().encodeToString(digest)
+    }
+
+    /** 旧版非标公式 (SHA256 over base64(blob) ASCII, 带填充)：升级前入库的指纹仍须被接受。 */
+    private fun legacyFingerprint(key: ByteArray): String {
         val digest = MessageDigest.getInstance("SHA-256")
         digest.update(Base64.getEncoder().encodeToString(key).toByteArray())
         return "SHA256:" + Base64.getEncoder().encodeToString(digest.digest())
@@ -64,6 +70,38 @@ class KnownHostsHostKeyRepositoryTest {
     @Test
     fun `check returns CHANGED when configured fingerprint mismatches`() {
         assertEquals(HostKeyRepository.CHANGED, repo("SHA256:stale").check("h.example", blob(1)))
+    }
+
+    @Test
+    fun `check accepts legacy non-standard fingerprint configured before upgrade`() {
+        // 升级前用户按旧公式核对并配置的指纹必须继续有效, 否则存量服务器全部 CHANGED
+        assertEquals(HostKeyRepository.OK, repo(legacyFingerprint(blob(1))).check("h.example", blob(1)))
+    }
+
+    @Test
+    fun `check accepts legacy stored tofu record from before upgrade`() {
+        val key = blob(1)
+        // 模拟升级前落盘的 known_hosts 行 (旧公式指纹 + 双重 base64 key)
+        val line =
+            "h.example,2222 ssh-ed25519 " +
+                Base64.getEncoder().encodeToString(Base64.getEncoder().encodeToString(key).toByteArray()) +
+                " " + legacyFingerprint(key)
+        File(tmp.root, "known_hosts").writeText(line)
+
+        var trusted: String? = null
+        val result = repo(onFirstTrust = { trusted = it }).check("h.example", key)
+        assertEquals(HostKeyRepository.OK, result)
+        assertEquals(null, trusted) // 不得当作陌生人重新 TOFU
+    }
+
+    @Test
+    fun `new tofu record uses openssh standard fingerprint`() {
+        var trusted: String? = null
+        val key = blob(1)
+        repo(onFirstTrust = { trusted = it }).check("h.example", key)
+        // 可与 ssh-keygen -lf 输出带外对账的标准格式 (raw blob 摘要 + 无填充)
+        assertEquals(fingerprint(key), trusted)
+        assertTrue(trusted!!.matches(Regex("SHA256:[A-Za-z0-9+/]{43}")))
     }
 
     @Test

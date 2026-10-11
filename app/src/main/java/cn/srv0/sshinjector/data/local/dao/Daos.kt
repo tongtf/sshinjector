@@ -22,9 +22,6 @@ interface ServerDao {
     suspend fun delete(id: Long): Int
 
     @Query("SELECT * FROM servers WHERE id = :id")
-    fun getById(id: Long): Flow<ServerEntity?>
-
-    @Query("SELECT * FROM servers WHERE id = :id")
     suspend fun getByIdBlocking(id: Long): ServerEntity?
 
     @Query("SELECT * FROM servers WHERE isActive = 1")
@@ -76,9 +73,6 @@ interface ServerDao {
         id: Long,
         fingerprint: String,
     )
-
-    @Query("SELECT COUNT(*) FROM servers")
-    suspend fun count(): Int
 }
 
 @Dao

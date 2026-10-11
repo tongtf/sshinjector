@@ -1024,14 +1024,6 @@ class DnsInterceptor
             }
         }
 
-        /**
-         * 清理过期缓存
-         */
-        fun cleanupCache() {
-            val now = System.currentTimeMillis()
-            dnsCache.entries.removeIf { it.value.expireAt < now }
-        }
-
         fun getStats() =
             DnsStats(
                 queriesIntercepted = queriesIntercepted.get(),

@@ -119,6 +119,7 @@
     <string name="settings_biometric_verify">Подтвердить и отключить</string>
     <string name="settings_verify_identity">Подтверждение личности</string>
     <string name="settings_verify_identity_sub">Подтвердите для доступа к SSH-ключам</string>
+    <string name="biometric_unavailable">Биометрическая проверка недоступна — соединение заблокировано. Перезапустите приложение или отключите биометрическую разблокировку в настройках</string>
 
     <!-- Список доменов -->
     <string name="domain_list_title">Список доменов</string>

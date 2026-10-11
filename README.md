@@ -12,7 +12,7 @@
 
 <div align="center">
   <img src="https://img.shields.io/badge/Android-14%2B-green.svg?style=flat-square&logo=android" alt="Android 14+">
-  <img src="https://img.shields.io/badge/Kotlin-2.0.21-blue.svg?style=flat-square&logo=kotlin" alt="Kotlin 2.0.21">
+  <img src="https://img.shields.io/badge/Kotlin-2.4.20-blue.svg?style=flat-square&logo=kotlin" alt="Kotlin 2.4.20">
   <img src="https://img.shields.io/badge/Compose-Material3-orange.svg?style=flat-square&logo=jetpackcompose" alt="Jetpack Compose">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="MIT License">
   <img src="https://img.shields.io/badge/SSH-ECDSA-red.svg?style=flat-square" alt="SSH ECDSA">
@@ -81,16 +81,16 @@
 
 | 分类 | 技术 |
 |------|------|
-| 语言/UI | Kotlin 2.0.21 + Jetpack Compose (Material 3) |
+| 语言/UI | Kotlin 2.4.20 + Jetpack Compose (Material 3) |
 | 架构 | MVVM + Clean Architecture + Repository 模式 |
-| DI | Hilt 2.53.1 (KSP) |
-| 数据库 | Room 2.6.1 (KSP) |
+| DI | Hilt 2.60.1 (KSP) |
+| 数据库 | Room 2.8.4 (KSP) |
 | 偏好设置 | DataStore Preferences (Flow) |
-| SSH 客户端 | mwiede/jsch:0.2.14 (维护活跃，支持 ECDSA P-256) |
+| SSH 客户端 | mwiede/jsch:2.28.7 (维护活跃，支持 Ed25519) |
 | DNS 解析 | dnsjava 3.6.5 |
 | 网络 I/O | Java NIO Selector + Kotlinx Coroutines |
 | 密钥存储 | Android Keystore + BiometricPrompt（密钥不可导出） |
-| 协程 | Kotlinx Coroutines 1.9.0 + Flow |
+| 协程 | Kotlinx Coroutines 1.10.1 + Flow |
 | 导航 | Navigation Compose 2.8.5 |
 
 ---
@@ -309,7 +309,7 @@ SOFTWARE.
 
 ## 🙏 致谢
 
-- [mwiede/jsch](https://github.com/mwiede/jsch) - 活跃维护的 JSch 分支，支持 ECDSA P-256
+- [mwiede/jsch](https://github.com/mwiede/jsch) - 活跃维护的 JSch 分支，支持 Ed25519
 - [dnsjava](https://github.com/dnsjava/dnsjava) - Java DNS 协议实现
 - [Android VPN Toy](https://github.com/android/networking-samples) - VPNService 参考实现
 - [SocksDroid](https://github.com/6b6b6b/socksdroid) - SOCKS5 代理参考

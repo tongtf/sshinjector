@@ -119,6 +119,7 @@
     <string name="settings_biometric_verify">Verify &amp; Disable</string>
     <string name="settings_verify_identity">Verify Identity</string>
     <string name="settings_verify_identity_sub">Verify identity to unlock SSH keys</string>
+    <string name="biometric_unavailable">Biometric verification unavailable — connection blocked. Restart the app or disable biometric unlock in Settings</string>
 
     <!-- Domain List Settings -->
     <string name="domain_list_title">Domain List</string>

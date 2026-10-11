@@ -124,6 +124,25 @@ class ServerRepository
                 updatedAt = Date(),
             )
 
+        /**
+         * 启动期一次性迁移: 加密边界启用之前入库的**明文密码**补加密 (幂等, 应用启动时调用)。
+         * 读端虽兼容明文, 但明文躺在 SQLite 里对 root/adb backup/备份提取零成本 —
+         * 迁移后统一为 enc:v1: 密文; 加密失败的行留待下次启动重试 (读端仍能用明文)。
+         */
+        suspend fun migrateLegacyPlaintextPasswords() =
+            withContext(Dispatchers.IO) {
+                val legacy =
+                    serverDao.getAllBlocking().filter {
+                        !it.password.isNullOrEmpty() && !it.password.startsWith(AesGcmCipher.ENCRYPTED_PREFIX)
+                    }
+                for (entity in legacy) {
+                    // encrypt 写端不降级 (失败抛出), 单行失败不阻断其余行的迁移
+                    val encrypted = credentialCrypto.encrypt(entity.password) ?: continue
+                    serverDao.update(entity.copy(password = encrypted))
+                }
+                legacy.size
+            }
+
         suspend fun deleteServer(id: Long) =
             withContext(Dispatchers.IO) {
                 serverDao.delete(id)

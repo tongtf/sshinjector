@@ -240,6 +240,11 @@ class ConnectivityProber(
                 (SSLSocketFactory.getDefault() as SSLSocketFactory)
                     .createSocket(socket, endpoint.host, endpoint.port, true) as SSLSocket
             ssl.soTimeout = readTimeoutMs
+            // 裸 SSLSocket 默认**不做主机名校验** (只有 HttpsURLConnection 会做): 中间人拿一张
+            // 系统信任库里任意站点的证书即可冒充探测端点, 把探测结论劫持成"健康"。
+            // 开启 HTTPS 算法后校验证书 SAN 必须匹配 endpoint.host。
+            ssl.sslParameters =
+                ssl.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
             ssl.startHandshake()
             input = ssl.getInputStream()
             output = ssl.getOutputStream()

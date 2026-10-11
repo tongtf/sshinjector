@@ -20,7 +20,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.isActive
@@ -41,17 +43,43 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * 计算 SSH 主机密钥的 SHA-256 指纹 (OpenSSH 格式): "SHA256:<base64"。
+ * 计算 SSH 主机密钥的 SHA-256 指纹 (OpenSSH 标准): "SHA256:<base64>"。
  * 文件级私有函数，KnownHostsManager、KnownHostsHostKeyRepository 与 JschSshClient 共用，避免逻辑重复。
+ *
+ * OpenSSH 公式: 对**原始 key blob 字节**做 SHA-256, digest 再 base64 (**无填充**) —
+ * 与 `ssh-keygen -lf /etc/ssh/ssh_host_*.pub` 输出一致, UI 展示的指纹可与服务器侧带外对账。
+ * (旧版曾对 base64(blob) 的 ASCII 做摘要 — 那个格式与 OpenSSH 不互通, 带外核对不可行;
+ * 存量 DB/known_hosts 里的旧指纹由 [legacyFingerprintOfBlob] 兼容比对, 新写入一律用本公式。)
  * 用 java.util.Base64 (与 android.util.Base64 NO_WRAP 输出一致)，JVM 单测可直接断言。
  */
-private fun computeFingerprint(hostKey: HostKey): String {
+private fun computeFingerprint(hostKey: HostKey): String = fingerprintOfBlob(keyBlobOf(hostKey))
+
+/** HostKey.getKey() = 公钥 base64; 非法输入兜底按 ASCII 字节 (仅防御, 生产不会发生)。 */
+private fun keyBlobOf(hostKey: HostKey): ByteArray =
+    try {
+        Base64.getDecoder().decode(hostKey.getKey())
+    } catch (_: Exception) {
+        hostKey.getKey().toByteArray()
+    }
+
+/** SHA-256 指纹 (OpenSSH 标准): raw blob → SHA-256 → base64 无填充。 */
+private fun fingerprintOfBlob(blob: ByteArray): String {
+    val digest = MessageDigest.getInstance("SHA-256").digest(blob)
+    return "SHA256:" + Base64.getEncoder().withoutPadding().encodeToString(digest)
+}
+
+/** 旧版非标指纹 (SHA256 over base64(blob) ASCII, 带填充): 仅供存量记录兼容比对, 勿用于新写入。 */
+private fun legacyFingerprintOfBlob(blob: ByteArray): String {
     val digest = MessageDigest.getInstance("SHA-256")
-    // JSch HostKey.getKey() 返回公钥 base64 字符串
-    val bytes = hostKey.getKey().toByteArray()
-    digest.update(bytes)
+    digest.update(Base64.getEncoder().encodeToString(blob).toByteArray())
     return "SHA256:" + Base64.getEncoder().encodeToString(digest.digest())
 }
+
+/** 指纹比对: 新标准格式优先, 兼容旧版非标格式 (升级前入库的指纹)。 */
+private fun fingerprintMatches(
+    configured: String,
+    blob: ByteArray,
+): Boolean = configured == fingerprintOfBlob(blob) || configured == legacyFingerprintOfBlob(blob)
 
 /**
  * 单次远程命令执行结果。
@@ -193,10 +221,17 @@ internal class KnownHostsHostKeyRepository(
         chost: String,
         key: ByteArray,
     ): Int {
-        val fingerprint = fingerprintOf(key) ?: return HostKeyRepository.NOT_INCLUDED
+        // 先验证 blob 结构合法 (HostKey 构造失败 = 畸形密钥, 拒绝而非 TOFU 放行)
+        val fingerprint =
+            try {
+                computeFingerprint(HostKey(host, HostKey.GUESS, key))
+            } catch (_: Exception) {
+                return HostKeyRepository.NOT_INCLUDED
+            }
         val expected = expectedFingerprint
         if (!expected.isNullOrEmpty()) {
-            return if (expected == fingerprint) HostKeyRepository.OK else HostKeyRepository.CHANGED
+            // 兼容旧版非标指纹: 升级前配置的指纹仍按旧公式比对, 避免存量服务器全部 CHANGED
+            return if (fingerprintMatches(expected, key)) HostKeyRepository.OK else HostKeyRepository.CHANGED
         }
         val stored = knownHosts.getStoredFingerprint(host, port)
         if (stored == null) {
@@ -204,7 +239,7 @@ internal class KnownHostsHostKeyRepository(
             saveTofu(key, fingerprint)
             return HostKeyRepository.OK
         }
-        return if (stored == fingerprint) HostKeyRepository.OK else HostKeyRepository.CHANGED
+        return if (fingerprintMatches(stored, key)) HostKeyRepository.OK else HostKeyRepository.CHANGED
     }
 
     override fun add(
@@ -244,13 +279,6 @@ internal class KnownHostsHostKeyRepository(
         val key = knownHosts.getStoredHostKey(host, port) ?: return emptyArray()
         return if (type == null || key.getType() == type) arrayOf(key) else emptyArray()
     }
-
-    private fun fingerprintOf(key: ByteArray): String? =
-        try {
-            computeFingerprint(HostKey(host, HostKey.GUESS, key))
-        } catch (_: Exception) {
-            null
-        }
 
     private fun saveTofu(
         key: ByteArray,
@@ -425,7 +453,6 @@ class JschSshClient
         private var currentConfig: ServerConfig? = null
 
         val connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
-        val lastError = MutableStateFlow<String?>(null)
 
         enum class ConnectionState {
             Disconnected,
@@ -443,13 +470,20 @@ class JschSshClient
             }
 
             connectionState.value = ConnectionState.Connecting
-            lastError.value = null
             currentConfig = config
 
             return try {
+                // 并行建连: 3 条 session 彼此无依赖, 串行会把 3 次 TCP+SSH 握手的 RTT
+                // 全部串进连接耗时 (实测建连 1.6~4s 的主要来源之一)。失败容忍逻辑不变。
+                val results =
+                    coroutineScope {
+                        (0 until SESSION_POOL_SIZE)
+                            .map { i ->
+                                async(Dispatchers.IO) { i to createSession(config, i) }
+                            }.awaitAll()
+                    }
                 var successCount = 0
-                for (i in 0 until SESSION_POOL_SIZE) {
-                    val pooled = createSession(config, i)
+                for ((i, pooled) in results) {
                     if (pooled != null) {
                         pool.add(pooled)
                         successCount++
@@ -473,7 +507,6 @@ class JschSshClient
 
                 isConnectedFlag.set(true)
                 connectionState.value = ConnectionState.Connected
-                lastError.value = null
 
                 Log.d(TAG, "Session pool ready: $successCount/$SESSION_POOL_SIZE sessions active")
                 SshChannelFactory.ConnectionResult(true)
@@ -900,7 +933,6 @@ class JschSshClient
                 )
                 isConnectedFlag.set(false)
                 connectionState.value = ConnectionState.Failed
-                lastError.value = "All SSH sessions lost"
             }
         }
 
@@ -1096,7 +1128,7 @@ class JschSshClient
         private fun handleError(message: String) {
             isConnectedFlag.set(false)
             connectionState.value = ConnectionState.Failed
-            lastError.value = message
+            Log.w(TAG, "handleError: $message")
 
             while (pool.isNotEmpty()) {
                 val pooled = pool.poll() ?: break
@@ -1108,8 +1140,6 @@ class JschSshClient
                 pooled.scope.cancel()
             }
         }
-
-        fun getSession(): Session? = pool.firstOrNull()?.session
 
         /**
          * 单次远程命令执行（用于服务器端配置助手）。
@@ -1244,11 +1274,5 @@ class JschSshClient
                     }
                 }
             }
-        }
-
-        suspend fun cleanup() {
-            disconnect()
-            scope.cancel()
-            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         }
     }

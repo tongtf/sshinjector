@@ -12,7 +12,7 @@
 
 <div align="center">
   <img src="https://img.shields.io/badge/Android-14%2B-green.svg?style=flat-square&logo=android" alt="Android 14+">
-  <img src="https://img.shields.io/badge/Kotlin-2.0.21-blue.svg?style=flat-square&logo=kotlin" alt="Kotlin 2.0.21">
+  <img src="https://img.shields.io/badge/Kotlin-2.4.20-blue.svg?style=flat-square&logo=kotlin" alt="Kotlin 2.4.20">
   <img src="https://img.shields.io/badge/Compose-Material3-orange.svg?style=flat-square&logo=jetpackcompose" alt="Jetpack Compose">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="MIT License">
   <img src="https://img.shields.io/badge/SSH-ECDSA-red.svg?style=flat-square" alt="SSH ECDSA">
@@ -81,16 +81,16 @@
 
 | Category | Tech |
 |----------|------|
-| Language/UI | Kotlin 2.0.21 + Jetpack Compose (Material 3) |
+| Language/UI | Kotlin 2.4.20 + Jetpack Compose (Material 3) |
 | Architecture | MVVM + Clean Architecture + Repository |
-| DI | Hilt 2.53.1 (KSP) |
-| Database | Room 2.6.1 (KSP) |
+| DI | Hilt 2.60.1 (KSP) |
+| Database | Room 2.8.4 (KSP) |
 | Preferences | DataStore Preferences (Flow) |
-| SSH client | mwiede/jsch:0.2.14 (active fork, ECDSA P-256 support) |
+| SSH client | mwiede/jsch:2.28.7 (active fork, Ed25519 support) |
 | DNS | dnsjava 3.6.5 |
 | Network I/O | Java NIO Selector + Kotlinx Coroutines |
 | Keystore | Android Keystore + BiometricPrompt (keys non-exportable) |
-| Coroutines | Kotlinx Coroutines 1.9.0 + Flow |
+| Coroutines | Kotlinx Coroutines 1.10.1 + Flow |
 | Navigation | Navigation Compose 2.8.5 |
 
 ---
@@ -305,7 +305,7 @@ SOFTWARE.
 
 ## 🙏 Acknowledgments
 
-- [mwiede/jsch](https://github.com/mwiede/jsch) — actively maintained JSch fork with ECDSA P-256 support
+- [mwiede/jsch](https://github.com/mwiede/jsch) — actively maintained JSch fork with Ed25519 support
 - [dnsjava](https://github.com/dnsjava/dnsjava) — Java DNS protocol library
 - [Android Networking Samples](https://github.com/android/networking-samples) — VPNService reference
 - [SocksDroid](https://github.com/6b6b6b/socksdroid) — SOCKS5 proxy reference

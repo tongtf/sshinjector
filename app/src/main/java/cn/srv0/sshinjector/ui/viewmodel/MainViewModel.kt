@@ -31,7 +31,6 @@ import cn.srv0.sshinjector.vpn.SshVpnService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
@@ -102,46 +101,26 @@ class MainViewModel
             }
         }
 
-        data class DnsDiagnostics(
-            val dnsLatencyMs: Long? = null,
-            val dnsSuccess: Boolean = false,
-            val dnsSuccessCount: Int = 0,
-            val httpLatencyMs: Long? = null,
-            val httpSuccess: Boolean = false,
-            val httpSuccessCount: Int = 0,
-            val httpStatusCode: Int = 0,
-            val isRunning: Boolean = false,
-            val lastTestTime: Long = 0,
-        )
-
         data class UiState(
             val isConnected: Boolean = false,
             val hasDefaultServer: Boolean = false,
             val defaultServerId: Long = 0,
-            val defaultServerName: String = "",
             val currentServer: String = "",
             val currentServerId: Long = 0,
-            val currentServerHost: String = "",
-            val currentServerUser: String = "",
             // 机器名 (state.status.name), 供逻辑判断; 用户可见文案走 statusDisplay
             val connectionStatus: String = "Disconnected",
             /** 状态展示文案 (含验证/降级/失败步骤, spec connectivity-health), 多语言由 StatusDisplay 渲染。 */
             val statusDisplay: String = "",
-            val errorMessage: String? = null,
             // 网络信息
             val deviceIpv4: String = "-",
             val deviceIpv6: String = "-",
             /** 隧道出口 IP (IP 回显, 会话级); "-" = 未取回/未连接。 */
             val exitIp: String = "-",
             val dnsMode: String = "",
-            val proxyAddress: String = "-",
-            val networkType: String = "-",
             val networkDetail: String = "-",
             // VPN 权限
             val vpnPermissionIntent: Intent? = null,
             val pendingConnectServerId: Long? = null,
-            // 诊断信息
-            val diagnostics: DnsDiagnostics = DnsDiagnostics(),
             // 服务器连接状态: serverId -> status
             val serverConnectionStatus: Map<Long, String?> = emptyMap(),
             // 资源监控
@@ -186,7 +165,6 @@ class MainViewModel
                         it.copy(
                             hasDefaultServer = server != null,
                             defaultServerId = server?.id ?: 0,
-                            defaultServerName = server?.name ?: "",
                         )
                     }
                 }
@@ -196,9 +174,9 @@ class MainViewModel
         private fun loadNetworkInfo() {
             viewModelScope.launch {
                 // F12-k: NetworkInterface/系统服务查询不进 Main
-                val (ipv4, ipv6, networkDisplay) =
+                val (ipv4, ipv6, networkDetailText) =
                     withContext(Dispatchers.IO) {
-                        Triple(getDeviceIpv4(), getDeviceIpv6(), getNetworkDisplay())
+                        Triple(getDeviceIpv4(), getDeviceIpv6(), getNetworkDetail())
                     }
                 val dnsModeValue = settingsDataStore.dnsMode.first()
                 val dnsModeText = dnsModeLabel(dnsModeValue, context)
@@ -208,17 +186,16 @@ class MainViewModel
                         deviceIpv4 = ipv4,
                         deviceIpv6 = ipv6,
                         dnsMode = dnsModeText,
-                        networkType = networkDisplay.first,
-                        networkDetail = networkDisplay.second,
+                        networkDetail = networkDetailText,
                     )
                 }
             }
         }
 
-        private fun getNetworkDisplay(): Pair<String, String> {
+        private fun getNetworkDetail(): String {
             val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            val activeNetwork = cm.activeNetwork ?: return Pair("-", "-")
-            val caps = cm.getNetworkCapabilities(activeNetwork) ?: return Pair("-", "-")
+            val activeNetwork = cm.activeNetwork ?: return "-"
+            val caps = cm.getNetworkCapabilities(activeNetwork) ?: return "-"
 
             return when {
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> {
@@ -246,9 +223,9 @@ class MainViewModel
                         if (ssid != "-" && !ssid.contains("unknown")) parts.add(0, ssid)
                         if (speed > 0) parts.add("${speed}Mbps")
                         parts.add("${freq}MHz")
-                        Pair("Wi-Fi", parts.joinToString(" · "))
+                        parts.joinToString(" · ")
                     } catch (_: Exception) {
-                        Pair("Wi-Fi", "Wi-Fi")
+                        "Wi-Fi"
                     }
                 }
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> {
@@ -265,27 +242,25 @@ class MainViewModel
                             } else {
                                 TelephonyManager.NETWORK_TYPE_UNKNOWN
                             }
-                        val type =
-                            when (networkType) {
-                                TelephonyManager.NETWORK_TYPE_LTE -> "4G"
-                                TelephonyManager.NETWORK_TYPE_NR -> "5G"
-                                TelephonyManager.NETWORK_TYPE_HSDPA,
-                                TelephonyManager.NETWORK_TYPE_UMTS,
-                                TelephonyManager.NETWORK_TYPE_EVDO_0,
-                                TelephonyManager.NETWORK_TYPE_EVDO_A,
-                                -> "3G"
-                                TelephonyManager.NETWORK_TYPE_GPRS,
-                                TelephonyManager.NETWORK_TYPE_EDGE,
-                                -> "2G"
-                                else -> context.getString(R.string.network_type_mobile)
-                            }
-                        Pair(type, type)
+                        when (networkType) {
+                            TelephonyManager.NETWORK_TYPE_LTE -> "4G"
+                            TelephonyManager.NETWORK_TYPE_NR -> "5G"
+                            TelephonyManager.NETWORK_TYPE_HSDPA,
+                            TelephonyManager.NETWORK_TYPE_UMTS,
+                            TelephonyManager.NETWORK_TYPE_EVDO_0,
+                            TelephonyManager.NETWORK_TYPE_EVDO_A,
+                            -> "3G"
+                            TelephonyManager.NETWORK_TYPE_GPRS,
+                            TelephonyManager.NETWORK_TYPE_EDGE,
+                            -> "2G"
+                            else -> context.getString(R.string.network_type_mobile)
+                        }
                     } catch (_: Exception) {
-                        Pair("-", "-")
+                        "-"
                     }
                 }
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> Pair("VPN", "VPN")
-                else -> Pair("-", "-")
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "VPN"
+                else -> "-"
             }
         }
 
@@ -371,10 +346,7 @@ class MainViewModel
                                 statusDisplay = buildStatusDisplay(state, context::getString),
                                 currentServer = state.server?.name ?: context.getString(R.string.server_none),
                                 currentServerId = serverId,
-                                currentServerHost = state.server?.host ?: "",
-                                currentServerUser = state.server?.username ?: "",
                                 connectionStatus = status,
-                                proxyAddress = if (isConnected) "127.0.0.1:${state.server?.socksPort ?: 1080}" else "-",
                                 exitIp = if (isConnected) state.exitIp ?: "-" else "-",
                                 serverConnectionStatus = newServerStatus,
                             )
@@ -479,7 +451,6 @@ class MainViewModel
             private const val CPU_PERCENT_CAP = 99.9f
             private const val RATIO_LOW = 0.5f
             private const val RATIO_HIGH = 1.0f
-            private const val NETWORK_TIMEOUT_MS = 5000
 
             // L1: 刷屏节奏 — connectedDuration 与资源监控均降频到 5s
             private const val CONNECTED_DURATION_TICK_MS = 5000L
@@ -567,187 +538,8 @@ class MainViewModel
                         )
                     }
                 }
-                runDiagnostics()
             }
         }
-
-        // R4: 诊断任务互斥 — 重复触发先取消旧任务, 避免并发跑与结果互相覆盖
-        private var diagnosticsJob: Job? = null
-
-        fun runDiagnostics() {
-            diagnosticsJob?.cancel()
-            diagnosticsJob =
-                viewModelScope.launch {
-                    _uiState.update { it.copy(diagnostics = DnsDiagnostics(isRunning = true)) }
-
-                    val dnsMode = settingsDataStore.dnsMode.first()
-                    val testCount = 5
-
-                    val dnsResults =
-                        withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            (1..testCount).map { testDnsResolution(dnsMode) }
-                        }
-                    val dnsSuccessCount = dnsResults.count { it.second }
-                    val dnsAvgLatency =
-                        dnsResults
-                            .filter { it.second && it.first != null }
-                            .mapNotNull { it.first }
-                            .takeIf { it.isNotEmpty() }
-                            ?.let { list -> list.sum() / list.size }
-
-                    val httpResults =
-                        withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            (1..testCount).map { testHttpConnectivity() }
-                        }
-                    val httpSuccessCount = httpResults.count { it.second }
-                    val httpAvgLatency =
-                        httpResults
-                            .filter { it.second && it.first != null }
-                            .mapNotNull { it.first }
-                            .takeIf { it.isNotEmpty() }
-                            ?.let { list -> list.sum() / list.size }
-                    val lastHttpCode = httpResults.lastOrNull { it.second }?.third ?: 0
-
-                    _uiState.update {
-                        it.copy(
-                            diagnostics =
-                                DnsDiagnostics(
-                                    dnsLatencyMs = dnsAvgLatency,
-                                    dnsSuccess = dnsSuccessCount > 0,
-                                    dnsSuccessCount = dnsSuccessCount,
-                                    httpLatencyMs = httpAvgLatency,
-                                    httpSuccess = httpSuccessCount > 0,
-                                    httpSuccessCount = httpSuccessCount,
-                                    httpStatusCode = lastHttpCode,
-                                    isRunning = false,
-                                    lastTestTime = System.currentTimeMillis(),
-                                ),
-                        )
-                    }
-                }
-        }
-
-        private fun testDnsResolution(dnsMode: Int): Pair<Long?, Boolean> =
-            try {
-                val start = System.currentTimeMillis()
-                when (dnsMode) {
-                    DNS_MODE_REMOTE, DNS_MODE_WHITELIST -> {
-                        val url = java.net.URL("https://dns.alidns.com/dns-query")
-                        val connection = url.openConnection() as javax.net.ssl.HttpsURLConnection
-                        try {
-                            connection.requestMethod = "POST"
-                            connection.doOutput = true
-                            connection.connectTimeout = NETWORK_TIMEOUT_MS
-                            connection.readTimeout = NETWORK_TIMEOUT_MS
-                            connection.setRequestProperty("Content-Type", "application/dns-message")
-                            connection.setRequestProperty("Accept", "application/dns-message")
-                            val query =
-                                byteArrayOf(
-                                    0x00,
-                                    0x01,
-                                    0x01,
-                                    0x00,
-                                    0x00,
-                                    0x01,
-                                    0x00,
-                                    0x00,
-                                    0x00,
-                                    0x00,
-                                    0x00,
-                                    0x00,
-                                    0x06,
-                                    0x67,
-                                    0x6F,
-                                    0x6F,
-                                    0x67,
-                                    0x6C,
-                                    0x65,
-                                    0x03,
-                                    0x63,
-                                    0x6F,
-                                    0x6D,
-                                    0x00,
-                                    0x00,
-                                    0x01,
-                                    0x00,
-                                    0x01,
-                                )
-                            connection.outputStream.write(query)
-                            connection.outputStream.flush()
-                            val responseCode = connection.responseCode
-                            val elapsed = System.currentTimeMillis() - start
-                            Pair(elapsed, responseCode == 200)
-                        } finally {
-                            // R4: 异常路径也必须断开, 否则连接槽泄漏
-                            connection.disconnect()
-                        }
-                    }
-                    DNS_MODE_SYSTEM ->
-                        java.net.DatagramSocket().use { socket ->
-                            socket.soTimeout = NETWORK_TIMEOUT_MS
-                            val query =
-                                byteArrayOf(
-                                    0x00,
-                                    0x01,
-                                    0x01,
-                                    0x00,
-                                    0x00,
-                                    0x01,
-                                    0x00,
-                                    0x00,
-                                    0x00,
-                                    0x00,
-                                    0x00,
-                                    0x00,
-                                    0x06,
-                                    0x67,
-                                    0x6F,
-                                    0x6F,
-                                    0x67,
-                                    0x6C,
-                                    0x65,
-                                    0x03,
-                                    0x63,
-                                    0x6F,
-                                    0x6D,
-                                    0x00,
-                                    0x00,
-                                    0x01,
-                                    0x00,
-                                    0x01,
-                                )
-                            val addr = java.net.InetAddress.getByName("8.8.8.8")
-                            val packet = java.net.DatagramPacket(query, query.size, addr, 53)
-                            socket.send(packet)
-                            val buf = ByteArray(512)
-                            val respPacket = java.net.DatagramPacket(buf, buf.size)
-                            socket.receive(respPacket)
-                            val elapsed = System.currentTimeMillis() - start
-                            val rcode = buf[3].toInt() and 0x0F
-                            Pair(elapsed, rcode == 0)
-                        }
-                    else -> Pair(null, false)
-                }
-            } catch (e: Exception) {
-                Pair(null, false)
-            }
-
-        private fun testHttpConnectivity(): Triple<Long?, Boolean, Int> =
-            try {
-                val start = System.currentTimeMillis()
-                val url = java.net.URL("https://www.baidu.com")
-                val connection = url.openConnection() as javax.net.ssl.HttpsURLConnection
-                connection.requestMethod = "GET"
-                connection.connectTimeout = NETWORK_TIMEOUT_MS
-                connection.readTimeout = NETWORK_TIMEOUT_MS
-                connection.instanceFollowRedirects = true
-                val responseCode = connection.responseCode
-                val elapsed = System.currentTimeMillis() - start
-                connection.disconnect()
-                Triple(elapsed, responseCode in listOf(200, 301, 302), responseCode)
-            } catch (e: Exception) {
-                Triple(null, false, 0)
-            }
 
         fun connect(serverId: Long) {
             // 更新服务器连接状态为 Connecting
@@ -796,8 +588,14 @@ class MainViewModel
             viewModelScope.launch {
                 kotlinx.coroutines.delay(3000)
                 if (_uiState.value.connectionStatus == "Disconnecting") {
-                    context.stopService(Intent(context, SshVpnService::class.java))
-                    vpnController.forceReset()
+                    // 兜底: 走 Service 层的 ACTION_FORCE_DISCONNECT (优先持会话锁串行),
+                    // 不再 stopService + 直调 forceReset — 后者绕过锁, 会与持锁的
+                    // 重连半途交错拆掉新会话
+                    val forceIntent =
+                        Intent(context, SshVpnService::class.java).apply {
+                            action = SshVpnService.ACTION_FORCE_DISCONNECT
+                        }
+                    context.startService(forceIntent)
                 }
             }
         }
@@ -873,10 +671,7 @@ class MainViewModel
                         statusDisplay = buildStatusDisplay(state, context::getString),
                         currentServer = state.server?.name ?: context.getString(R.string.server_none),
                         currentServerId = serverId,
-                        currentServerHost = state.server?.host ?: "",
-                        currentServerUser = state.server?.username ?: "",
                         connectionStatus = status,
-                        proxyAddress = if (isConnected) "127.0.0.1:${state.server?.socksPort ?: 1080}" else "-",
                         exitIp = if (isConnected) state.exitIp ?: "-" else "-",
                         serverConnectionStatus = newServerStatus,
                     )

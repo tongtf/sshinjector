@@ -776,11 +776,6 @@ class TcpWindowGateTest {
 
         override suspend fun disconnect() = Unit
 
-        override fun openTcpChannel(
-            host: String,
-            port: Int,
-        ): TunnelChannel? = null
-
         override fun registerTunCallback(
             clientPort: Int,
             callback: (ByteArray, Int, Int) -> Unit,

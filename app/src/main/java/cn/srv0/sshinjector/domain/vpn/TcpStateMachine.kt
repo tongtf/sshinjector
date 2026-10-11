@@ -36,6 +36,8 @@ class TcpStateMachine(
     companion object {
         private const val TAG = "PacketProcessor"
         private const val RELAY_BUFFER_SIZE = 65535
+        private const val RELAY_IDLE_SLEEP_MIN_MS = 1L // 回程空闲退避起点 (非阻塞 read 返回 0 时)
+        private const val RELAY_IDLE_SLEEP_MAX_MS = 8L // 回程空闲退避上限
         private const val MAX_TCP_SEGMENT = 1460
         private const val MAX_TCP_SEGMENT_V6 = 1440 // MTU1500 - IPv6 头40 - TCP 头20
         private const val UINT32_MASK = 0xFFFFFFFFL
@@ -165,7 +167,6 @@ class TcpStateMachine(
         val srcPort: Int,
         val dstPort: Int,
         var socksChannel: SocketChannel? = null,
-        var tunnelChannel: TunnelChannel? = null,
         @Volatile var state: TcpState = TcpState.SynSent,
         @Volatile var lastActivity: Long = System.currentTimeMillis(),
         @Volatile var browserSeq: Long = 0,
@@ -495,24 +496,20 @@ class TcpStateMachine(
                 }
 
                 val plugin = tunnelManager.getActiveOrFallback()
-
-                if (plugin.localSocksPort > 0) {
-                    forwardThroughLocalSocks(conn, plugin, plugin.localSocksPort)
+                val socksPort = plugin.localSocksPort
+                if (socksPort > 0) {
+                    forwardThroughLocalSocks(conn, plugin, socksPort)
                 } else {
-                    val channel = plugin.openTcpChannel(conn.dstIp.hostAddress!!, conn.dstPort)
-                    if (channel != null) {
-                        forwardThroughDirectChannel(conn, plugin, channel)
-                    } else {
-                        Log.e(TAG, "Plugin ${plugin.id} provides neither SOCKS5 port nor direct channel")
-                        VpnController.appLogThrottled(
-                            "隧道插件异常 · ${plugin.id} 既无本地 SOCKS 端口也无直连通道",
-                            level = LogLevel.WARNING,
-                            throttleKey = "隧道插件异常",
-                        )
-                        val connKey = IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort)
-                        // F6: 收敛到 closeTcpConnection (内部发 RST + 移除条目, 允许同五元组重建)
-                        closeTcpConnection(connKey, conn)
-                    }
+                    // 唯一插件 socks5 连接成功后 boundPort>0 恒成立; 走到这里 = 隧道未就绪/已拆除
+                    Log.e(TAG, "Plugin ${plugin.id} has no local SOCKS port (tunnel not ready?)")
+                    VpnController.appLogThrottled(
+                        "隧道插件异常 · ${plugin.id} 无本地 SOCKS 端口 (隧道未就绪?)",
+                        level = LogLevel.ERROR,
+                        throttleKey = "隧道插件异常",
+                    )
+                    val connKey = IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort)
+                    // F6: 收敛到 closeTcpConnection (内部发 RST + 移除条目, 允许同五元组重建)
+                    closeTcpConnection(connKey, conn)
                 }
             } catch (e: Exception) {
                 // 常开: 该异常 = 连接被 RST 秒断, 是"0% 下载失败"排查的关键现场
@@ -799,7 +796,7 @@ class TcpStateMachine(
         }
 
         // SYN-ACK **必须等到通道就绪后再发** (1.0.6 的行为, 后被 early-SYN-ACK 改错):
-        // 提前发会让客户端立刻发首批数据, 而此时 socksChannel/tunnelChannel 还没建立,
+        // 提前发会让客户端立刻发首批数据, 而此时 socksChannel 还没建立,
         // forwardToSocks 的"通道未就绪"检查会把它们全部丢弃 + 不 ACK, 客户端重传到超时放弃 ——
         // 表现为"Play 点安装无反应"且隧道日志一切正常。通道就绪前客户端只会重传 SYN, 不发应用数据。
         // 服务端 banner 不受影响: tunCallback 已提前注册, 且 Socks5ProxyServer 会把 CONNECT 前预读到的
@@ -1332,7 +1329,12 @@ class TcpStateMachine(
         scope.launch(sshIoDispatcher.dispatcher) {
             val buffer = ByteBuffer.allocateDirect(RELAY_BUFFER_SIZE)
             var cleanEof = false
+            // socksChannel 是非阻塞的: read 返回 0 = 暂无数据, 必须退避。否则空闲连接忙轮询
+            // 烧满一核并占死一条 ssh-io 线程 (池饱和后新连接全被 0x05 拒)。
+            // 1ms 起步、翻倍至 8ms 上限, 有数据即复位 —— 有流量时零额外延迟, 空闲时 CPU 近 0。
+            var idleSleepMs = RELAY_IDLE_SLEEP_MIN_MS
             try {
+                @Suppress("LoopWithTooManyJumpStatements") // EOF break + 中断 break 各自语义明确
                 while (socksChannel.isOpen && conn.state == TcpConnection.TcpState.Established) {
                     buffer.clear()
                     val read = socksChannel.read(buffer)
@@ -1341,97 +1343,25 @@ class TcpStateMachine(
                         break
                     }
                     if (read > 0) {
+                        idleSleepMs = RELAY_IDLE_SLEEP_MIN_MS
                         buffer.flip()
                         val payload = ByteArray(read)
                         buffer.get(payload)
                         writeTcpPayloadToTun(conn, payload, 0, payload.size)
+                    } else {
+                        try {
+                            Thread.sleep(idleSleepMs)
+                        } catch (e: InterruptedException) {
+                            Thread.currentThread().interrupt()
+                            break
+                        }
+                        idleSleepMs = (idleSleepMs * 2).coerceAtMost(RELAY_IDLE_SLEEP_MAX_MS)
                     }
                 }
             } catch (e: IOException) {
                 Log.w(TAG, "SOCKS5 relay read ended: ${e.message}")
                 VpnController.appLogThrottled(
                     "回程中继异常终止 · 本地代理 → 浏览器 (${conn.dstIp.hostAddress}:${conn.dstPort}) — ${e.message}",
-                    level = LogLevel.WARNING,
-                    throttleKey = "回程中继异常终止",
-                )
-            } finally {
-                closeTcpConnection(connKey, conn, graceful = cleanEof, reason = "远端 EOF")
-            }
-        }
-    }
-
-    /**
-     * 通过隧道插件直接转发 (无本地 SOCKS5 代理)
-     */
-    private suspend fun forwardThroughDirectChannel(
-        conn: TcpConnection,
-        plugin: TunnelPlugin,
-        channel: TunnelChannel,
-    ) {
-        val connKey = IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort)
-        val connected = channel.connect(TUN_CONNECT_TIMEOUT_MS)
-        if (!connected) {
-            Log.e(TAG, "channel.connect failed for plugin ${plugin.id}")
-            VpnController.appLogThrottled(
-                "SSH 通道连接失败 · ${plugin.id} (${conn.dstIp.hostAddress}:${conn.dstPort})",
-                level = LogLevel.ERROR,
-                throttleKey = "SSH 通道连接失败",
-            )
-            channel.disconnect()
-            // F6: 发 RST + 移除条目, 允许同五元组新 SYN 重建
-            closeTcpConnection(connKey, conn)
-            return
-        }
-
-        // 置 Established 必须与 closeTcpConnection 的 (state=Closed) 同持 conn 锁
-        // (握手期间客户端可能已 RST), 见 forwardThroughLocalSocks establish 处注释。
-        synchronized(conn) {
-            if (conn.state == TcpConnection.TcpState.Closed) {
-                channel.disconnect()
-                return
-            }
-            conn.tunnelChannel = channel
-            conn.state = TcpConnection.TcpState.Established
-        }
-
-        val synAckPacket = buildSynAckPacket(conn)
-        if (synAckPacket != null) {
-            tunWriterProvider()?.invoke(synAckPacket)
-            conn.synAckWritten = true
-        }
-
-        startRelayFromTunnel(conn, connKey)
-        if (IS_DEBUG) Log.d(TAG, "TCP established via direct channel ${plugin.id} to ${conn.dstIp}:${conn.dstPort}")
-    }
-
-    /**
-     * 从隧道插件读取数据并写回 TUN
-     */
-    private fun startRelayFromTunnel(
-        conn: TcpConnection,
-        connKey: Long,
-    ) {
-        val channel = conn.tunnelChannel ?: return
-        val input = channel.inputStream ?: return
-
-        scope.launch(sshIoDispatcher.dispatcher) {
-            val buffer = ByteArray(RELAY_BUFFER_SIZE)
-            var cleanEof = false
-            try {
-                while (channel.isConnected && conn.state == TcpConnection.TcpState.Established) {
-                    val read = input.read(buffer)
-                    if (read == -1) {
-                        cleanEof = true
-                        break
-                    }
-                    if (read > 0) {
-                        writeTcpPayloadToTun(conn, buffer, 0, read)
-                    }
-                }
-            } catch (e: IOException) {
-                Log.w(TAG, "Tunnel relay read ended: ${e.message}")
-                VpnController.appLogThrottled(
-                    "回程中继异常终止 · 隧道 → 浏览器 (${conn.dstIp.hostAddress}:${conn.dstPort}) — ${e.message}",
                     level = LogLevel.WARNING,
                     throttleKey = "回程中继异常终止",
                 )
@@ -1750,10 +1680,8 @@ class TcpStateMachine(
         payloadStart: Int,
         payloadLength: Int,
     ): Int {
-        // F7: socksChannel 可为 null (直连仅 tunnelChannel), 只有两条通道都没有时才拒绝
-        if (conn.state != TcpConnection.TcpState.Established ||
-            (conn.socksChannel == null && conn.tunnelChannel == null)
-        ) {
+        // F7: 没有通道时拒绝
+        if (conn.state != TcpConnection.TcpState.Established || conn.socksChannel == null) {
             Log.w(
                 TAG,
                 "forwardToSocks: conn ${conn.id} not established or no channel (state=${conn.state}), " +
@@ -1772,42 +1700,6 @@ class TcpStateMachine(
                 throttleKey = "上行等待通道",
             )
             return 0
-        }
-
-        // Try tunnel channel first, then SOCKS5 channel
-        val tunnelChannel = conn.tunnelChannel
-        if (tunnelChannel != null) {
-            try {
-                buffer.position(payloadStart)
-                buffer.limit(payloadStart + payloadLength)
-                val output = tunnelChannel.outputStream
-                if (output == null) return 0
-                val payload = ByteArray(payloadLength)
-                buffer.get(payload)
-                output.write(payload)
-                output.flush()
-                if (IS_DEBUG) {
-                    Log.d(
-                        TAG,
-                        "forwardToTunnel: wrote ${payloadLength}B for conn ${conn.id} → " +
-                            "${conn.dstIp}:${conn.dstPort}",
-                    )
-                }
-                return payloadLength
-            } catch (e: IOException) {
-                Log.e(TAG, "forwardToTunnel failed", e)
-                VpnController.appLogThrottled(
-                    "上行转发失败 · ${conn.dstIp.hostAddress}:${conn.dstPort} — ${e.message}",
-                    level = LogLevel.WARNING,
-                    throttleKey = "上行转发失败",
-                )
-                stats.addError()
-                closeTcpConnection(
-                    IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort),
-                    conn,
-                )
-                return 0
-            }
         }
 
         val socksChannel = conn.socksChannel ?: return 0
@@ -1948,10 +1840,6 @@ class TcpStateMachine(
         }
         try {
             conn.socksChannel?.close()
-        } catch (_: Exception) {
-        }
-        try {
-            conn.tunnelChannel?.disconnect()
         } catch (_: Exception) {
         }
     }

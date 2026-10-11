@@ -33,6 +33,7 @@ class ServerWizardViewModelTest {
     private lateinit var serverRepository: ServerRepository
     private lateinit var keyManager: SshKeyManager
     private lateinit var provisioner: ServerProvisionerContract
+    private lateinit var settingsDataStore: cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
     private lateinit var viewModel: ServerWizardViewModel
 
     @Before
@@ -40,7 +41,9 @@ class ServerWizardViewModelTest {
         serverRepository = mock()
         keyManager = mock()
         provisioner = mock()
-        viewModel = ServerWizardViewModel(serverRepository, keyManager, provisioner)
+        settingsDataStore = mock()
+        whenever(settingsDataStore.biometricUnlock).thenReturn(flowOf(false))
+        viewModel = ServerWizardViewModel(serverRepository, keyManager, provisioner, settingsDataStore)
     }
 
     @After

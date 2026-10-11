@@ -23,6 +23,15 @@ import java.util.concurrent.atomic.AtomicLong
 private val IS_DEBUG = Log.isLoggable("Socks5Proxy", Log.DEBUG)
 private const val TIMEOUT_CHECK_INTERVAL_MS = 5000L
 
+/** 并发连接上限: 超限的新连接立即关闭 (防同设备恶意 app 灌连接的本地 DoS)。 */
+private const val MAX_CONNECTIONS = 512
+
+/** 握手期 (未进 Relaying) 空闲超时: 未认证连接 3s 即回收, 不给 10s 的资源占用窗口。 */
+private const val UNAUTHENTICATED_TIMEOUT_MS = 3000L
+
+/** 连接数超限的节流日志键。 */
+private const val THROTTLE_KEY_CONN_LIMIT = "本地代理连接数超限"
+
 /** 回程写入 TUN 超过此时长就告警: 它会把 JSch 读线程拖住 (管道 32KB→1MB 后仍是会话级风险)。 */
 private const val SLOW_TUN_WRITE_WARN_MS = 300L
 
@@ -35,13 +44,13 @@ private fun isFakeTunnelHost(host: String): Boolean = VpnNetwork.isFakeHost(host
 // L4: 出向队列 64×32KB=2MB/连接。**实测过小**: 下行卡住时 SSH 写协程随之阻塞, 队列一满就
 // 只能"丢段靠客户端重传", 表现为上行重传风暴 (实测 1 分钟 16MB 上行 / 0.4MB 下行)。128 段留足突发吸收。
 private const val SSH_SEND_QUEUE_CAPACITY = 128
-private typealias TunCallback = (ByteArray, Int, Int) -> Unit
 
 /**
  * 本地 SOCKS5 代理服务器 (RFC 1928)
  *
  * 接受来自 VPNService 的连接，通过 SSH 隧道转发到远程服务器
- * 支持: TCP CONNECT, UDP ASSOCIATE, IPv4/IPv6/域名
+ * 支持: 仅 TCP CONNECT (processRequest 对其它命令一律拒绝; IPv4/IPv6/域名寻址)
+ * 认证: 必须用户名/口令 (每次会话随机 token, 无凭据 fail-closed 拒绝)
  */
 class Socks5ProxyServer
     constructor(
@@ -225,8 +234,6 @@ class Socks5ProxyServer
             pendingTunCallbacks.remove(connectionId)
         }
 
-        fun getTunCallback(connectionId: Int): TunCallback? = pendingTunCallbacks.remove(connectionId)
-
         // 远端结束通知: connectionId → 回调, 形参 = 是否 clean EOF (决定 TcpStateMachine 发
         // FIN 还是 RST)。与 pendingTunCallbacks 同键 (tunCallbackKey = clientPort)。
         private val pendingTargetEofCallbacks = ConcurrentHashMap<Int, (Boolean) -> Unit>()
@@ -244,11 +251,31 @@ class Socks5ProxyServer
 
         private fun handleAccept(key: SelectionKey) {
             val serverChannel = key.channel() as ServerSocketChannel
+            // 连接上限: 监听虽在 127.0.0.1, 但 Android 各应用共享 loopback 网络命名空间,
+            // 同设备任意应用都能连本端口 (认证是随机 256bit token, 暴力不可行, 但连接本身
+            // 每条要 32KB buffer + selector key + 超时协程)。超限立即关闭, 防本地 DoS。
+            if (connections.size >= MAX_CONNECTIONS) {
+                val rejected =
+                    try {
+                        serverChannel.accept()
+                    } catch (_: Exception) {
+                        null
+                    } ?: return
+                try {
+                    rejected.close()
+                } catch (_: Exception) {
+                }
+                VpnController.appLogThrottled(
+                    "本地代理连接数超限 · 已拒绝新连接 (上限 $MAX_CONNECTIONS)",
+                    level = LogLevel.WARNING,
+                    throttleKey = THROTTLE_KEY_CONN_LIMIT,
+                )
+                return
+            }
             val clientChannel = serverChannel.accept() ?: return
 
-            // 仅监听 127.0.0.1 (loopback): Android 上其他应用无法连接本应用监听的 loopback 端口,
-            // 同进程的 TcpStateMachine 是唯一合法客户端, 无需对端 UID 校验
-            // (/proc/net/tcp 在 Android 应用进程内受 SELinux 限制不可读, 校验会导致拒绝所有连接)。
+            // 防御注释: 认证前连接来自任意同设备应用 (loopback 非隔离域), expectedAuth 的
+            // 随机 token 是唯一防线 — 未认证连接由握手超时 (UNAUTHENTICATED_TIMEOUT_MS) 快速回收
             clientChannel.configureBlocking(false)
             val connectionId = connectionIdCounter.incrementAndGet()
 
@@ -268,7 +295,6 @@ class Socks5ProxyServer
                         removeTunCallback(clientPort)
                         removeTargetEofCallback(clientPort)
                     },
-                    onDataFromTarget = null,
                     ipToDomainLookup = { dnsInterceptor.lookupDomain(it) },
                     expectedAuth = expectedAuth,
                 )
@@ -314,7 +340,6 @@ private class Socks5Connection(
     private val sshChannelFactory: SshChannelFactory?,
     private val sshIoDispatcher: SshIoDispatcher,
     private val onClosed: () -> Unit,
-    var onDataFromTarget: ((ByteArray, Int, Int) -> Unit)? = null,
     private val ipToDomainLookup: ((String) -> String?)? = null,
     private val expectedAuth: Pair<String, String>? = null,
 ) {
@@ -583,9 +608,10 @@ private class Socks5Connection(
                 MessageDigest.isEqual(auth.first.toByteArray(Charsets.UTF_8), user) &&
                 MessageDigest.isEqual(auth.second.toByteArray(Charsets.UTF_8), pass)
         if (IS_DEBUG) {
+            // 不打印期望凭据的任何部分 (含用户名 token) — debug 门也挡不住现场截屏/日志外流
             Log.d(
                 "Socks5Proxy",
-                "[conn=$id] auth: userLen=$userLen passLen=$passLen ok=$ok expected=${auth?.first}",
+                "[conn=$id] auth: userLen=$userLen passLen=$passLen ok=$ok",
             )
         }
         if (!ok) {
@@ -859,11 +885,9 @@ private class Socks5Connection(
 
         scope.launch(sshIoDispatcher.dispatcher) {
             val readBuffer = ByteBuffer.allocate(65535) // 增加到 64KB
-            var resolvedCallback = onDataFromTarget
-            if (resolvedCallback == null && pendingTunCallbacksRef != null) {
-                resolvedCallback = pendingTunCallbacksRef!![tunCallbackKey]
-            }
-            val callback = resolvedCallback
+            // 延迟查找回调: pendingTunCallbacks 由 TcpStateMachine.registerTunCallback 预先登记,
+            // 连接对象先于回调创建 (SYN 处理阶段), 因此不能在构造时解析
+            val callback = pendingTunCallbacksRef?.get(tunCallbackKey)
             if (IS_DEBUG) {
                 Log.d(
                     "Socks5Proxy",
@@ -1183,8 +1207,13 @@ private class Socks5Connection(
         val elapsed = now - lastActivity
 
         return when (state) {
-            SocksState.Handshake, SocksState.AuthMethods, SocksState.Request, SocksState.Connecting -> {
-                // 连接建立阶段：使用连接超时
+            SocksState.Handshake, SocksState.AuthMethods -> {
+                // 认证前阶段: 连接可能来自任意同设备应用, 3s 未完成协商即回收,
+                // 不给未认证连接 10s 的资源占用窗口 (每条 32KB buffer + 协程)
+                elapsed > UNAUTHENTICATED_TIMEOUT_MS
+            }
+            SocksState.Request, SocksState.Connecting -> {
+                // 认证后的 CONNECT 在等 SSH direct-tcpip 通道 (实测可达 4s+), 保留完整预算
                 elapsed > connectionTimeoutMs
             }
             SocksState.Relaying -> {

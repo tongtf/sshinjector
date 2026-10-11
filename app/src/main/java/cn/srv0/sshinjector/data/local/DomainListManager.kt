@@ -14,8 +14,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.Base64
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -115,13 +113,7 @@ class DomainListManager
             return System.currentTimeMillis() - last > UPDATE_INTERVAL_MILLIS
         }
 
-        private fun fetch(url: String): String {
-            val connection = URL(url).openConnection() as HttpURLConnection
-            connection.connectTimeout = CONNECT_TIMEOUT_MILLIS
-            connection.readTimeout = READ_TIMEOUT_MILLIS
-            connection.setRequestProperty("User-Agent", "SSHInjector/1.0")
-            return connection.inputStream.bufferedReader(Charsets.ISO_8859_1).use { it.readText() }
-        }
+        private fun fetch(url: String): String = fetchListText(url)
 
         /**
          * gfwlist 原始内容是 base64, 若文本全部由 base64 字符组成则解码, 否则按纯文本处理。
@@ -178,8 +170,6 @@ class DomainListManager
         private companion object {
             const val LIST_FILE_NAME = "domain_list.txt"
             const val UPDATE_INTERVAL_MILLIS = 24L * 60 * 60 * 1000
-            const val CONNECT_TIMEOUT_MILLIS = 10_000
-            const val READ_TIMEOUT_MILLIS = 15_000
 
             val BUILTIN_LIST =
                 """

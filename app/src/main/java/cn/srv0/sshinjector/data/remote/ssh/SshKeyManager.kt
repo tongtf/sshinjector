@@ -531,6 +531,8 @@ class SshKeyManager
 
         /**
          * 查询密钥是否要求用户认证(生物识别/锁屏)才能签名。
+         * KeyInfo 读取异常时**按受保护处理** (fail-closed): 误弹一次验证框是轻代价,
+         * 反向误判 (异常→未保护) 会让生物识别门禁被静默跳过。
          */
         fun isBiometricProtected(alias: String): Boolean {
             val fullAlias = "$aliasPrefix$alias"
@@ -539,7 +541,10 @@ class SshKeyManager
                 val kf = KeyFactory.getInstance(entry.privateKey.algorithm, "AndroidKeyStore")
                 val keyInfo = kf.getKeySpec(entry.privateKey, android.security.keystore.KeyInfo::class.java)
                 keyInfo.isUserAuthenticationRequired
-            }.getOrDefault(false)
+            }.getOrElse { e ->
+                Log.w("SshKeyManager", "isBiometricProtected failed for $fullAlias, assuming protected: $e")
+                true
+            }
         }
 
         fun deleteAllKeys() {

@@ -3,6 +3,7 @@ package cn.srv0.sshinjector.ui.screen.server
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cn.srv0.sshinjector.R
+import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
 import cn.srv0.sshinjector.data.remote.ssh.SshKeyManager
 import cn.srv0.sshinjector.domain.model.LoginCredential
 import cn.srv0.sshinjector.domain.model.ServerConfig
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -55,6 +57,7 @@ class ServerWizardViewModel
         private val serverRepository: ServerRepository,
         private val keyManager: SshKeyManager,
         private val provisioner: ServerProvisionerContract,
+        private val settingsDataStore: cn.srv0.sshinjector.data.local.preferences.SettingsDataStore,
     ) : ViewModel() {
         private val _currentStep = MutableStateFlow(WizardStep.SERVER_INFO)
         val currentStep = _currentStep.asStateFlow()
@@ -171,7 +174,11 @@ class ServerWizardViewModel
             viewModelScope.launch {
                 val alias = "server_key_${System.currentTimeMillis()}"
                 try {
-                    keyManager.generateKeyPair(alias, 0, requireBiometric = false)
+                    // 与 KeyManager/ServerEdit 对齐: 生物识别解锁开关打开时, 向导生成的密钥
+                    // 也必须 setUserAuthenticationRequired — 否则向导(密钥主入口)建的密钥
+                    // 永远不带生物识别保护, 设置里的开关对这批服务器静默无效
+                    val useBiometric = settingsDataStore.biometricUnlock.first()
+                    keyManager.generateKeyPair(alias, 0, requireBiometric = useBiometric)
                 } catch (e: Exception) {
                     _currentStep.value = WizardStep.RESULT
                     _result.value = WizardResult.Failed("密钥生成失败: ${e.message}")
