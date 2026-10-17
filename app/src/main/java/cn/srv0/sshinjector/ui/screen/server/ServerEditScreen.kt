@@ -87,6 +87,7 @@ fun ServerEditScreen(
 
     val availableKeys by viewModel.keyAliases.collectAsState()
     val globalSettings by viewModel.globalSettings.collectAsState()
+    val storedFingerprint by viewModel.storedFingerprint.collectAsState()
     val guard = rememberClickGuard()
     val scope = rememberCoroutineScope()
     var saveAttempted by remember { mutableStateOf(false) }
@@ -104,6 +105,11 @@ fun ServerEditScreen(
             setAsDefault = entity.isActive
             socksPort = entity.socksPort.toString()
         }
+    }
+
+    // T-11: host/port 变化 (含加载完成) 时刷新已信任指纹, 重置后由 VM 置空
+    LaunchedEffect(serverId, host, port) {
+        viewModel.refreshStoredFingerprint(host, port.toIntOrNull() ?: 0)
     }
 
     LaunchedEffect(Unit) {
@@ -287,6 +293,21 @@ fun ServerEditScreen(
                         },
                     )
                     if (!isNew) {
+                        Text(
+                            stringResource(R.string.server_host_fingerprint_label),
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            storedFingerprint ?: stringResource(R.string.server_host_fingerprint_none),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            stringResource(R.string.server_host_fingerprint_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         OutlinedButton(
                             onClick = {
                                 guard {

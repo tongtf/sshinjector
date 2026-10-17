@@ -216,6 +216,13 @@ internal class KnownHostsHostKeyRepository(
     private val host: String,
     private val port: Int,
     private val expectedFingerprint: String?,
+    /**
+     * 应用内日志出口 (默认 = [VpnController.appLog], 测试可注入捕获)。
+     * 首次信任是低频生命周期事件, 用 [VpnController.appLog] 默认键、不加节流。
+     */
+    private val appLog: (message: String, level: LogLevel) -> Unit = { message, level ->
+        VpnController.appLog(message, level)
+    },
     private val onFirstTrust: (fingerprint: String) -> Unit = {},
 ) : HostKeyRepository {
     override fun check(
@@ -288,6 +295,11 @@ internal class KnownHostsHostKeyRepository(
         try {
             knownHosts.saveHostKey(host, port, HostKey(host, HostKey.GUESS, key))
             onFirstTrust(fingerprint)
+            // 首连静默 TOFU 的用户可见面: 指纹与服务器 ssh-keygen -lf 输出一致, 可带外核对
+            appLog(
+                "主机密钥首次信任 · $host:$port — $fingerprint（请与服务器 ssh-keygen -lf 核对）",
+                LogLevel.INFO,
+            )
         } catch (e: Exception) {
             Log.w("KnownHosts", "TOFU save failed for $host:$port: ${e.message}")
             VpnController.appLogThrottled(

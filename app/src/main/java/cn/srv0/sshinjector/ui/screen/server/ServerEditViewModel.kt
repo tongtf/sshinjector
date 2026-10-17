@@ -46,6 +46,10 @@ class ServerEditViewModel
         private val _globalSettings = MutableStateFlow(GlobalNetworkSettings(null, null, null))
         val globalSettings = _globalSettings.asStateFlow()
 
+        /** 当前 known_hosts 中已信任的主机指纹 (T-11 可见化; null = 尚未信任)。 */
+        private val _storedFingerprint = MutableStateFlow<String?>(null)
+        val storedFingerprint = _storedFingerprint.asStateFlow()
+
         init {
             refreshKeys()
             viewModelScope.launch {
@@ -67,6 +71,20 @@ class ServerEditViewModel
             _keyAliases.value = keyManager.listKeyAliases()
         }
 
+        /** 刷新已信任指纹 (服务器编辑页展示; host 为空/端口非法时视为未信任)。 */
+        fun refreshStoredFingerprint(
+            host: String,
+            port: Int,
+        ) {
+            val h = host.trim()
+            _storedFingerprint.value =
+                if (h.isEmpty() || port <= 0) {
+                    null
+                } else {
+                    knownHostsManager.getStoredFingerprint(h, port)
+                }
+        }
+
         fun resetHostKey(
             serverId: Long,
             host: String,
@@ -76,6 +94,8 @@ class ServerEditViewModel
                 // 只删 known_hosts 不够: DB 指纹非空时 check() 以它为权威源, 必须两处都清
                 knownHostsManager.removeHostKey(host.trim(), port)
                 serverRepository.resetHostKeyFingerprint(serverId)
+                // T-11: 重置后 UI 立即回到「尚未信任」, 无需等下次进页
+                _storedFingerprint.value = null
                 _message.tryEmit("已重置服务器指纹（含已保存的信任记录），下次连接将重新信任该服务器")
             }
         }

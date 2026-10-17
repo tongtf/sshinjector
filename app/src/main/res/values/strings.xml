@@ -192,6 +192,9 @@ SOFTWARE.</string>
     <string name="server_socks_port">本地 SOCKS 端口</string>
     <string name="server_reset_fingerprint">重置服务器指纹</string>
     <string name="server_reset_fingerprint_desc">服务器重装后若提示「主机密钥已变更」，点击重置信任记录</string>
+    <string name="server_host_fingerprint_label">已信任的主机密钥指纹</string>
+    <string name="server_host_fingerprint_none">尚未信任（首次连接时自动记录）</string>
+    <string name="server_host_fingerprint_hint">如何核对：登录服务器执行 ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub，比对上方指纹是否一致。</string>
     <string name="server_set_default">设置为默认服务器</string>
     <string name="server_enable_ipv6">启用 IPv6</string>
     <string name="server_mtu">MTU</string>

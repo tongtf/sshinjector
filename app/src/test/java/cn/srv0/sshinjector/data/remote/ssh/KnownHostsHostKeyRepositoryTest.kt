@@ -59,7 +59,7 @@ class KnownHostsHostKeyRepositoryTest {
     private fun repo(
         expectedFingerprint: String? = null,
         onFirstTrust: (String) -> Unit = {},
-    ) = KnownHostsHostKeyRepository(knownHosts, "h.example", 2222, expectedFingerprint, onFirstTrust)
+    ) = KnownHostsHostKeyRepository(knownHosts, "h.example", 2222, expectedFingerprint, onFirstTrust = onFirstTrust)
 
     @Test
     fun `check returns OK when configured fingerprint matches`() {
@@ -144,6 +144,46 @@ class KnownHostsHostKeyRepositoryTest {
     fun `getHostKey returns empty array instead of null before any record`() {
         // JSch 在 check==OK 后对返回值直接取 .length——null 会 NPE
         assertEquals(0, repo().getHostKey("[h.example]:2222", "ssh-ed25519").size)
+    }
+
+    @Test
+    fun `first trust emits visible app log`() {
+        val key = blob(1)
+        val logs = mutableListOf<String>()
+        val repository =
+            KnownHostsHostKeyRepository(
+                knownHosts,
+                "h.example",
+                2222,
+                null,
+                onFirstTrust = {},
+                appLog = { message, _ -> logs.add(message) },
+            )
+
+        assertEquals(HostKeyRepository.OK, repository.check("h.example", key))
+
+        assertEquals(1, logs.size)
+        assertTrue(logs.first().contains("主机密钥首次信任"))
+        assertTrue(logs.first().contains(fingerprint(key)))
+    }
+
+    @Test
+    fun `already trusted key does not re-emit first trust log`() {
+        repo().check("h.example", blob(1))
+
+        val logs = mutableListOf<String>()
+        val repository =
+            KnownHostsHostKeyRepository(
+                knownHosts,
+                "h.example",
+                2222,
+                null,
+                onFirstTrust = {},
+                appLog = { message, _ -> logs.add(message) },
+            )
+        assertEquals(HostKeyRepository.OK, repository.check("h.example", blob(1)))
+
+        assertTrue(logs.isEmpty())
     }
 
     @Test
