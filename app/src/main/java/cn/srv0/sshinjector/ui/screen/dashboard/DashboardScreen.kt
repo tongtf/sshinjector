@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
@@ -76,6 +77,9 @@ import androidx.fragment.app.FragmentActivity
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.ui.biometric.BiometricAuth
+import cn.srv0.sshinjector.ui.biometric.GateAction
+import cn.srv0.sshinjector.ui.biometric.biometricAvailable
+import cn.srv0.sshinjector.ui.biometric.biometricGateDecision
 import cn.srv0.sshinjector.ui.screen.keymanager.KeyInfo
 import cn.srv0.sshinjector.ui.screen.keymanager.KeyKindIcon
 import cn.srv0.sshinjector.ui.screen.keymanager.KeyManagerViewModel
@@ -570,6 +574,8 @@ private fun ColumnScope.ServersSection(
     onNavigateToServerEdit: (Long) -> Unit,
     onServerLongClick: (Long) -> Unit,
 ) {
+    val context = LocalContext.current
+    val biometricUnavailableText = stringResource(cn.srv0.sshinjector.R.string.biometric_unavailable_message)
     if (servers.isEmpty()) {
         EmptyState(
             icon = Icons.Default.FavoriteBorder,
@@ -614,16 +620,24 @@ private fun ColumnScope.ServersSection(
                             val onGranted = {
                                 viewModel.connect(server.id)
                             }
-                            if (fragmentActivity != null &&
-                                biometricAuth != null
-                            ) {
-                                biometricAuth.connectIfAllowed(
-                                    fragmentActivity,
-                                    server.keyAlias,
-                                    onGranted,
-                                )
-                            } else {
-                                onGranted()
+                            val activity = fragmentActivity
+                            val auth = biometricAuth
+                            // T-12: 门禁 fail-closed —— 要求认证但无法认证时拒绝连接
+                            val needs = auth?.needsBiometric(server.keyAlias) == true
+                            val available =
+                                activity != null && auth != null && biometricAvailable(context)
+                            when (biometricGateDecision(needs, available)) {
+                                GateAction.CONNECT -> onGranted()
+                                GateAction.PROMPT -> {
+                                    if (activity != null && auth != null) {
+                                        auth.connectIfAllowed(activity, server.keyAlias, onGranted)
+                                    }
+                                }
+                                GateAction.DENY -> {
+                                    Toast
+                                        .makeText(context, biometricUnavailableText, Toast.LENGTH_LONG)
+                                        .show()
+                                }
                             }
                         }
                     },

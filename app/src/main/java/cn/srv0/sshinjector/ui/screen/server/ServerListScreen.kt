@@ -51,6 +51,9 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.domain.model.ServerConfig
+import cn.srv0.sshinjector.ui.biometric.GateAction
+import cn.srv0.sshinjector.ui.biometric.biometricAvailable
+import cn.srv0.sshinjector.ui.biometric.biometricGateDecision
 import cn.srv0.sshinjector.ui.component.BackNavIcon
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -77,6 +80,7 @@ fun ServerListScreen(
     val connectingToText = stringResource(R.string.dashboard_connecting_to)
     val serverDefaultUnsetText = stringResource(R.string.server_default_unset)
     val serverDefaultSetText = stringResource(R.string.server_default_set)
+    val biometricUnavailableText = stringResource(R.string.biometric_unavailable_message)
 
     LaunchedEffect(servers, connectingServerId) {
         if (connectingServerId != null) {
@@ -196,14 +200,27 @@ fun ServerListScreen(
                                             android.widget.Toast.LENGTH_SHORT,
                                         ).show()
                                 }
-                                if (fragmentActivity != null && biometricAuth != null) {
-                                    biometricAuth.connectIfAllowed(
-                                        fragmentActivity,
-                                        server.keyAlias,
-                                        onGranted,
-                                    )
-                                } else {
-                                    onGranted()
+                                val activity = fragmentActivity
+                                val auth = biometricAuth
+                                // T-12: 门禁 fail-closed —— 要求认证但无法认证时拒绝连接
+                                val needs = auth?.needsBiometric(server.keyAlias) == true
+                                val available =
+                                    activity != null && auth != null && biometricAvailable(context)
+                                when (biometricGateDecision(needs, available)) {
+                                    GateAction.CONNECT -> onGranted()
+                                    GateAction.PROMPT -> {
+                                        if (activity != null && auth != null) {
+                                            auth.connectIfAllowed(activity, server.keyAlias, onGranted)
+                                        }
+                                    }
+                                    GateAction.DENY -> {
+                                        android.widget.Toast
+                                            .makeText(
+                                                context,
+                                                biometricUnavailableText,
+                                                android.widget.Toast.LENGTH_LONG,
+                                            ).show()
+                                    }
                                 }
                             }
                         },

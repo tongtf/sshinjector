@@ -195,6 +195,7 @@ SOFTWARE.</string>
     <string name="server_host_fingerprint_label">已信任的主机密钥指纹</string>
     <string name="server_host_fingerprint_none">尚未信任（首次连接时自动记录）</string>
     <string name="server_host_fingerprint_hint">如何核对：登录服务器执行 ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub，比对上方指纹是否一致。</string>
+    <string name="biometric_unavailable_message">无法进行生物识别校验，已取消连接。请在密钥管理中重新生成不带生物识别保护的密钥。</string>
     <string name="server_set_default">设置为默认服务器</string>
     <string name="server_enable_ipv6">启用 IPv6</string>
     <string name="server_mtu">MTU</string>

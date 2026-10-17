@@ -174,6 +174,7 @@
     <string name="server_host_fingerprint_label">Отпечаток доверенного ключа хоста</string>
     <string name="server_host_fingerprint_none">Ещё не доверен (запишется при первом подключении)</string>
     <string name="server_host_fingerprint_hint">Для проверки выполните на сервере ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub и сравните с отпечатком выше.</string>
+    <string name="biometric_unavailable_message">Биометрическая проверка недоступна, подключение отменено. Создайте ключ заново без биометрической защиты в разделе управления ключами.</string>
     <string name="server_set_default">Назначить сервером по умолчанию</string>
     <string name="server_enable_ipv6">Включить IPv6</string>
     <string name="server_mtu">MTU</string>

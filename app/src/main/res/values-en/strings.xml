@@ -174,6 +174,7 @@
     <string name="server_host_fingerprint_label">Trusted host key fingerprint</string>
     <string name="server_host_fingerprint_none">Not trusted yet (recorded on first connect)</string>
     <string name="server_host_fingerprint_hint">To verify: run ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub on the server and compare it with the fingerprint above.</string>
+    <string name="biometric_unavailable_message">Biometric verification is unavailable, so the connection was cancelled. Regenerate the key without biometric protection in Key Management.</string>
     <string name="server_set_default">Set as default server</string>
     <string name="server_enable_ipv6">Enable IPv6</string>
     <string name="server_mtu">MTU</string>
