@@ -143,6 +143,17 @@ class ServerRepository
                 legacy.size
             }
 
+        /**
+         * 清空服务器已落库的主机指纹（「重置指纹」用），使其下次连接回到 TOFU。
+         * serverId <= 0（新建未保存）无 DB 行可清，直接跳过。
+         */
+        suspend fun resetHostKeyFingerprint(serverId: Long) {
+            if (serverId <= 0L) return
+            withContext(Dispatchers.IO) {
+                serverDao.clearHostKeyFingerprint(serverId)
+            }
+        }
+
         suspend fun deleteServer(id: Long) =
             withContext(Dispatchers.IO) {
                 serverDao.delete(id)

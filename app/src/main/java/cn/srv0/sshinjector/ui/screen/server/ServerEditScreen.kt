@@ -290,7 +290,7 @@ fun ServerEditScreen(
                         OutlinedButton(
                             onClick = {
                                 guard {
-                                    viewModel.resetHostKey(host, port.toIntOrNull() ?: 22)
+                                    viewModel.resetHostKey(serverId, host, port.toIntOrNull() ?: 22)
                                 }
                             },
                             modifier = Modifier.fillMaxWidth(),

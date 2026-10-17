@@ -33,6 +33,7 @@ import org.mockito.kotlin.whenever
 @OptIn(ExperimentalCoroutinesApi::class)
 class ServerEditViewModelTest {
     private lateinit var serverRepository: ServerRepository
+    private lateinit var knownHostsManager: KnownHostsManager
     private lateinit var viewModel: ServerEditViewModel
 
     @Before
@@ -40,11 +41,12 @@ class ServerEditViewModelTest {
         // ViewModel init 会在构造时 launch (collect 全局设置流), 需先初始化 Main dispatcher
         Dispatchers.setMain(StandardTestDispatcher())
         serverRepository = mock()
+        knownHostsManager = mock()
         val settings = mock<SettingsDataStore>()
         doReturn(emptyFlow<Int?>()).`when`(settings).mtu
         doReturn(emptyFlow<Int?>()).`when`(settings).keepAlive
         doReturn(emptyFlow<Boolean?>()).`when`(settings).enableIPv6
-        viewModel = ServerEditViewModel(serverRepository, mock<SshKeyManager>(), mock<KnownHostsManager>(), settings)
+        viewModel = ServerEditViewModel(serverRepository, mock<SshKeyManager>(), knownHostsManager, settings)
     }
 
     @After
@@ -108,5 +110,18 @@ class ServerEditViewModelTest {
             verify(serverRepository).deleteServer(7)
             verify(serverRepository).setActiveServer(8)
             assertTrue(done)
+        }
+
+    @Test
+    fun `resetHostKey clears db fingerprint and known_hosts`() =
+        runTest {
+            Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+
+            viewModel.resetHostKey(serverId = 7, host = " example.com ", port = 2222)
+            testScheduler.advanceUntilIdle()
+
+            // DB 指纹是 check() 的权威源, 必须清; known_hosts 也要删 (host 需 trim)
+            verify(serverRepository).resetHostKeyFingerprint(7)
+            verify(knownHostsManager).removeHostKey(eq("example.com"), eq(2222))
         }
 }

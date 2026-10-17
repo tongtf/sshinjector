@@ -73,6 +73,13 @@ interface ServerDao {
         id: Long,
         fingerprint: String,
     )
+
+    /**
+     * 清空已落库的主机指纹，使下次连接回到 TOFU（KnownHostsHostKeyRepository.check()
+     * 在 DB 指纹非空时以其为权威源，只删 known_hosts 文件对「重置指纹」无效）。
+     */
+    @Query("UPDATE servers SET hostKeyFingerprint = NULL WHERE id = :id")
+    suspend fun clearHostKeyFingerprint(id: Long)
 }
 
 @Dao

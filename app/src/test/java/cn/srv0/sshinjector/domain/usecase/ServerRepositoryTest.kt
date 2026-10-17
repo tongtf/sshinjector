@@ -213,4 +213,25 @@ class ServerRepositoryTest {
             verify(serverDao, never()).update(any())
             verify(serverDao, never()).setActive(any())
         }
+
+    @Test
+    fun `resetHostKeyFingerprint clears the authoritative db column`() =
+        runTest {
+            Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+
+            repository.resetHostKeyFingerprint(7)
+
+            verify(serverDao).clearHostKeyFingerprint(7)
+        }
+
+    @Test
+    fun `resetHostKeyFingerprint ignores non-positive id`() =
+        runTest {
+            Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+
+            repository.resetHostKeyFingerprint(-1L)
+            repository.resetHostKeyFingerprint(0L)
+
+            verify(serverDao, never()).clearHostKeyFingerprint(any())
+        }
 }

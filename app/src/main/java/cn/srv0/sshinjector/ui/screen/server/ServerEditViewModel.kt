@@ -68,18 +68,15 @@ class ServerEditViewModel
         }
 
         fun resetHostKey(
+            serverId: Long,
             host: String,
             port: Int,
         ) {
             viewModelScope.launch {
-                val removed = knownHostsManager.removeHostKey(host.trim(), port)
-                _message.tryEmit(
-                    if (removed) {
-                        "已重置服务器指纹，下次连接将重新信任该服务器"
-                    } else {
-                        "未找到已保存的服务器指纹"
-                    },
-                )
+                // 只删 known_hosts 不够: DB 指纹非空时 check() 以它为权威源, 必须两处都清
+                knownHostsManager.removeHostKey(host.trim(), port)
+                serverRepository.resetHostKeyFingerprint(serverId)
+                _message.tryEmit("已重置服务器指纹（含已保存的信任记录），下次连接将重新信任该服务器")
             }
         }
 
