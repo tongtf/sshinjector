@@ -90,8 +90,22 @@ class SetupScriptConsistencyTest {
         val script = readScript()
         assertTrue("must auto-detect dropbear", script.contains("command -v dropbear"))
         assertTrue("must write dropbear marker", script.contains("sshinjector.configured"))
-        assertTrue("must install pubkey for dropbear", script.contains("DROPBEAR_AUTHKEYS"))
+        assertTrue("must install pubkey for the tunnel account", script.contains("/.ssh/authorized_keys"))
         assertFalse("must not modify global dropbear config", script.contains("uci set dropbear"))
+    }
+
+    @Test
+    fun `setup script does not touch root authorized_keys`() {
+        val script = readScript()
+        assertFalse(
+            "dropbear branch must NOT write /root/.ssh/authorized_keys (privilege escalation)",
+            script.contains("/root/.ssh/authorized_keys"),
+        )
+        assertFalse("script must not create or chown /root/.ssh", script.contains("/root/.ssh"))
+        assertTrue(
+            "script must still install the tunnel account's authorized_keys",
+            script.contains(".ssh/authorized_keys"),
+        )
     }
 
     @Test
