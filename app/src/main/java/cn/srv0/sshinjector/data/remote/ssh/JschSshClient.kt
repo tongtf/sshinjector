@@ -17,6 +17,7 @@ import com.jcraft.jsch.Session
 import com.jcraft.jsch.UserInfo
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -311,8 +312,10 @@ internal class KnownHostsHostKeyRepository(
 
 /**
  * SSH session pool wrapper: one SSH session + its own keepalive + health tracking
+ *
+ * `internal` (而非 file-private): 供单测构造假条目验证池排空语义 (见 JschSshClientLeakTest)。
  */
-private data class PooledSession(
+internal data class PooledSession(
     val session: Session,
     val scope: CoroutineScope,
     var keepAliveJob: kotlinx.coroutines.Job? = null,
@@ -349,10 +352,11 @@ class JschSshClient
             /**
              * 往返探活三态 (见 [verifySessionRoundTrip])。
              * UNAVAILABLE 必须与 FAILED 分开: 前者是服务器禁用 exec, 会话是好的。
+             * (internal 供单测断言三态语义。)
              */
-            private const val ROUND_TRIP_OK = 0
-            private const val ROUND_TRIP_UNAVAILABLE = 1
-            private const val ROUND_TRIP_FAILED = 2
+            internal const val ROUND_TRIP_OK = 0
+            internal const val ROUND_TRIP_UNAVAILABLE = 1
+            internal const val ROUND_TRIP_FAILED = 2
 
             /**
              * 探活耗时低于此值仍失败 → 判为「服务器拒绝 exec 通道」而非黑洞。
@@ -469,6 +473,11 @@ class JschSshClient
             if (isConnectedFlag.get()) {
                 return SshChannelFactory.ConnectionResult(false, error = "Already connected")
             }
+
+            // 兜底排空: checkPoolHealth() 会在不排空池的情况下把 isConnectedFlag 置 false
+            // (池失败 → Failed 状态), 之后若走 connect 而非 disconnect, 旧 Session/Scope 会与新会话叠加。
+            // connect 由 SshVpnService 的 connectMutex 串行, 此处再排空一次不引入新的并发风险。
+            drainPool()
 
             connectionState.value = ConnectionState.Connecting
             currentConfig = config
@@ -769,19 +778,19 @@ class JschSshClient
          *   UNAVAILABLE 绝不能算失败: exec 受限的服务器上若照常标 suspect, suspect 会常驻为 true,
          *   于是任意一次正常的「远端连不上目标」都凑成 `sessionDead` → 整池重建雪崩。
          */
-        private suspend fun verifySessionRoundTrip(pooled: PooledSession): Int {
+        internal suspend fun verifySessionRoundTrip(pooled: PooledSession): Int {
             val session = pooled.session
             val probe =
                 pooled.scope.async<Int>(Dispatchers.IO) {
+                    var ch: com.jcraft.jsch.ChannelExec? = null
                     val startedAt = System.currentTimeMillis()
                     try {
-                        val ch = session.openChannel("exec") as com.jcraft.jsch.ChannelExec
+                        ch = session.openChannel("exec") as com.jcraft.jsch.ChannelExec
                         ch.setCommand("true")
                         ch.setInputStream(null)
                         ch.setOutputStream(java.io.ByteArrayOutputStream())
                         ch.setErrStream(java.io.ByteArrayOutputStream())
                         ch.connect(HEARTBEAT_EXEC_TIMEOUT_MS)
-                        ch.disconnect()
                         // connect 能等到通道建立并收到收发 = 真正的往返证据 (exit-status 不必等,
                         // 'true' 在部分受限 shell 上拿不到, 但通道能开就足以证明会话活着)
                         ROUND_TRIP_OK
@@ -794,11 +803,30 @@ class JschSshClient
                         } else {
                             ROUND_TRIP_UNAVAILABLE
                         }
+                    } finally {
+                        // 成功/异常两条路径都必须释放 exec 通道, 否则通道残留在会话上 (JSch 静态 pool 泄漏)
+                        runCatching { ch?.disconnect() }
                     }
                 }
-            // exec 阻塞在 socket 上, withTimeout 中断不了: 超时即判黑洞, 泄漏的 IO 线程自会结束
-            return withTimeoutOrNull(HEARTBEAT_EXEC_TIMEOUT_MS * 2L) { probe.await() } ?: ROUND_TRIP_FAILED
+            return awaitProbeOrCancel(probe, HEARTBEAT_EXEC_TIMEOUT_MS * 2L)
         }
+
+        /**
+         * 等往返探活结果: 超时返回 [ROUND_TRIP_FAILED], 且无论成功/超时都取消未完成的探活协程。
+         *
+         * exec 阻塞在 socket 上, `withTimeout` 中断不了阻塞调用, 但必须取消 `probe` (Job 取消可打断
+         * 挂起中的等待) 避免协程句柄长期留存; 阻塞的 IO 线程在 socket 超时后自会结束。
+         * 抽为独立函数便于单测用短超时锁死"超时必取消"语义 (无需等真实 10s 超时)。
+         */
+        internal suspend fun awaitProbeOrCancel(
+            probe: Deferred<Int>,
+            timeoutMs: Long,
+        ): Int =
+            try {
+                withTimeoutOrNull(timeoutMs) { probe.await() } ?: ROUND_TRIP_FAILED
+            } finally {
+                if (!probe.isCompleted) probe.cancel()
+            }
 
         /**
          * 一次心跳确认会话写路径是否可用。
@@ -925,7 +953,8 @@ class JschSshClient
             checkPoolHealth()
         }
 
-        private fun checkPoolHealth() {
+        /** internal 供单测验证「池失败置 false 后 disconnect 仍须排空」的泄漏场景 (判定逻辑不变)。 */
+        internal fun checkPoolHealth() {
             if (pool.isEmpty() || pool.all { !it.healthy && !it.session.isConnected }) {
                 Log.e(TAG, "All sessions unhealthy, triggering disconnect")
                 VpnController.appLog(
@@ -938,10 +967,25 @@ class JschSshClient
         }
 
         override suspend fun disconnect(): Boolean {
-            if (!isConnectedFlag.getAndSet(false)) return true
+            isConnectedFlag.set(false)
 
             connectionState.value = ConnectionState.Disconnecting
+            drainPool()
 
+            currentConfig = null
+            connectionState.value = ConnectionState.Disconnected
+            return true
+        }
+
+        /**
+         * 无条件排空会话池: 取消每条会话的 keepAlive 协程、断开 Session、取消其 scope。
+         *
+         * 必须是无条件可调用的独立函数 —— `checkPoolHealth()` 会在**不排空池**的情况下把
+         * `isConnectedFlag` 置 false (池失败 → Failed), 若 `disconnect()` 仍以该 flag 早退,
+         * 池失败重连时排空循环永不执行, 每轮重连滞留最多 3 条 Session/Scope (§8 LEAK-1)。
+         */
+        private fun drainPool() {
+            var drained = 0
             while (pool.isNotEmpty()) {
                 val pooled = pool.poll() ?: break
                 pooled.keepAliveJob?.cancel()
@@ -950,12 +994,20 @@ class JschSshClient
                 } catch (_: Exception) {
                 }
                 pooled.scope.cancel()
+                drained++
             }
-
-            currentConfig = null
-            connectionState.value = ConnectionState.Disconnected
-            return true
+            if (drained > 0) {
+                Log.i(TAG, "Session pool drained: $drained session(s)")
+            }
         }
+
+        /** 仅供单测: 往池里种一条假会话, 用于锁死「无条件排空」语义。 */
+        internal fun seedPooledSessionForTest(pooled: PooledSession) {
+            pool.add(pooled)
+        }
+
+        /** 仅供单测: 当前池内会话数。 */
+        internal fun poolSizeForTest(): Int = pool.size
 
         fun isConnected(): Boolean = isConnectedFlag.get() && pool.any { it.session.isConnected }
 
@@ -1133,15 +1185,7 @@ class JschSshClient
             connectionState.value = ConnectionState.Failed
             Log.w(TAG, "handleError: $message")
 
-            while (pool.isNotEmpty()) {
-                val pooled = pool.poll() ?: break
-                pooled.keepAliveJob?.cancel()
-                try {
-                    pooled.session.disconnect()
-                } catch (_: Exception) {
-                }
-                pooled.scope.cancel()
-            }
+            drainPool()
         }
 
         /**
