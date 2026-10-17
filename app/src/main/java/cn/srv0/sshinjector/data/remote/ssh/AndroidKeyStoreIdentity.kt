@@ -23,160 +23,72 @@ class AndroidKeyStoreIdentity(
 
     override fun getName(): String = fullAlias
 
-    override fun getSignature(data: ByteArray?): ByteArray? {
+    override fun getSignature(data: ByteArray?): ByteArray? = getSignature(data, getAlgName())
+
+    /**
+     * JSch calls this 2-arg overload during userauth / RSA SHA-2 negotiation and passes the
+     * negotiated signature algorithm (`ssh-rsa`, `rsa-sha2-256`, `rsa-sha2-512`,
+     * `ecdsa-sha2-nistpXXX`, `ssh-ed25519`). It expects a full SSH signature blob
+     * `string alg ‖ string rawSignature` — exactly what JSch's own `KeyPairRSA.getSignature`
+     * produces. Returning a raw signature here makes RSA auth fail.
+     */
+    override fun getSignature(
+        data: ByteArray?,
+        alg: String?,
+    ): ByteArray? {
         if (data == null) {
             Log.w("AndroidKeyStoreIdentity", "getSignature called with null data")
             return null
         }
+        val signatureAlg = alg ?: getAlgName()
         return try {
-            val sigAlgorithm =
-                when {
-                    privateKey.algorithm == "EC" -> {
-                        val keySize =
-                            (privateKey as? java.security.interfaces.ECPublicKey)?.w?.affineX?.bitLength() ?: 256
-                        if (keySize > 320) "SHA384withECDSA" else "SHA256withECDSA"
-                    }
-                    privateKey.algorithm == "RSA" -> "SHA256withRSA"
-                    privateKey.algorithm == "Ed25519" -> "SHA512withEdDSA"
-                    else -> "SHA256withECDSA"
-                }
-            val sig = Signature.getInstance(sigAlgorithm)
-            sig.initSign(privateKey)
-            sig.update(data)
-            val derSig = sig.sign()
-
+            val rawSig = signRaw(data, signatureAlg)
             when (privateKey.algorithm) {
-                "EC" -> buildEcdsaSignatureBlob(derSig)
-                "Ed25519" -> buildEd25519SignatureBlob(derSig)
-                else -> derSig
+                "EC" -> buildEcdsaSignatureBlob(signatureAlg, rawSig)
+                "Ed25519" -> buildEd25519SignatureBlob(signatureAlg, rawSig)
+                else -> buildRawSignatureBlob(signatureAlg, rawSig)
             }
         } catch (e: Exception) {
-            Log.e("AndroidKeyStoreIdentity", "Sign failed: ${e.message}", e)
+            Log.e(
+                "AndroidKeyStoreIdentity",
+                "Sign failed: alg=$signatureAlg key=${privateKey.algorithm}: ${e.message}",
+                e,
+            )
             null
         }
     }
 
+    private fun signRaw(
+        data: ByteArray,
+        alg: String,
+    ): ByteArray {
+        val sigAlgorithm =
+            when (privateKey.algorithm) {
+                "EC" -> ecdsaDigestForCurveSize(ecCurveBitLength())
+                "RSA" -> rsaSignAlg(alg)
+                "Ed25519" -> "Ed25519"
+                else -> "SHA256withECDSA"
+            }
+        val sig = Signature.getInstance(sigAlgorithm)
+        sig.initSign(privateKey)
+        sig.update(data)
+        return sig.sign()
+    }
+
     /**
-     * Build SSH signature blob for Ed25519:
-     * string "ssh-ed25519"
-     * string <64-byte raw signature>
-     *
-     * Android Keystore SHA512withEdDSA may produce DER-encoded or raw.
-     * SSH protocol expects raw 64-byte signature.
+     * 从 EC 私钥的 ECParameterSpec 获取曲线位数, 避免强转 ECPublicKey 失败。
+     * 与 [getAlgName] 同源, 保证声明的曲线与签名摘要一致。
      */
-    private fun buildEd25519SignatureBlob(sigBytes: ByteArray): ByteArray {
-        val rawSig =
-            if (sigBytes.size == 64) {
-                sigBytes
-            } else {
-                // DER encoded: 30 42 80 20 [32 bytes r] 81 20 [32 bytes s]
-                parseEd25519DerSignature(sigBytes)
-            }
-
-        val buf = ByteArrayOutputStream()
-        writeString(buf, "ssh-ed25519".toByteArray())
-        writeString(buf, rawSig)
-        return buf.toByteArray()
-    }
-
-    private fun parseEd25519DerSignature(derSig: ByteArray): ByteArray {
-        var pos = 0
-        require(derSig[pos++].toInt() == 0x30) { "bad DER SEQUENCE" }
-        // 跳过 SEQUENCE 长度（支持多字节编码）
-        val firstLenByte = derSig[pos++].toInt() and 0xFF
-        if (firstLenByte and 0x80 != 0) {
-            val numLenBytes = firstLenByte and 0x7F
-            pos += numLenBytes
+    private fun ecCurveBitLength(): Int =
+        try {
+            (privateKey as? java.security.interfaces.ECKey)?.params?.order?.bitLength() ?: 256
+        } catch (_: Exception) {
+            256
         }
-
-        require(derSig[pos++].toInt() == 0x02) { "bad INTEGER tag for r" }
-        val rLen = derSig[pos++].toInt() and 0xFF
-        val r = derSig.copyOfRange(pos, pos + rLen)
-        pos += rLen
-
-        require(derSig[pos++].toInt() == 0x02) { "bad INTEGER tag for s" }
-        val sLen = derSig[pos++].toInt() and 0xFF
-        val s = derSig.copyOfRange(pos, pos + sLen)
-
-        // Ed25519 r and s are each 32 bytes, pad if needed
-        val rPadded = ByteArray(32)
-        val sPadded = ByteArray(32)
-        System.arraycopy(r, r.size - minOf(r.size, 32), rPadded, 32 - minOf(r.size, 32), minOf(r.size, 32))
-        System.arraycopy(s, s.size - minOf(s.size, 32), sPadded, 32 - minOf(s.size, 32), minOf(s.size, 32))
-
-        return rPadded + sPadded
-    }
-
-    private fun buildEcdsaSignatureBlob(derSig: ByteArray): ByteArray {
-        val (r, s) = parseDerSignature(derSig)
-
-        // Inner: mpint r + mpint s
-        val inner = ByteArrayOutputStream()
-        writeMpInt(inner, r)
-        writeMpInt(inner, s)
-
-        // Outer: string algo + string (mpint r + mpint s)
-        val buf = ByteArrayOutputStream()
-        writeString(buf, getAlgName().toByteArray())
-        writeString(buf, inner.toByteArray())
-        return buf.toByteArray()
-    }
-
-    private fun parseDerSignature(derSig: ByteArray): Pair<ByteArray, ByteArray> {
-        var pos = 0
-        require(derSig[pos++].toInt() == 0x30) { "bad DER" }
-        // 跳过 SEQUENCE 长度（支持多字节编码）
-        val firstLenByte = derSig[pos++].toInt() and 0xFF
-        if (firstLenByte and 0x80 != 0) {
-            val numLenBytes = firstLenByte and 0x7F
-            pos += numLenBytes
-        }
-
-        require(derSig[pos++].toInt() == 0x02) { "bad r tag" }
-        val rLen = derSig[pos++].toInt() and 0xFF
-        val r = derSig.copyOfRange(pos, pos + rLen)
-        pos += rLen
-
-        require(derSig[pos++].toInt() == 0x02) { "bad s tag" }
-        val sLen = derSig[pos++].toInt() and 0xFF
-        val s = derSig.copyOfRange(pos, pos + sLen)
-
-        return r to s
-    }
-
-    private fun writeMpInt(
-        out: ByteArrayOutputStream,
-        value: ByteArray,
-    ) {
-        // Strip leading zeros
-        var start = 0
-        while (start < value.size - 1 && value[start].toInt() == 0) start++
-        val trimmed = value.copyOfRange(start, value.size)
-
-        // Add leading zero if high bit set (mpint sign requirement)
-        val mpInt =
-            if ((trimmed[0].toInt() and 0x80) != 0) {
-                ByteArray(trimmed.size + 1).also { System.arraycopy(trimmed, 0, it, 1, trimmed.size) }
-            } else {
-                trimmed
-            }
-
-        writeString(out, mpInt)
-    }
 
     override fun getAlgName(): String =
         when (privateKey.algorithm) {
-            "EC" -> {
-                // 从 ECParameterSpec 获取曲线大小，避免强转 ECPublicKey 失败
-                val keySize =
-                    try {
-                        val ecKey = privateKey as? java.security.interfaces.ECKey
-                        ecKey?.params?.order?.bitLength() ?: 256
-                    } catch (_: Exception) {
-                        256
-                    }
-                if (keySize > 320) "ecdsa-sha2-nistp384" else "ecdsa-sha2-nistp256"
-            }
+            "EC" -> if (ecCurveBitLength() > ECDSA_P384_MIN_BITS) "ecdsa-sha2-nistp384" else "ecdsa-sha2-nistp256"
             "RSA" -> "ssh-rsa"
             "Ed25519" -> "ssh-ed25519"
             else -> privateKey.algorithm
@@ -186,7 +98,7 @@ class AndroidKeyStoreIdentity(
 
     override fun clear() {
         // JSch 调用 clear() 表示不再需要此身份
-        // 私钥由 Android Keystore 管理，无需手动清除
+        // 私钥由 Android Keystore 管理, 无需手动清除
     }
 
     companion object {
@@ -199,7 +111,7 @@ class AndroidKeyStoreIdentity(
 
         fun buildEcdsaPublicKeyBlob(publicKey: ECPublicKey): ByteArray {
             val keyBits = publicKey.w.affineX.bitLength()
-            val coordSize = if (keyBits > 320) 48 else 32
+            val coordSize = if (keyBits > ECDSA_P384_MIN_BITS) 48 else 32
             val algName = if (coordSize == 48) "ecdsa-sha2-nistp384" else "ecdsa-sha2-nistp256"
             val curveName = if (coordSize == 48) "nistp384" else "nistp256"
 
@@ -288,4 +200,147 @@ class AndroidKeyStoreIdentity(
             out.write(data)
         }
     }
+}
+
+/** Curve bit length at/above which the P-384 parameters (and SHA-384) apply. */
+internal const val ECDSA_P384_MIN_BITS = 320
+
+/**
+ * Digest/JCA algorithm for a given EC curve size. Must match [AndroidKeyStoreIdentity.getAlgName]
+ * so that a key declared `ecdsa-sha2-nistp384` is actually signed with SHA-384.
+ */
+internal fun ecdsaDigestForCurveSize(bits: Int): String =
+    when {
+        bits > ECDSA_P384_MIN_BITS -> "SHA384withECDSA"
+        else -> "SHA256withECDSA"
+    }
+
+/** JCA digest for the negotiated RSA signature algorithm. */
+internal fun rsaSignAlg(alg: String): String =
+    when (alg) {
+        "rsa-sha2-512" -> "SHA512withRSA"
+        "rsa-sha2-256" -> "SHA256withRSA"
+        else -> "SHA1withRSA"
+    }
+
+/**
+ * Standard SSH signature blob: `string alg ‖ string rawSignature`.
+ * [rawSig] is the raw signature bytes (PKCS#1 v1.5 for RSA, 64 raw bytes for Ed25519).
+ */
+internal fun buildRawSignatureBlob(
+    alg: String,
+    rawSig: ByteArray,
+): ByteArray {
+    val buf = ByteArrayOutputStream()
+    AndroidKeyStoreIdentity.writeString(buf, alg.toByteArray())
+    AndroidKeyStoreIdentity.writeString(buf, rawSig)
+    return buf.toByteArray()
+}
+
+/**
+ * ECDSA SSH signature blob: `string alg ‖ string (mpint r ‖ mpint s)`.
+ * [derSig] is the DER-encoded signature produced by JCA (`SHAxxxwithECDSA`).
+ */
+internal fun buildEcdsaSignatureBlob(
+    alg: String,
+    derSig: ByteArray,
+): ByteArray {
+    val (r, s) = parseDerSignature(derSig)
+
+    // Inner: mpint r + mpint s
+    val inner = ByteArrayOutputStream()
+    writeMpInt(inner, r)
+    writeMpInt(inner, s)
+
+    return buildRawSignatureBlob(alg, inner.toByteArray())
+}
+
+/**
+ * Ed25519 SSH signature blob: `string alg ‖ string <64-byte raw signature>`.
+ *
+ * Android Keystore `Signature.getInstance("Ed25519")` returns the raw 64-byte signature, but
+ * some providers emit a DER-encoded one; normalize to raw 64 bytes when needed.
+ */
+internal fun buildEd25519SignatureBlob(
+    alg: String,
+    sigBytes: ByteArray,
+): ByteArray {
+    val rawSig = if (sigBytes.size == 64) sigBytes else parseEd25519DerSignature(sigBytes)
+    return buildRawSignatureBlob(alg, rawSig)
+}
+
+/** Parse a DER `SEQUENCE { INTEGER r, INTEGER s }` signature (multi-byte length aware). */
+internal fun parseDerSignature(derSig: ByteArray): Pair<ByteArray, ByteArray> {
+    var pos = 0
+    require(derSig[pos++].toInt() == 0x30) { "bad DER" }
+    // 跳过 SEQUENCE 长度（支持多字节编码）
+    val firstLenByte = derSig[pos++].toInt() and 0xFF
+    if (firstLenByte and 0x80 != 0) {
+        val numLenBytes = firstLenByte and 0x7F
+        pos += numLenBytes
+    }
+
+    require(derSig[pos++].toInt() == 0x02) { "bad r tag" }
+    val rLen = derSig[pos++].toInt() and 0xFF
+    val r = derSig.copyOfRange(pos, pos + rLen)
+    pos += rLen
+
+    require(derSig[pos++].toInt() == 0x02) { "bad s tag" }
+    val sLen = derSig[pos++].toInt() and 0xFF
+    val s = derSig.copyOfRange(pos, pos + sLen)
+
+    return r to s
+}
+
+/**
+ * Parse the DER-encoded Ed25519 signature
+ * `30 42 80 20 [32 bytes r] 81 20 [32 bytes s]` and return raw `r ‖ s` (64 bytes).
+ */
+internal fun parseEd25519DerSignature(derSig: ByteArray): ByteArray {
+    var pos = 0
+    require(derSig[pos++].toInt() == 0x30) { "bad DER SEQUENCE" }
+    // 跳过 SEQUENCE 长度（支持多字节编码）
+    val firstLenByte = derSig[pos++].toInt() and 0xFF
+    if (firstLenByte and 0x80 != 0) {
+        val numLenBytes = firstLenByte and 0x7F
+        pos += numLenBytes
+    }
+
+    require(derSig[pos++].toInt() == 0x02) { "bad INTEGER tag for r" }
+    val rLen = derSig[pos++].toInt() and 0xFF
+    val r = derSig.copyOfRange(pos, pos + rLen)
+    pos += rLen
+
+    require(derSig[pos++].toInt() == 0x02) { "bad INTEGER tag for s" }
+    val sLen = derSig[pos++].toInt() and 0xFF
+    val s = derSig.copyOfRange(pos, pos + sLen)
+
+    // Ed25519 r and s are each 32 bytes, pad if needed
+    val rPadded = ByteArray(32)
+    val sPadded = ByteArray(32)
+    System.arraycopy(r, r.size - minOf(r.size, 32), rPadded, 32 - minOf(r.size, 32), minOf(r.size, 32))
+    System.arraycopy(s, s.size - minOf(s.size, 32), sPadded, 32 - minOf(s.size, 32), minOf(s.size, 32))
+
+    return rPadded + sPadded
+}
+
+/** Encode an SSH `mpint` (two's-complement, minimal, sign-prefixed) as a length-prefixed string. */
+internal fun writeMpInt(
+    out: ByteArrayOutputStream,
+    value: ByteArray,
+) {
+    // Strip leading zeros
+    var start = 0
+    while (start < value.size - 1 && value[start].toInt() == 0) start++
+    val trimmed = value.copyOfRange(start, value.size)
+
+    // Add leading zero if high bit set (mpint sign requirement)
+    val mpInt =
+        if ((trimmed[0].toInt() and 0x80) != 0) {
+            ByteArray(trimmed.size + 1).also { System.arraycopy(trimmed, 0, it, 1, trimmed.size) }
+        } else {
+            trimmed
+        }
+
+    AndroidKeyStoreIdentity.writeString(out, mpInt)
 }
