@@ -1,6 +1,7 @@
 package cn.srv0.sshinjector.domain.vpn
 
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import cn.srv0.sshinjector.data.local.DomainListManager
 import cn.srv0.sshinjector.domain.usecase.VpnController
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
@@ -47,6 +48,16 @@ class DnsInterceptor
 
             // IPv6 假 IP 池: fd00::2 ~ fd00::ffff:ffff (VPN 网关 fd00::1/64 范围内)
             // 用递增计数器生成 fd00::N 形式的假 IPv6 地址
+            private const val FAKE_IPV6_BASE = 2 // fd00::2 开始 (fd00::1 是 VPN 网关)
+            private const val FAKE_IPV6_MAX = 0xFFFF
+
+            /**
+             * 假 IP 分配锁: "取号 → 写两张映射表" 必须是一个原子操作, 否则并发查询同一域名
+             * 会各分配一张假 IP (客户端拿到一张, CONNECT 反查却命中另一张 → 串号),
+             * 并发触发池耗尽重建时也会互相踩踏 (重建后各自 retry 会重复取号)。
+             * 计数器仍是 AtomicInteger, 但 incrementAndGet 与 put 的复合操作靠本锁串行。
+             */
+            private val fakeIpAllocLock = Any()
 
             // 映射表大小限制，防止长时间运行 OOM (LRU 淘汰, 见 LruStringMap)
             private const val MAX_IP_DOMAIN_MAP_SIZE = 16384
@@ -224,7 +235,11 @@ class DnsInterceptor
         }
 
         /**
-         * 把假 IP 计数器重置到剩余映射中的最大值 (按序分配, 未分配区间可复用)。
+         * 把假 IP 计数器**对齐到**剩余映射中的最大值 —— 仅抬高上界, **不回收**。
+         *
+         * 计数器在进程存活期内只增不减: 已发出去的号码不会重发给别的域名。若把未分配
+         * 区间回收再复用, 客户端本地缓存的旧假 IP 就会在新的 CONNECT 里连到**错误目标**
+         * (跨域名串号)。真正需要回收时只走 [resetAllFakeIpsLocked] 的**全量重建** (仅池耗尽时)。
          */
         private fun resetFakeIpCounters() {
             var max4 = 0L
@@ -295,11 +310,15 @@ class DnsInterceptor
         )
 
         // IP → 域名映射: DNS 解析时建立，PacketProcessor 用于 SOCKS5 CONNECT 域名模式
-        private val ipToDomain = LruStringMap(MAX_IP_DOMAIN_MAP_SIZE)
+        // 池耗尽全量重建时用新实例整体替换 (LruStringMap 无 clear() —— 改动约束不动该类),
+        // @Volatile 让无锁读取 (lookupDomain) 尽快看到新表, 不会继续命中已被丢弃的旧映射。
+        @Volatile private var ipToDomain = LruStringMap(MAX_IP_DOMAIN_MAP_SIZE)
 
         /** 真实 IP → 域名, 只由 [lookupDomain] 作兜底读取, 不参与假 IP 生命周期。 */
         private val realIpToDomain = LruStringMap(MAX_REAL_IP_MAP_SIZE)
-        private val domainToIp = LruStringMap(MAX_DOMAIN_IP_MAP_SIZE) // key: "$qname.$qtype", value: 假 IP
+
+        // key: "$qname.$qtype", value: 假 IP (同样在池耗尽重建时整体替换)
+        @Volatile private var domainToIp = LruStringMap(MAX_DOMAIN_IP_MAP_SIZE)
 
         /**
          * 查询 IP → 域名映射 (命中刷新 LRU 访问时间)。
@@ -396,8 +415,48 @@ class DnsInterceptor
             sweepPendingFakeIpRelease(now)
         }
 
+        /**
+         * 假 IP 池耗尽时的**全量重建**: 清空两张假 IP 映射表 + 待摘除登记, 两个计数器复位到基线。
+         *
+         * **绝不能改成"按值回收再复用"** —— 一个号码一旦重发给**别的**域名, 客户端本地缓存的
+         * 旧假 IP 就会让 Socks5ProxyServer 连到错误目标 (跨域名串号)。全量重建会让旧域名的映射
+         * 一并失效 (其 CONNECT 拿 SOCKS 0x03 后由客户端重新解析), 这是池耗尽时唯一安全的回收方式
+         * (旧行为是"永久失败、不自愈")。必须持 [fakeIpAllocLock] 调用 (由 `...Locked` 后缀约定)。
+         */
+        private fun resetAllFakeIpsLocked() {
+            // LruStringMap 没有 clear(), 用新实例整体替换等价于清空; 逐条 removeByValue 在
+            // 16384 条时是 O(n^2), 而重建发生在分配热路径上, 必须 O(1)。
+            ipToDomain = LruStringMap(MAX_IP_DOMAIN_MAP_SIZE)
+            domainToIp = LruStringMap(MAX_DOMAIN_IP_MAP_SIZE)
+            pendingFakeIpRelease.clear()
+            fakeIpCounter.set(FAKE_IP_BASE)
+            fakeIpv6Counter.set(FAKE_IPV6_BASE)
+            Log.w(TAG, "REMOTE 假IP: 池耗尽, 已重建全部假 IP 映射")
+            VpnController.appLogThrottled(
+                "假 IP 池耗尽 · 已重建映射，将重新分配",
+                level = LogLevel.ERROR,
+                throttleKey = "假 IP 池耗尽",
+            )
+        }
+
+        /** 仅供单测: 直接触发一次假 IP 池全量重建 (生产路径只在池耗尽时调用)。 */
+        @VisibleForTesting
+        internal fun resetAllFakeIpsForTest() {
+            synchronized(fakeIpAllocLock) { resetAllFakeIpsLocked() }
+        }
+
+        /** 仅供单测: 把 IPv4 假 IP 计数器推到池上限 —— 下一次分配即判定"池耗尽"。 */
+        @VisibleForTesting
+        internal fun exhaustFakeIpCounterForTest() {
+            fakeIpCounter.set(FAKE_IP_MAX)
+        }
+
+        /** 仅供单测: 读当前 IPv4 假 IP 计数器值 (断言自愈后回落到 base 之上的首个号码)。 */
+        @VisibleForTesting
+        internal fun fakeIpCounterForTest(): Int = fakeIpCounter.get()
+
         private val fakeIpCounter = AtomicInteger(FAKE_IP_BASE)
-        private val fakeIpv6Counter = AtomicInteger(2) // fd00::2 开始 (fd00::1 是 VPN 网关)
+        private val fakeIpv6Counter = AtomicInteger(FAKE_IPV6_BASE) // fd00::2 开始 (fd00::1 是 VPN 网关)
 
         // 用于绕过 VPN 的 socket 保护函数 (由 VpnService 提供)
         private var protectSocket: ((DatagramSocket) -> Boolean)? = null
@@ -771,6 +830,87 @@ class DnsInterceptor
         }
 
         /**
+         * 解析或分配假 IP (A: 198.18.0.0/15, AAAA: fd00::N)。
+         *
+         * 快路径 (已有映射) 无锁; 未命中则持 [fakeIpAllocLock] 双检后分配 —— "取号 + 写两张映射表"
+         * 必须原子, 否则并发查询同一域名会各分配一张假 IP (见 [fakeIpAllocLock])。
+         *
+         * 池耗尽 (IPv4 `rawIp > FAKE_IP_MAX` / IPv6 `> FAKE_IPV6_MAX`) 时在全量重建
+         * (见 [resetAllFakeIpsLocked]) 后**重试一次**; 仍失败才返回 null。
+         */
+        private fun resolveOrAllocateFakeIp(
+            dnsKey: String,
+            qname: String,
+            qtype: Int,
+        ): FakeIpAllocation? {
+            domainToIp.get(dnsKey)?.let { return reuseFakeIp(it, qname) }
+            synchronized(fakeIpAllocLock) {
+                // 双检: 并发同名查询时先持锁者已写入, 后来者必须复用, 不能各分配一张
+                domainToIp.get(dnsKey)?.let { return reuseFakeIp(it, qname) }
+                return allocateNewFakeIpLocked(dnsKey, qname, qtype)
+            }
+        }
+
+        /** 复用已有假 IP 映射 (刷新两张表, 并撤销上一轮的待摘除登记)。 */
+        private fun reuseFakeIp(
+            ip: String,
+            qname: String,
+        ): FakeIpAllocation {
+            val address = InetAddress.getByName(ip)
+            val mappedIp = address.hostAddress ?: ip
+            ipToDomain.put(mappedIp, qname)
+            pendingFakeIpRelease.remove(mappedIp)
+            return FakeIpAllocation(ip, address)
+        }
+
+        /** 持 [fakeIpAllocLock] 分配一张新假 IP; 池耗尽时全量重建后重试一次。 */
+        private fun allocateNewFakeIpLocked(
+            dnsKey: String,
+            qname: String,
+            qtype: Int,
+        ): FakeIpAllocation? {
+            val isV4 = qtype == org.xbill.DNS.Type.A
+            val limit = if (isV4) FAKE_IP_MAX else FAKE_IPV6_MAX
+            var raw = if (isV4) fakeIpCounter.incrementAndGet() else fakeIpv6Counter.incrementAndGet()
+            if (raw > limit) {
+                // 池耗尽: 全量重建映射 (清两表 + 计数复位) 后重试一次 —— 绝不按值回收旧号码
+                resetAllFakeIpsLocked()
+                raw = if (isV4) fakeIpCounter.incrementAndGet() else fakeIpv6Counter.incrementAndGet()
+                if (raw > limit) {
+                    Log.e(TAG, "REMOTE 假IP: ${if (isV4) "IPv4" else "IPv6"} 池已耗尽 (重建后重试仍失败)")
+                    VpnController.appLogThrottled(
+                        "假 IP 池耗尽 (${if (isV4) "IPv4 198.18.0.0/15" else "IPv6 fd00::/8"}) · 重建后仍无法分配",
+                        level = LogLevel.ERROR,
+                        throttleKey = "假 IP 池耗尽仍失败",
+                    )
+                    return null
+                }
+            }
+            val display =
+                if (isV4) {
+                    "${(raw shr 24) and 0xFF}.${(raw shr 16) and 0xFF}." +
+                        "${(raw shr 8) and 0xFF}.${raw and 0xFF}"
+                } else {
+                    String.format(Locale.ROOT, "fd00::%04x", raw)
+                }
+            val address = InetAddress.getByName(display)
+            // 反向表存 InetAddress 的规范形 (IPv6 = fd00:0:0:0:0:0:0:42), 与 ipToDomain 的键
+            // (hostAddress) 一致: releaseFakeIp 拿到的是 CONNECT 侧 hostAddress, 存 "fd00::0042"
+            // 会让 removeByValue 永远 0 命中 → 反向表只进不出, 撑满 16384 后假 IP 池告急。
+            val mappedIp = address.hostAddress ?: display
+            domainToIp.put(dnsKey, mappedIp)
+            ipToDomain.put(mappedIp, qname)
+            pendingFakeIpRelease.remove(mappedIp)
+            return FakeIpAllocation(display, address)
+        }
+
+        /** 假 IP 分配结果: [display] 为日志/应答用的原始写法, [address] 为解析后的地址。 */
+        private class FakeIpAllocation(
+            val display: String,
+            val address: InetAddress,
+        )
+
+        /**
          * REMOTE 模式: 不做真实 DNS 解析, 分配假 IP
          * SOCKS5 CONNECT 时用域名, SSH 服务器自己解析
          *
@@ -819,56 +959,11 @@ class DnsInterceptor
             }
 
             // 同一域名+类型返回相同假IP (key 包含类型, A 和 AAAA 独立分配)
+            // 分配在 fakeIpAllocLock 内完成; 池耗尽时全量重建映射并重试一次 (见 resolveOrAllocateFakeIp)
             val dnsKey = dnsCacheKey(question.name, qtype)
-            val existingIp = domainToIp.get(dnsKey)
-            val fakeIp: String
-            val fakeInetAddress: InetAddress
-
-            if (existingIp != null) {
-                fakeIp = existingIp
-                fakeInetAddress = InetAddress.getByName(fakeIp)
-            } else if (qtype == org.xbill.DNS.Type.A) {
-                // A 记录: 分配 IPv4 假 IP (198.18.x.x)
-                val rawIp = fakeIpCounter.incrementAndGet()
-                if (rawIp > FAKE_IP_MAX) {
-                    Log.e(TAG, "REMOTE 假IP: IPv4 池已耗尽")
-                    VpnController.appLogThrottled(
-                        "假 IP 池耗尽 (IPv4 198.18.0.0/15) · 新域名将无法解析",
-                        level = LogLevel.ERROR,
-                    )
-                    return false
-                }
-                fakeIp =
-                    "${(rawIp shr 24) and 0xFF}.${(rawIp shr 16) and 0xFF}." +
-                    "${(rawIp shr 8) and 0xFF}.${rawIp and 0xFF}"
-                fakeInetAddress = InetAddress.getByName(fakeIp)
-                domainToIp.put(dnsKey, fakeIp)
-            } else {
-                // AAAA 记录: 分配 IPv6 假 IP (fd00::N, 在 VPN fd00::1/64 范围内)
-                val counter = fakeIpv6Counter.incrementAndGet()
-                if (counter > 0xFFFF) {
-                    Log.e(TAG, "REMOTE 假IP: IPv6 池已耗尽")
-                    VpnController.appLogThrottled(
-                        "假 IP 池耗尽 (IPv6 fd00::/8) · 新域名将无法解析",
-                        level = LogLevel.ERROR,
-                    )
-                    return false
-                }
-                fakeIp = String.format(Locale.ROOT, "fd00::%04x", counter)
-                fakeInetAddress = InetAddress.getByName(fakeIp)
-                // 反向表必须存 InetAddress 的规范形 (fd00:0:0:0:0:0:0:42), 与 ipToDomain 的键
-                // (下方 fakeInetAddress.hostAddress) 一致: releaseFakeIp 拿到的是 CONNECT 侧的
-                // hostAddress, 存 "fd00::0042" 会让 removeByValue 永远 0 命中 → 反向表只进不出,
-                // 撑满 16384 后假 IP 池告急。resetFakeIpCounters 解析用 substringAfterLast(':'),
-                // 两种写法的十六进制尾数相同, 迁移安全。
-                domainToIp.put(dnsKey, fakeInetAddress.hostAddress ?: fakeIp)
-            }
-
-            // 建立双向映射 (假 IP → 域名, 用于 SOCKS5 CONNECT 域名模式)
-            val mappedIp = fakeInetAddress.hostAddress ?: fakeIp
-            ipToDomain.put(mappedIp, qname)
-            // 能被重新解析/复用 = 这张假 IP 还活着, 撤销上一轮的待摘除登记
-            pendingFakeIpRelease.remove(mappedIp)
+            val allocation = resolveOrAllocateFakeIp(dnsKey, qname, qtype) ?: return false
+            val fakeIp = allocation.display
+            val fakeInetAddress = allocation.address
 
             Log.d(TAG, "REMOTE 假IP: $qname → $fakeIp (type=$qtype)")
 

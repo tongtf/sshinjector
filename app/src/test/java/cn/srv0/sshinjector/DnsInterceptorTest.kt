@@ -17,6 +17,9 @@ import org.xbill.DNS.Section
 import org.xbill.DNS.Type
 import java.net.InetAddress
 import java.nio.ByteBuffer
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class DnsInterceptorTest {
     @Test
@@ -138,6 +141,83 @@ class DnsInterceptorTest {
             assertEquals("empty AAAA answer must be enqueued", 1, stats.queriesResolved)
             assertEquals("no fake ipv6 must be allocated or cached", 0, stats.cacheSize)
         }
+    }
+
+    /**
+     * 池耗尽必须**自愈**: 计数器推到上限后, 新域名的分配要触发全量重建 (清空两张映射表 +
+     * 计数复位) 并重试一次, 而不是像旧实现那样永久返回 false
+     * (REMOTE 模式此后所有 A 记录都解析不出来, 且不会恢复)。
+     *
+     * 同时锁死"回拨只发生在全量重建": 重建是整体清空, 不是按值回收再复用。
+     */
+    @Test
+    fun `exhaustionTriggersSelfHealingReset`() {
+        val dns = DnsInterceptor()
+        val base = (198 shl 24) or (18 shl 16) // 198.18.0.0 (Int 为负数 —— 与生产一致)
+        val poolMax = (198 shl 24) or (19 shl 16) or 0xFFFF // 198.19.255.255
+        // 干净起点, 保证下面走的是"未命中 → 分配"而不是快路径复用
+        dns.resetAllFakeIpsForTest()
+        dns.exhaustFakeIpCounterForTest()
+        assertEquals("seeded counter must sit at the pool max", poolMax, dns.fakeIpCounterForTest())
+
+        val wire = buildQuery("heal.example", Type.A)
+        assertTrue(
+            "allocation after exhaustion must self-heal instead of failing permanently",
+            dns.processDnsQuery(ByteBuffer.wrap(wire), clientIp, gatewayIp, 40010, 53),
+        )
+        // 自愈 = 计数复位到 base 后再分配一次 → base+1 (旧实现会停在 MAX 且返回 false)
+        assertEquals("counter must be rewound to base+1 by the reset", base + 1, dns.fakeIpCounterForTest())
+        assertEquals(
+            "new domain must map to the first re-issued fake ip",
+            "heal.example",
+            dns.lookupDomain("198.18.0.1"),
+        )
+    }
+
+    /**
+     * N 个线程并发分配不同域名: 绝不能发出重复的假 IP。
+     *
+     * 重复 = 两个域名共用一张假 IP → 客户端 A 的 CONNECT 被解析成域名 B 的目标 (跨域名串号)。
+     * 分配路径的"取号 → 写两张映射表"必须在同一把锁内完成。
+     *
+     * 线程全部 daemon + 有界 [CountDownLatch.await] (项目曾因无界等待挂死 CI 26 分钟)。
+     */
+    @Test
+    fun `concurrentAllocDoesNotIssueDuplicateFakeIp`() {
+        val dns = DnsInterceptor()
+        dns.resetAllFakeIpsForTest()
+        val threads = 32
+        val start = CountDownLatch(1)
+        val done = CountDownLatch(threads)
+        val failures = ConcurrentLinkedQueue<Throwable>()
+
+        repeat(threads) { i ->
+            Thread {
+                try {
+                    start.await(30, TimeUnit.SECONDS)
+                    val wire = buildQuery("c$i.example", Type.A)
+                    if (!dns.processDnsQuery(ByteBuffer.wrap(wire), clientIp, gatewayIp, 50_000 + i, 53)) {
+                        failures.add(IllegalStateException("allocation failed for c$i.example"))
+                    }
+                } catch (t: Throwable) {
+                    failures.add(t)
+                } finally {
+                    done.countDown()
+                }
+            }.apply {
+                isDaemon = true
+                start()
+            }
+        }
+
+        start.countDown()
+        assertTrue("concurrent allocations must finish (bounded wait)", done.await(30, TimeUnit.SECONDS))
+        assertTrue("no allocation may fail: $failures", failures.isEmpty())
+
+        // 干净起点 + N 次分配 → 假 IP 必落在 198.18.0.1..N, 且每张都映射到不同域名
+        val domains = (1..threads).mapNotNull { dns.lookupDomain("198.18.0.$it") }
+        assertEquals("every allocated fake ip must resolve to a domain", threads, domains.size)
+        assertEquals("fake ips must not be shared across domains (no duplicates)", threads, domains.toSet().size)
     }
 
     private val clientIp: InetAddress = InetAddress.getByName("10.0.0.2")
