@@ -7,6 +7,7 @@ import cn.srv0.sshinjector.domain.model.ServerProvisioning
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -48,6 +49,23 @@ class ServerProvisionerTest {
             }
         return mock(defaultAnswer = answer)
     }
+
+    /** root 权限下走完整成功路径的 mock，并记录收到的每条命令（用于 T-01 路径一致性断言） */
+    private fun capturingRootExecutor(seenCommands: MutableList<String>): RemoteCommandExecutor =
+        mockExecutor { cmd, _ ->
+            seenCommands += cmd
+            when {
+                cmd == "id -u" -> ExecResult(0, "0\n", "")
+                cmd.contains("sha256sum") && cmd.contains("cat > /tmp/sshinjector_setup_") ->
+                    ExecResult(0, "${sha256(scriptContent)}  /tmp/sshinjector_setup_hash.sh\n", "")
+                cmd.startsWith("sh /tmp/sshinjector_setup_") && cmd.endsWith(".pub") ->
+                    ExecResult(0, "complete\n", "")
+                cmd.contains("id sshproxy") || cmd.contains("Match User") -> ExecResult(0, "1\n", "")
+                cmd.startsWith("cat > /tmp/sshinjector_pubkey") -> ExecResult(0, "", "")
+                cmd.startsWith("rm -f") -> ExecResult(0, "", "")
+                else -> ExecResult(0, "", "")
+            }
+        }
 
     @Before
     fun setUp() {
@@ -251,8 +269,113 @@ class ServerProvisionerTest {
             }
         }
 
+    // ---- T-01: 向导临时路径本地化 runId ----
+
+    @Test
+    fun `all exec commands in one run share the same temp paths`() =
+        runBlocking {
+            val seenCommands = mutableListOf<String>()
+            provisioner =
+                ServerProvisioner(
+                    Mockito.mock(android.content.Context::class.java),
+                    capturingRootExecutor(seenCommands),
+                )
+            provisioner.scriptLoader = { scriptContent }
+
+            val events = provisioner.provision(login, validPubKey).toList()
+            val finished = events.filterIsInstance<ServerProvisioning.ProvisionEvent.Finished>().last()
+            assertTrue(
+                "expected FullSuccess, got $finished",
+                finished.outcome is ServerProvisioning.Outcome.FullSuccess,
+            )
+
+            val setupPaths =
+                seenCommands.flatMap { SETUP_PATH_REGEX.findAll(it) }.map { it.value }.toSet()
+            val pubKeyPaths =
+                seenCommands.flatMap { PUBKEY_PATH_REGEX.findAll(it) }.map { it.value }.toSet()
+            assertEquals("exactly one setup script path per run: $setupPaths", 1, setupPaths.size)
+            assertEquals("exactly one pubkey path per run: $pubKeyPaths", 1, pubKeyPaths.size)
+
+            // sha256sum 校验的路径必须与后续 sh 执行用的是同一个
+            val shaCmd = seenCommands.first { it.contains("sha256sum") }
+            val shCmd = seenCommands.first { it.startsWith("sh /tmp/sshinjector_setup_") }
+            val shaPath = SETUP_PATH_REGEX.find(shaCmd)?.value
+            val shPath = SETUP_PATH_REGEX.find(shCmd)?.value
+            assertTrue("sha256sum command must reference a setup path: $shaCmd", shaPath != null)
+            assertEquals("sha256sum path must equal sh invocation path", shaPath, shPath)
+        }
+
+    @Test
+    fun `temp paths contain no shell expansion tokens`() =
+        runBlocking {
+            val seenCommands = mutableListOf<String>()
+            provisioner =
+                ServerProvisioner(
+                    Mockito.mock(android.content.Context::class.java),
+                    capturingRootExecutor(seenCommands),
+                )
+            provisioner.scriptLoader = { scriptContent }
+
+            provisioner.provision(login, validPubKey).toList()
+
+            assertTrue("expected at least one command captured", seenCommands.isNotEmpty())
+            seenCommands.forEach { cmd ->
+                assertFalse("command must not contain \$\$: $cmd", cmd.contains(SHELL_PID_TOKEN))
+                assertFalse("command must not contain \$RANDOM: $cmd", cmd.contains(SHELL_RANDOM_TOKEN))
+                assertFalse("command must not contain mktemp: $cmd", cmd.contains("mktemp"))
+            }
+        }
+
+    // ---- T-02: sudo 密码探测传对 sudoPrefix ----
+
+    @Test
+    fun `password sudo probe sends password on stdin`() =
+        runBlocking {
+            val seen = mutableListOf<Pair<String, ByteArray?>>()
+            val executor =
+                mockExecutor { cmd, stdin ->
+                    seen += cmd to stdin
+                    when {
+                        cmd == "id -u" -> ExecResult(1, "", "not root")
+                        cmd == "sudo -n -p '' true" -> ExecResult(1, "", "password required")
+                        cmd == "sudo -S -p '' true" -> ExecResult(0, "", "")
+                        cmd.contains("sha256sum") ->
+                            ExecResult(0, "${sha256(scriptContent)}  /tmp/sshinjector_setup_hash.sh\n", "")
+                        cmd.contains("id sshproxy") || cmd.contains("Match User") -> ExecResult(0, "1\n", "")
+                        else -> ExecResult(0, "", "")
+                    }
+                }
+            provisioner = ServerProvisioner(Mockito.mock(android.content.Context::class.java), executor)
+            provisioner.scriptLoader = { scriptContent }
+
+            val events = provisioner.provision(login, validPubKey).toList()
+            val finished = events.filterIsInstance<ServerProvisioning.ProvisionEvent.Finished>().last()
+            assertTrue(
+                "expected FullSuccess via password sudo, got $finished",
+                finished.outcome is ServerProvisioning.Outcome.FullSuccess,
+            )
+
+            val probe = seen.first { it.first == "sudo -S -p '' true" }
+            val probeStdin = probe.second
+            assertTrue(
+                "probe must carry the password on stdin (was ${probeStdin?.toString(Charsets.UTF_8)})",
+                probeStdin != null && String(probeStdin, Charsets.UTF_8).startsWith("secret"),
+            )
+
+            seen.forEach { (cmd, _) ->
+                assertFalse("must not build a double sudo prefix: $cmd", cmd.contains("sudo -S -p '' sudo"))
+            }
+        }
+
     private fun sha256(data: String): String {
         val md = java.security.MessageDigest.getInstance("SHA-256")
         return md.digest(data.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+    }
+
+    private companion object {
+        val SETUP_PATH_REGEX = Regex("/tmp/sshinjector_setup_[A-Za-z0-9]+\\.sh")
+        val PUBKEY_PATH_REGEX = Regex("/tmp/sshinjector_pubkey_[A-Za-z0-9]+\\.pub")
+        const val SHELL_PID_TOKEN = "\$\$"
+        const val SHELL_RANDOM_TOKEN = "\$RANDOM"
     }
 }

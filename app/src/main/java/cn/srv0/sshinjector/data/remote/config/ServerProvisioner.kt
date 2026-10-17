@@ -15,6 +15,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -88,6 +89,10 @@ class ServerProvisioner
                     ?: return ServerProvisioning.Outcome.LocalOnly("账户无 root/sudo 权限")
 
             // ---- Step 2: 上传脚本 + 校验 SHA-256 ----
+            // runId 本地生成（UUID 无 `-` 后取 12 位），本轮所有 exec 复用同一后缀 —— 远端不再出现
+            // shell PID 变量（每次 execSingleShot 都是新 JSch session，远端 PID 不同 → 路径对不上）。
+            val rawRunId = UUID.randomUUID().toString()
+            val runId = rawRunId.replace("-", "").take(12)
             step(emit, Step.UPLOAD_SCRIPT)
             val script = loadScript()
             val scriptHash = sha256(script.toByteArray(Charsets.UTF_8))
@@ -98,12 +103,13 @@ class ServerProvisioner
                     "本机脚本哈希校验失败（构建期漂移）",
                 )
             }
-            val uploaded = uploadAndVerifyScript(login, sudoPrefix, script, scriptHash)
+            val uploaded = uploadAndVerifyScript(login, sudoPrefix, script, scriptHash, runId)
             val scriptPath = uploaded.scriptPath ?: return uploaded.outcome
+            val paths = TempPaths(scriptPath, "/tmp/sshinjector_pubkey_$runId.pub")
 
             // ---- Step 3-5: 上传公钥 + 执行脚本 + 验证 ----
             val executeError =
-                uploadAndRun(login, sudoPrefix, publicKey, scriptPath, emit)
+                uploadAndRun(login, sudoPrefix, publicKey, paths, emit)
             if (executeError != null) return executeError
 
             // ---- Done ----
@@ -111,20 +117,27 @@ class ServerProvisioner
             return ServerProvisioning.Outcome.FullSuccess(ServerProvisioning.TUNNEL_ACCOUNT)
         }
 
+        /** 本轮供装使用的远端临时路径（脚本 + 公钥），同一 runId 派生，前后一致 */
+        private data class TempPaths(
+            val scriptPath: String,
+            val pubKeyPath: String,
+        )
+
         /** 上传公钥、执行脚本、验证配置；成功返回 null，失败返回对应 Outcome */
         private suspend fun uploadAndRun(
             login: LoginCredential,
             sudoPrefix: String,
             publicKey: String,
-            scriptPath: String,
+            paths: TempPaths,
             emit: (ServerProvisioning.ProvisionEvent) -> Unit,
         ): ServerProvisioning.Outcome? {
+            val scriptPath = paths.scriptPath
+            val pubKeyPath = paths.pubKeyPath
             step(emit, Step.UPLOAD_PUBKEY)
             if (!isValidPublicKey(publicKey)) {
                 exec(login, sudoPrefix, "rm -f $scriptPath")
                 return ServerProvisioning.Outcome.Failed(Step.UPLOAD_PUBKEY, "公钥格式非法")
             }
-            val pubKeyPath = "/tmp/sshinjector_pubkey_$$.pub"
             exec(login, sudoPrefix, "cat > $pubKeyPath", publicKey.toByteArray(Charsets.UTF_8))
 
             step(emit, Step.EXECUTE_SCRIPT)
@@ -168,8 +181,9 @@ class ServerProvisioner
             sudoPrefix: String,
             script: String,
             scriptHash: String,
+            runId: String,
         ): ScriptUpload {
-            val scriptPath = "/tmp/sshinjector_setup_$$.sh"
+            val scriptPath = "/tmp/sshinjector_setup_$runId.sh"
             val writeScriptCmd = "cat > $scriptPath && chmod 700 $scriptPath && sha256sum $scriptPath"
             val upload = exec(login, sudoPrefix, writeScriptCmd, script.toByteArray(Charsets.UTF_8))
             val remoteHash = extractSha256(upload.stdout)
@@ -201,7 +215,9 @@ class ServerProvisioner
             }
             // sudo 需要密码（经 stdin 传入）
             if (!login.password.isNullOrEmpty()) {
-                val sudoPass = exec(login, null, "$SUDO_WITH_PASSWORD true")
+                // 必须传 SUDO_WITH_PASSWORD 作为 prefix：exec() 仅在 prefix == SUDO_WITH_PASSWORD 时
+                // 把密码前置进 stdin；传 null 会导致 `sudo -S` 读到 EOF、探测恒失败 → 永远落 LocalOnly。
+                val sudoPass = exec(login, SUDO_WITH_PASSWORD, "true")
                 if (sudoPass.exitCode == 0) {
                     return SUDO_WITH_PASSWORD
                 }
