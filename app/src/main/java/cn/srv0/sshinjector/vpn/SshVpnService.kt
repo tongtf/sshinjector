@@ -47,7 +47,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import cn.srv0.sshinjector.domain.model.VpnState as DomainVpnState
@@ -858,13 +857,13 @@ class SshVpnService : VpnService() {
      * 若锁被卡住的 disconnect 长期占用, 限时后放弃串行化直接强拆 (最后手段, 与旧行为一致)。
      * vpnController.forceReset 覆盖 isRunning=false 时 disconnect 早退跳过的清理段;
      * 服务层状态/通知/前台与 disconnectInternal 对齐, 之后 stopSelf。
+     *
+     * 抢锁走 [acquireLockBounded] (tryLock 轮询): 返回 true 才算持有、返回 false 一定未持有。
+     * 曾有 `withTimeoutOrNull { lock() }` 在"已获得锁"与"超时返回 null"的边界上把锁永久占住,
+     * 之后所有 connect/disconnect/rebuild 死锁 (T-06)。
      */
     private suspend fun forceDisconnect() {
-        val lockAcquired =
-            withTimeoutOrNull(FORCE_DISCONNECT_LOCK_WAIT_MS) {
-                connectMutex.lock()
-                true
-            } ?: false
+        val lockAcquired = acquireLockBounded(connectMutex, FORCE_DISCONNECT_LOCK_WAIT_MS)
         if (!lockAcquired) {
             Log.w("SshVpnService", "Force disconnect: mutex busy, tearing down without lock (last resort)")
             VpnController.appLogThrottled(
@@ -909,14 +908,33 @@ class SshVpnService : VpnService() {
     }
 
     /**
-     * Failed 观察者是否应执行断开清理。三个跳过条件:
-     * 1. 池失败已有重连排队 — 该失败的收尾由重连负责;
-     * 2. 重连进行中 — 失败观察与重连的触发顺序不确定, 此时 disconnect 会拆掉刚重建的会话;
-     * 3. 已无可清理资源 — connect 自己的 catch 已清理过, 再跑一遍会把 Failed 状态复位成 Disconnected。
+     * Failed 观察者的"是否清理"判定与清理执行 **必须在同一个 connectMutex 临界区内** (T-07)。
+     *
+     * 旧实现: `shouldCleanupOnFailure()` 在锁外判定, 之后 `disconnect(false)` 才拿锁 —
+     * 判定与执行之间 `autoReconnect` 可能已持锁完成重建, 观察者随后把**新会话**拆掉。
+     * 现在重查与 [disconnectInternal] 共享一次加锁, 窗口内的重建要么在判定前完成
+     * (见下面的域状态复查), 要么排在本次清理之后 (重连自己会重建)。
+     *
+     * **不可嵌套 connectMutex** (Mutex 不可重入): 本函数是锁内入口, 只调 [disconnectInternal]。
      */
-    private fun shouldCleanupOnFailure(): Boolean {
-        if (poolFailReconnectPending || isReconnecting) return false
-        return vpnController.isVpnRunning() || vpnInterface != null
+    private suspend fun disconnectIfIdleOnFailure() {
+        connectMutex.withLock {
+            val hasLiveSession = vpnController.isVpnRunning() || vpnInterface != null
+            val shouldCleanup =
+                shouldCleanupFailureSession(
+                    poolFailReconnectPending = poolFailReconnectPending,
+                    isReconnecting = isReconnecting,
+                    hasLiveSession = hasLiveSession,
+                )
+            // 锁内重查仍拦不住"重建已在本协程等锁期间完成"（两个标志那时都已复位、新会话是活的）:
+            // 只有**当前**域状态仍是 Failed 才拆 —— 重连成功已把它翻成 Connecting/Connected,
+            // 这时拆掉的就是刚重建的新会话 (F-07 的 TOCTOU 本体)。
+            if (!shouldCleanup || vpnController.vpnState.value.status != DomainVpnState.VpnStatus.Failed) {
+                return@withLock
+            }
+            VpnController.appLog("连接失败 · 已清理会话 (空闲态)")
+            disconnectInternal(userInitiated = false)
+        }
     }
 
     private fun observeVpnControllerState() {
@@ -928,9 +946,9 @@ class SshVpnService : VpnService() {
                     serviceVpnState.value = state
                     updateHealthNotification(state)
                     // F12-i 兜底: packetLoop 连续读失败已退出 (状态 Failed) → 完整清理资源;
-                    // disconnect(false) 保留 lastServerId 供重连。幂等, 与 connect catch 不冲突。
-                    if (state.status == DomainVpnState.VpnStatus.Failed && shouldCleanupOnFailure()) {
-                        disconnect(userInitiated = false)
+                    // disconnectInternal(false) 保留 lastServerId 供重连。幂等, 与 connect catch 不冲突。
+                    if (state.status == DomainVpnState.VpnStatus.Failed) {
+                        disconnectIfIdleOnFailure()
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
