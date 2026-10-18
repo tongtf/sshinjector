@@ -12,6 +12,7 @@ import cn.srv0.sshinjector.domain.model.VpnState
 import cn.srv0.sshinjector.domain.vpn.AdBlocker
 import cn.srv0.sshinjector.domain.vpn.CidrRoute
 import cn.srv0.sshinjector.domain.vpn.DNS_MODE_WHITELIST
+import cn.srv0.sshinjector.domain.vpn.DataPlaneSnapshot
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
 import cn.srv0.sshinjector.domain.vpn.GfwListMatcher
 import cn.srv0.sshinjector.domain.vpn.IpPacketParser
@@ -1245,26 +1246,28 @@ class VpnController
                         val up = bytesUpCounter.get()
                         val down = bytesDownCounter.get()
                         val rateText =
-                            if (windowSec > 0) {
-                                val upRate = (up - lastSnapshotUp) / windowSec
-                                val downRate = (down - lastSnapshotDown) / windowSec
-                                "↑$upRate B/s ↓$downRate B/s"
-                            } else {
-                                "速率待下一窗口"
-                            }
+                            DataPlaneSnapshot.rateText(windowSec, up, down, lastSnapshotUp, lastSnapshotDown)
                         lastSnapshotUp = up
                         lastSnapshotDown = down
                         val tunnelStats = tunnelManager.getActiveOrFallback().tunnelDiagnostics()
+                        // 文案拼装与速率算术已抽到 DataPlaneSnapshot (纯函数 + 单测锁死方向语义):
+                        // up = 读 TUN = 上行, down = 写 TUN = 下行, 别再弄反。
                         appLog(
-                            "数据面快照 · 上行 $up B / 下行 $down B · 包 ↑${packetsReceivedCounter.get()} " +
-                                "↓${packetsSentCounter.get()} · $rateText · " +
-                                "TUN 写丢弃 ${droppedTunControlPackets.get()} 个" +
-                                "(${droppedTunControlBytes.get()}B 控制包) · " +
-                                "TUN 残留未解析 ${trailingBytesDropped.get()}B · " +
-                                "TUN 接口空丢包 ${droppedNoTun.get()} · " +
-                                "${packetProcessor.tcpDiagnostics()} · " +
-                                "${packetProcessor.udpDiagnostics()} · " +
-                                "${packetProcessor.ipv6Diagnostics()} · $tunnelStats",
+                            DataPlaneSnapshot(
+                                upBytes = up,
+                                downBytes = down,
+                                packetsReceived = packetsReceivedCounter.get(),
+                                packetsSent = packetsSentCounter.get(),
+                                rateText = rateText,
+                                tunControlDropped = droppedTunControlPackets.get(),
+                                tunControlDroppedBytes = droppedTunControlBytes.get(),
+                                tunTrailingDropped = trailingBytesDropped.get(),
+                                tunNoInterfaceDropped = droppedNoTun.get(),
+                                tcpDiagnostics = packetProcessor.tcpDiagnostics(),
+                                udpDiagnostics = packetProcessor.udpDiagnostics(),
+                                ipv6Diagnostics = packetProcessor.ipv6Diagnostics(),
+                                tunnelDiagnostics = tunnelStats,
+                            ).render(),
                         )
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
