@@ -137,22 +137,34 @@ Unit tests in `app/src/test/java/cn/srv0/sshinjector/`. Concurrency-critical one
 - **两个指标口径 (改前先想清楚再动)**: ① `flowBlockedMillis` 必须记**真实**等待时长 (`System.nanoTime()` 前后差), 无条件 `addAndGet(FLOW_WAIT_TIMEOUT_MS)` 会把被每个 ACK `notifyAll` 提前唤醒的几十毫秒记成 1s → 快照「回程闸门阻塞」虚高约 20×; ② 孤儿包按 flags 分列 (`fin/rst/ack/data`) 进快照 —— 不分列时**必然发生的 TCP 收尾尾包**会把真·过期/错投包淹没, 这个数永远没法用来判断有没有问题。另外 `awaitFlowCapacity` 循环退出时必须复查 `state == Closed` 返回 0, 否则会为刚关掉的连接组包写 TUN 并推进 `serverSeq` (违反自身 KDoc)。
 - **探测 0 字节关闭归 TUNNEL 不归 REMOTE**: `ConnectivityProber.readLine` 返回 `String?` (null = **首字节即 EOF**, 不能再折叠成空串 —— 折叠后 reason 恒为 `no http status line: `, 四种成因分不出来)。探测端点是必然回状态行的健康服务, 一个字节都没回来 = 断在本栈到远端之间 (SSH 会话健康但单条通道死也长这样), 归 REMOTE 曾把排查带向"远端不可达"。非空但非 HTTP 状态行的垃圾响应仍归 REMOTE。单测 `ConnectivityProberTest.zero byte eof at http phase attributed to TUNNEL not REMOTE`。
 
-## 已知缺陷 (2026-10-18 审计, **未修**)
+## 缺陷修复状态 (2026-10-18 审计 → **已修 22/24**)
 
-> 全量记录见 **`docs/specs/2026-10-18-defect-audit.md`** (功能/流程 + **安全 §7** + **资源泄漏 §8** + **性能 §9** 四类, 每条附证据/file:line, 含「读码确认 vs 待真机复现」与「已核实非缺陷」清单); **对应修复设计见 `docs/specs/2026-10-18-fix-design.md`** (按 P0/P1/P2 批次, 含代码级方案/测试/风险), **开发 TODO 见 `docs/specs/2026-10-18-fix-todo.md`** (`T-xx` 逐条可勾选: 步骤/自动+手工验证/监测/不变量护栏/回滚/DoD)。下面是会影响改动决策的高危/中危项 —— **改到这些代码前先读这三份文档**, 别把已核实的缺陷当既有行为沿用。
+> 三份文档: **审计** `docs/specs/2026-10-18-defect-audit.md` (§0-§9: 功能/安全/资源/性能, 附 file:line)、**设计** `docs/specs/2026-10-18-fix-design.md` (F-xx ↔ T-xx)、**TODO** `docs/specs/2026-10-18-fix-todo.md` (逐条步骤/验证/监测/护栏, 末尾「附二」是实施结果与遗留)。**改到相关代码前先读这三份**。
 
-- **一键配置向导的正常路径当前必失败 (高)**: `ServerProvisioner.kt:127,172` 的 `/tmp/sshinjector_{setup,pubkey}_$$.{sh,pub}` 用的是 shell `$$` (Kotlin 里 `$` 后接 `$` = 字面量, 到远端才展开成 PID), 而 `execSingleShot` **每次调用都新建 JSch session** → 上传那条 exec 与执行那条 exec 分属不同 PID → `sh /tmp/..._$$.sh` 找不到文件。修时必须改用**本地生成的后缀** (UUID/SecureRandom) 并在同批次每条 exec 里复用同一字符串, **不要**用 `$$`/`$RANDOM` 这类远端展开 (现有 `ServerProvisionerTest` 是 mock 字符串匹配, 测不出)。
-- **需要 sudo 密码的主机永远落 `LocalOnly` (中)**: `ServerProvisioner.kt:204` 以 `exec(login, null, "sudo -S -p '' true")` 探测, 而 `exec()` 只在 `sudoPrefix == SUDO_WITH_PASSWORD` 时才把密码前置进 stdin → 探测必失败。修完向导那条后这是第二优先。
-- **「重置服务器指纹」是空操作 (中)**: `ServerEditViewModel.resetHostKey` 只删 known_hosts; `JschSshClient.kt:231-234` 的 `KnownHostsHostKeyRepository.check()` 在 `config.hostKeyFingerprint` 非空时**以 DB 指纹为权威**, 而 `Daos.kt` 只有 `updateHostKeyFingerprint` 没有清空列 → 首连 TOFU 落库后重置无效。要真重置必须同时清 `servers.hostKeyFingerprint`。
-- **硬件 RSA 密钥不可用 (中)**: UI 生成对话框可选 `RSA 2048` (= AndroidKeyStore 不可导出 → 走 `AndroidKeyStoreIdentity`), 但该类 RSA 分支返回**裸签名**, 而 jsch 要求 `string alg ‖ string sig` (`KeyPairRSA.getSignature` 用 `Buffer.fromBytes([alg, sig])`, `UserAuthPublicKey` 再 `putString`); 且未覆写 2 参 `getSignature(data, alg)`。另 P-384 因 `PrivateKey as? ECPublicKey` 恒 null 而按 SHA-256 签 (声明却是 nistp384)。改密钥层前读该文档 §2-B/2-C。
-- **`forceDisconnect` 有永久持锁风险 (中)**: `SshVpnService.kt:862-867` `withTimeoutOrNull { connectMutex.lock() }` 若在 `lock()` 已成功后被超时取消 → 返回 null 走「无锁」分支, 但**锁已被持有且永不 unlock** → 之后所有 connect/disconnect/rebuild 死锁。别用超时包 `lock()` (要超时得保证拿不到锁时锁确实未被获取)。
-- **假 IP 计数器只升不降 → 池耗尽不自愈 (中)**: `DnsInterceptor.resetFakeIpCounters` 走 `clampFakeIpCounter` = `maxOf(cur, maxSeen, base)`, LRU trim 后峰值 `cur` 不回拨; IPv4 段仅 131072 个地址, 用尽后 REMOTE 模式 A/AAAA 解析**永久失败**且 30s trim 救不回。**与 Key Gotchas「假 IP 生命周期」的无符号 clamp 是两回事** (那条防的是回拨成负数 bug; 这条缺的是安全回收) —— 改这里别把 clamp 一起去掉。
-- **UI 层未修项**: 白名单「全选」空操作 (`WhitelistScreen.kt:85,255` 声明/切换 `selectAll` 但全仓无人消费, 不打 `enabledPackages`); 连接失败后服务器卡片转圈不消失 (`ServerListViewModel.kt:80` 置位, 仅 `isActive` 变 true 才清); 全局设置 MTU 滑块 `1280f..1500f`、KeepAlive `10f..120f` 与校验器 `576-1500`/`0-3600` 不一致且**无法取消全局覆盖/无法设 keepAlive=0** (`SettingsScreen.kt:211,227`); 域名列表 URL 输入框 `remember` 固定无 `LaunchedEffect(domainListUrl)` 同步 (`DomainListSettingsScreen.kt:52`); 编辑页不校验 `keyAlias` (`ServerEditScreen.kt:132-133`); 生物识别门禁取不到 Activity 时直接放行 (fail-open) 且门禁 AES key 与 SSH 签名 key 不同源。
-- **安全 · dropbear 路径越权 (高)**: `assets/ssh_setup_script.sh:31,187-197` 在 dropbear/OpenWrt 分支把隧道账号的公钥**同时**写进 `${DROPBEAR_AUTHKEYS}=/root/.ssh/authorized_keys` → 手机私钥可直接以 **root** 登录 (OpenSSH 路径的「专用账号 + chroot」硬化在 dropbear 路径失效)。修 dropbear 分支前先读该文档 §7 SEC-1。
-- **安全 · 首连静默 TOFU (中)**: `JschSshClient.kt:236-242` 首次连接无条件信任并落库主机指纹, 无任何带外确认; 配置向导连接 (`id<=0`) 连指纹都不落库。§7 SEC-3。
-- **资源 · session 池不排空 (中)**: `JschSshClient.disconnect()` 首行 `if (!isConnectedFlag.getAndSet(false)) return true` 早退, 而 `checkPoolHealth()` 已把该标志置 false 且**不排空 pool** → 池失败重连时排空循环 (`:945-953`) 永不可达, `connect()` 的 `pool.add` 每次叠加最多 3 条滞留 Session → 随池失败重连累积。§8 LEAK-1。
-- **性能 · TUN 写全局串行 (中)**: `VpnController.writeToTun` 是 `@Synchronized` 且锁内 `outputStream.write` 阻塞 → packetLoop ACK / DNS 投递 / 每条 SSH relay 回程共用一把 monitor, TUN 缓冲满时跨连接 head-of-line。整包原子性必需, 但代价要知情 (§9 PERF-1)。
-- **性能 · 每包分配 (中)**: packetLoop 单线程上 `extractDstIp`(排除路由非空时每包)+`IpPacketParser` 地址解析+`connectionKey` `.address` 克隆 ≈ 每包 5-7 次堆分配; 回程组包每段另约 4 次 (§9 PERF-2/PERF-3)。改数据面热路径时留意分配预算。
+**已修 (全部有单测/门禁覆盖, 见 TODO 的提交号)**
+
+- 向导: 临时路径 `$$` → 本地 `runId` (每次 exec 新建 session 也不失配); sudo 密码探测传对 `sudoPrefix`
+- 「重置主机指纹」现在同时清 `servers.hostKeyFingerprint` (DB 是权威源)
+- 硬件密钥签名 blob 按 jsch 期望编码 (`string alg ‖ string sig`), P-384 用 SHA-384
+- dropbear 分支不再把隧道公钥写进 `/root/.ssh/authorized_keys`
+- `forceDisconnect` 改 `tryLock` 配对 (`vpn/SessionLock.kt`); Failed 观察者锁内重查状态
+- 假 IP 池耗尽原子自愈 (**整体重置**, 不回收单值以免跨域名串号; 保留无符号 clamp 不变量)
+- SSH 会话池 `disconnect()` 无条件排空; 往返探活通道/线程及时释放
+- 生物识别门禁 fail-closed; 生成 SSH key 补 `setInvalidatedByBiometricEnrollment(true)`
+- 白名单「全选」落到当前过滤集; 「系统应用」筛选不再恒空; 连接失败/超时清除转圈
+- 全局 MTU/保活滑块与校验器对齐 (576-1500 / 0-3600), 新增「跟随服务器设置」清除覆盖
+- 域名列表 URL 输入框跟随持久值; 编辑页与向导校验 `keyAlias`; 向导 name 超长拦截 + `trim()` 落库
+- 回程组包缓存 `srcIpBytes/dstIpBytes` (不再每段克隆 `InetAddress.address`); IPv4 id 改计数器; LRU 时钟改 `nanoTime`
+- 算法白名单去 `ssh-rsa`; 移除 `READ_PHONE_STATE` (蜂窝网络显示粗粒度标签); `protectSocket`/`dnsInterceptor` 补 `@Volatile`
+- 密钥生成/导入失败不再静默返回 (页面弹错误并留在原页, 成功才返回)
+
+**遗留 (故意未做 —— 动它们之前先读 TODO「附二」)**
+
+- **`writeToTun` 仍 `@Synchronized`**: 锁内是 `FileOutputStream.write(byte[])`, 整包原子性需真机/驱动实测; 无设备不摘安全设施 (A 去锁 / B 专用写线程 + 有界队列 已记录)。
+- **`forwardSynToTunnel` 仍走 `Dispatchers.IO`**: 现实现用 `Thread.sleep(2)` 轮询, 直接搬到 `SshIoDispatcher` 会让半阻塞握手占满专用池并挤掉回程读线程 —— 必须先改造成 `delay` 驱动, 是重构不是小改。
+- `extractDstIp` / 旁路前缀预编译未做 (需基准数据); Dashboard 重组未调优 (需 profiler)。
+- **首连 TOFU 仍无带外确认** (SEC-3): 只是从静默变为可见日志, 未做阻断式确认 (设计文档 W-2)。
+- 审计文档里 waived 的 W-1…W-5 (进程级 scope 释放 / 阻断式指纹确认 / 假 IP 复用 / 门禁 key 密码学绑定 / 已证伪项) 仍未处理。
 
 ## Device Testing (adb)
 
