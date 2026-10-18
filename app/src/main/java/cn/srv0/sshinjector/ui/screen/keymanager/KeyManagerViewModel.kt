@@ -46,6 +46,10 @@ class KeyManagerViewModel
         private val _error = MutableSharedFlow<String>(extraBufferCapacity = 1)
         val error = _error.asSharedFlow()
 
+        /** T-24: 生成/导入成功信号 —— 页面据此才返回, 失败时留在原页并弹错误。 */
+        private val _success = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+        val success = _success.asSharedFlow()
+
         fun refresh() {
             viewModelScope.launch {
                 // F12-k: Keystore/证书查询是阻塞 IO, 不进 Main
@@ -79,6 +83,7 @@ class KeyManagerViewModel
                     val useBiometric = requireBiometric || settingsDataStore.biometricUnlock.first()
                     keyManager.generateKeyPair(alias, algorithm, useBiometric)
                     refresh()
+                    _success.tryEmit(Unit)
                 } catch (e: Exception) {
                     _error.tryEmit("生成失败: ${e.message}")
                 }
@@ -94,6 +99,7 @@ class KeyManagerViewModel
                 try {
                     keyManager.importPrivateKey(alias, pem, passphrase)
                     refresh()
+                    _success.tryEmit(Unit)
                 } catch (e: Exception) {
                     _error.tryEmit("导入失败: ${e.message}")
                 }
@@ -108,6 +114,7 @@ class KeyManagerViewModel
                 try {
                     keyManager.importPublicKey(alias, pubKey)
                     refresh()
+                    _success.tryEmit(Unit)
                 } catch (e: Exception) {
                     _error.tryEmit("导入失败: ${e.message}")
                 }

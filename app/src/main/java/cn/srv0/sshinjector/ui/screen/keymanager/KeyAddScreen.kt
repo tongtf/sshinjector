@@ -20,10 +20,13 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -50,9 +53,20 @@ fun KeyAddScreen(
     var generateAlgorithm by remember { mutableIntStateOf(0) }
     var importedKey by remember { mutableStateOf("") }
     var importIsPublic by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // T-24: 失败必须可见 (原实现无条件返回, 导入非法 PEM 时用户看不到任何反馈)
+    LaunchedEffect(Unit) {
+        viewModel.error.collect { snackbarHostState.showSnackbar(it) }
+    }
+    // 只有真正写成功才返回, 失败留在本页可重试
+    LaunchedEffect(Unit) {
+        viewModel.success.collect { onNavigateBack() }
+    }
 
     Scaffold(
         modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.key_add_title)) },
@@ -156,7 +170,6 @@ fun KeyAddScreen(
                     algo,
                     false,
                 )
-                onNavigateBack()
             },
             onDismiss = { showGenerateDialog = false },
             selectedAlgorithm = generateAlgorithm,
@@ -174,7 +187,6 @@ fun KeyAddScreen(
                 } else {
                     viewModel.importPrivateKey(alias, keyContent)
                 }
-                onNavigateBack()
             },
             onDismiss = { showImportDialog = false },
             isPublic = importIsPublic,
