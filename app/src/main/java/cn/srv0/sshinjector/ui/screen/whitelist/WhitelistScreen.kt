@@ -82,11 +82,10 @@ fun WhitelistScreen(
     val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
     var isSearchActive by remember { mutableStateOf(false) }
-    var selectAll by remember { mutableStateOf(false) }
     var hideSystemApps by remember { mutableStateOf(true) }
     var hasPermission by remember { mutableStateOf(false) }
     var showPermissionDialog by remember { mutableStateOf(false) }
-    var filterMode by remember { mutableIntStateOf(0) }
+    var filterMode by remember { mutableIntStateOf(WHITELIST_FILTER_ALL) }
 
     val enabledPackages by viewModel.enabledPackages.collectAsState()
     val allApps by viewModel.cachedApps.collectAsState()
@@ -147,22 +146,18 @@ fun WhitelistScreen(
         enabledPackages,
     ) {
         derivedStateOf {
-            var list =
-                if (searchQuery.isBlank()) {
-                    allApps
-                } else {
-                    allApps.filter {
-                        it.name.contains(searchQuery, ignoreCase = true)
-                    }
-                }
-            if (hideSystemApps) list = list.filter { !it.isSystem }
-            when (filterMode) {
-                1 -> list = list.filter { it.packageName in enabledPackages }
-                2 -> list = list.filter { it.isSystem }
-            }
-            list
+            filterWhitelistApps(
+                allApps = allApps,
+                searchQuery = searchQuery,
+                hideSystemApps = hideSystemApps,
+                filterMode = filterMode,
+                enabledPackages = enabledPackages,
+            )
         }
     }
+
+    // T-13: 全选状态由当前过滤集派生 (不再是一个永不消费的本地布尔)
+    val allSelected = areAllSelected(filteredApps, enabledPackages)
 
     Scaffold(
         modifier = modifier,
@@ -252,20 +247,20 @@ fun WhitelistScreen(
                     }
                     if (!searchQuery.isBlank()) {
                         IconButton(onClick = {
-                            selectAll = !selectAll
+                            viewModel.setPackagesEnabled(filteredApps, enabled = !allSelected)
                         }) {
                             Icon(
                                 imageVector =
-                                    if (selectAll) {
+                                    if (allSelected) {
                                         Icons.Default.Check
                                     } else {
                                         Icons.Default.Done
                                     },
                                 contentDescription =
-                                    if (selectAll) {
-                                        stringResource(R.string.whitelist_select_all)
-                                    } else {
+                                    if (allSelected) {
                                         stringResource(R.string.whitelist_deselect_all)
+                                    } else {
+                                        stringResource(R.string.whitelist_select_all)
                                     },
                             )
                         }
@@ -330,8 +325,8 @@ fun WhitelistScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         FilterChip(
-                            selected = filterMode == 0,
-                            onClick = { filterMode = 0 },
+                            selected = filterMode == WHITELIST_FILTER_ALL,
+                            onClick = { filterMode = WHITELIST_FILTER_ALL },
                             label = {
                                 Text(
                                     stringResource(
@@ -343,8 +338,8 @@ fun WhitelistScreen(
                             modifier = Modifier.weight(1f),
                         )
                         FilterChip(
-                            selected = filterMode == 1,
-                            onClick = { filterMode = 1 },
+                            selected = filterMode == WHITELIST_FILTER_SELECTED,
+                            onClick = { filterMode = WHITELIST_FILTER_SELECTED },
                             label = {
                                 Text(
                                     stringResource(
@@ -356,8 +351,8 @@ fun WhitelistScreen(
                             modifier = Modifier.weight(1f),
                         )
                         FilterChip(
-                            selected = filterMode == 2,
-                            onClick = { filterMode = 2 },
+                            selected = filterMode == WHITELIST_FILTER_SYSTEM,
+                            onClick = { filterMode = WHITELIST_FILTER_SYSTEM },
                             label = {
                                 Text(
                                     stringResource(
