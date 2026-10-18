@@ -6,7 +6,9 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import cn.srv0.sshinjector.domain.model.ServerConfig
+import cn.srv0.sshinjector.domain.model.VpnState
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
+import cn.srv0.sshinjector.domain.usecase.VpnController
 import cn.srv0.sshinjector.vpn.SshVpnService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -27,6 +29,7 @@ class ServerListViewModel
     constructor(
         application: Application,
         private val serverRepository: ServerRepository,
+        private val vpnController: VpnController,
     ) : AndroidViewModel(application) {
         private val _servers = MutableStateFlow<List<ServerConfig>>(emptyList())
         val servers = _servers.asStateFlow()
@@ -99,15 +102,22 @@ class ServerListViewModel
         }
 
         /**
-         * 收起「连接中」转圈 (T-14)。连接是异步的且失败没有回写 `isActive`, 所以只依赖
-         * `isActive` 变 true 会让失败后卡片永久转圈。这里等成功 (`isActive`) 或超时兜底,
-         * 两者都在 `finally` 里收起转圈。
+         * 收起「连接中」转圈 (T-14)。
+         *
+         * 连接是异步的, 且失败不会回写 `isActive` (那是"默认服务器"标志, 与连通性无关) ——
+         * 只等 `isActive` 会让失败后卡片永久转圈。这里直接看 VPN 状态机的终态
+         * (`Connected` / `Failed` / 用户取消时的 `Disconnecting`), 外加超时兜底。
+         * 起始态是 `Disconnected`, 不会被误判成"已结束"。
          */
         private fun watchConnecting(id: Long) {
             viewModelScope.launch {
                 try {
                     withTimeoutOrNull(CONNECTING_CLEAR_TIMEOUT_MS) {
-                        _servers.first { list -> list.any { it.id == id && it.isActive } }
+                        vpnController.vpnState.first {
+                            it.status == VpnState.VpnStatus.Connected ||
+                                it.status == VpnState.VpnStatus.Failed ||
+                                it.status == VpnState.VpnStatus.Disconnecting
+                        }
                     }
                 } finally {
                     // 仅收起本连接自己的转圈, 避免旧 watchdog 误清后续连接的状态

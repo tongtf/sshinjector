@@ -62,8 +62,9 @@ class WhitelistViewModel
         /**
          * 对「当前过滤集」批量启用/取消 (T-13 全选/反选)。
          *
-         * 复用单包路径 ([addToWhitelist]/[removeFromWhitelist]) 逐条持久化: 白名单变化由
-         * [SshVpnService] 的 `enabledWhitelistFlow` 观察者触发同一套 VPN 接口重建, 无需另发信号。
+         * **必须一次事务写完**: 逐条写会让 `enabledWhitelistFlow` 逐条发射, 而
+         * `SshVpnService` 的观察者是 `collectLatest { rebuildVpnInterfaceInternal() }` ——
+         * 全选几百个应用就会重建几百次 TUN (并与 disconnect 抢 `connectMutex`)。
          */
         fun setPackagesEnabled(
             apps: List<InstalledApp>,
@@ -71,15 +72,10 @@ class WhitelistViewModel
         ) {
             if (apps.isEmpty()) return
             viewModelScope.launch {
-                for (app in apps) {
-                    if (enabled) {
-                        serverRepository.addToWhitelist(
-                            WhitelistApp(packageName = app.packageName, appName = app.name),
-                        )
-                    } else {
-                        serverRepository.removeFromWhitelist(app.packageName)
-                    }
-                }
+                serverRepository.setWhitelistPackages(
+                    apps.map { WhitelistApp(packageName = it.packageName, appName = it.name) },
+                    enabled = enabled,
+                )
             }
         }
 

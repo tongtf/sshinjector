@@ -84,6 +84,8 @@ fun ServerEditScreen(
     var keepAlive by remember { mutableStateOf("30") }
     var setAsDefault by remember { mutableStateOf(false) }
     var socksPort by remember { mutableStateOf("1080") }
+    // T-17: 老版本可能存过纯密码认证的服务器 (本页无密码输入框), 这类条目不能强行要求密钥
+    var storedHasPassword by remember { mutableStateOf(false) }
 
     val availableKeys by viewModel.keyAliases.collectAsState()
     val globalSettings by viewModel.globalSettings.collectAsState()
@@ -104,6 +106,7 @@ fun ServerEditScreen(
             keepAlive = entity.keepAliveInterval.toString()
             setAsDefault = entity.isActive
             socksPort = entity.socksPort.toString()
+            storedHasPassword = !entity.password.isNullOrBlank()
         }
     }
 
@@ -136,7 +139,8 @@ fun ServerEditScreen(
     val mtuErr = ServerFormValidator.mtuError(mtu)
     val keepAliveErr = ServerFormValidator.keepAliveError(keepAlive)
     // T-17: 本页只支持密钥登录, keyAlias 为空即无法连接 -- 保存前必须拦住
-    val keyAliasErr = ServerFormValidator.keyAliasError(keyAlias)
+    // (纯密码认证的历史条目除外: 本页无法改密码, 拦下来等于让用户连改名都做不了)
+    val keyAliasErr = if (storedHasPassword) null else ServerFormValidator.keyAliasError(keyAlias)
     val firstError =
         listOfNotNull(nameErr, hostErr, portErr, usernameErr, socksPortErr, mtuErr, keepAliveErr, keyAliasErr)
             .firstOrNull()

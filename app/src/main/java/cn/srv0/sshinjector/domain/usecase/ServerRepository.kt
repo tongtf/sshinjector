@@ -18,6 +18,9 @@ import java.util.Date
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** SQLite 单条语句的变量上限是 999, 批量白名单写入按此上限切分。 */
+private const val WHITELIST_BATCH_SIZE = 500
+
 @Singleton
 class ServerRepository
     @Inject
@@ -185,6 +188,27 @@ class ServerRepository
             withContext(Dispatchers.IO) {
                 whitelistDao.delete(packageName)
             }
+
+        /**
+         * 批量启用/取消 (T-13)。单次事务只发射一次白名单变更, 避免「全选」把
+         * `SshVpnService` 的 TUN 重建观察者打成几百连击。
+         */
+        suspend fun setWhitelistPackages(
+            apps: List<WhitelistApp>,
+            enabled: Boolean,
+        ) = withContext(Dispatchers.IO) {
+            if (apps.isEmpty()) return@withContext
+            // SQLite 单语句变量上限 999, 留出余量分批
+            if (enabled) {
+                apps.chunked(WHITELIST_BATCH_SIZE).forEach { chunk ->
+                    whitelistDao.insertAll(chunk.map { it.toEntity() })
+                }
+            } else {
+                apps.chunked(WHITELIST_BATCH_SIZE).forEach { chunk ->
+                    whitelistDao.deleteAll(chunk.map { it.packageName })
+                }
+            }
+        }
 
         suspend fun getEnabledPackageNames(): List<String> =
             withContext(Dispatchers.IO) {

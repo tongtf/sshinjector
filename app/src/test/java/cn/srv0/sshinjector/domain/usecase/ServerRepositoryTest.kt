@@ -4,8 +4,10 @@ import cn.srv0.sshinjector.data.local.dao.ServerDao
 import cn.srv0.sshinjector.data.local.dao.WhitelistDao
 import cn.srv0.sshinjector.data.local.entity.DnsMode
 import cn.srv0.sshinjector.data.local.entity.ServerEntity
+import cn.srv0.sshinjector.data.local.entity.WhitelistAppEntity
 import cn.srv0.sshinjector.data.remote.ssh.CredentialCrypto
 import cn.srv0.sshinjector.domain.model.ServerConfig
+import cn.srv0.sshinjector.domain.model.WhitelistApp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -22,6 +24,7 @@ import org.mockito.kotlin.doSuspendableAnswer
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.stub
+import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import java.util.Date
@@ -35,6 +38,7 @@ import java.util.Date
 @OptIn(ExperimentalCoroutinesApi::class)
 class ServerRepositoryTest {
     private lateinit var serverDao: ServerDao
+    private lateinit var whitelistDao: WhitelistDao
     private lateinit var credentialCrypto: CredentialCrypto
     private lateinit var repository: ServerRepository
 
@@ -42,7 +46,7 @@ class ServerRepositoryTest {
     fun setUp() {
         Dispatchers.setMain(StandardTestDispatcher())
         serverDao = mock()
-        val whitelistDao = mock<WhitelistDao>()
+        whitelistDao = mock()
         credentialCrypto = mock()
         whenever(credentialCrypto.encrypt(any())).thenAnswer { inv ->
             inv.getArgument<String?>(0)?.let { "enc:v1:$it" }
@@ -233,5 +237,30 @@ class ServerRepositoryTest {
             repository.resetHostKeyFingerprint(0L)
 
             verify(serverDao, never()).clearHostKeyFingerprint(any())
+        }
+
+    @Test
+    fun `batch whitelist enable is one write per chunk so the vpn rebuild fires once`() =
+        runTest {
+            val apps = (1..1200).map { WhitelistApp("p$it", "A$it") }
+
+            repository.setWhitelistPackages(apps, enabled = true)
+
+            // 逐条写会让 SshVpnService 的 collectLatest 观察者重建 TUN 1200 次
+            val captor = argumentCaptor<List<WhitelistAppEntity>>()
+            verify(whitelistDao, times(3)).insertAll(captor.capture())
+            assertEquals(listOf(500, 500, 200), captor.allValues.map { it.size })
+        }
+
+    @Test
+    fun `batch whitelist disable also writes per chunk`() =
+        runTest {
+            val apps = (1..600).map { WhitelistApp("p$it", "A$it") }
+
+            repository.setWhitelistPackages(apps, enabled = false)
+
+            val captor = argumentCaptor<List<String>>()
+            verify(whitelistDao, times(2)).deleteAll(captor.capture())
+            assertEquals(listOf(500, 100), captor.allValues.map { it.size })
         }
 }

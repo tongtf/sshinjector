@@ -90,6 +90,18 @@ interface WhitelistDao {
     @Query("DELETE FROM whitelist_apps WHERE packageName = :packageName")
     suspend fun delete(packageName: String): Int
 
+    /**
+     * 批量启用 (T-13)。必须走单事务: 逐条 insert 会让 `enabledWhitelistFlow` 逐条发射,
+     * 而 `SshVpnService` 的观察者是 `collectLatest { rebuildVpnInterfaceInternal() }` ——
+     * 一次「全选」几百个应用会触发几百次 TUN 重建 (还会与 disconnect 抢 connectMutex)。
+     */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(apps: List<WhitelistAppEntity>)
+
+    /** 批量取消 (T-13), 理由同 [insertAll]。调用方负责按 500 一批切分 (SQLite 变量上限 999)。 */
+    @Query("DELETE FROM whitelist_apps WHERE packageName IN (:packageNames)")
+    suspend fun deleteAll(packageNames: List<String>)
+
     @Query("SELECT * FROM whitelist_apps WHERE isEnabled = 1")
     fun getEnabled(): Flow<List<WhitelistAppEntity>>
 
