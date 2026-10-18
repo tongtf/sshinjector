@@ -13,8 +13,13 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
+
+/** T-14: 「连接中」转圈的兜底收起时间。成功由 `isActive` 提前结束, 失败靠它超时收起。 */
+private const val CONNECTING_CLEAR_TIMEOUT_MS = 30_000L
 
 @HiltViewModel
 class ServerListViewModel
@@ -85,16 +90,35 @@ class ServerListViewModel
                         putExtra(SshVpnService.EXTRA_SERVER_ID, id)
                     }
                 context.startForegroundService(intent)
+                watchConnecting(id)
             } catch (e: Exception) {
                 Log.e("ServerListViewModel", "Failed to start VPN service: ${e.message}", e)
-                _connectingServerId.value = null
+                clearConnecting()
                 _error.tryEmit("启动 VPN 服务失败: ${e.message}")
+            }
+        }
+
+        /**
+         * 收起「连接中」转圈 (T-14)。连接是异步的且失败没有回写 `isActive`, 所以只依赖
+         * `isActive` 变 true 会让失败后卡片永久转圈。这里等成功 (`isActive`) 或超时兜底,
+         * 两者都在 `finally` 里收起转圈。
+         */
+        private fun watchConnecting(id: Long) {
+            viewModelScope.launch {
+                try {
+                    withTimeoutOrNull(CONNECTING_CLEAR_TIMEOUT_MS) {
+                        _servers.first { list -> list.any { it.id == id && it.isActive } }
+                    }
+                } finally {
+                    // 仅收起本连接自己的转圈, 避免旧 watchdog 误清后续连接的状态
+                    if (_connectingServerId.value == id) clearConnecting()
+                }
             }
         }
 
         fun disconnect() {
             try {
-                _connectingServerId.value = null
+                clearConnecting()
                 val context = getApplication<Application>()
                 val intent =
                     Intent(context, SshVpnService::class.java).apply {
