@@ -174,6 +174,18 @@ export JAVA_HOME=/opt/homebrew/opt/openjdk@17
   - `N/M` 越接近 M 越好 (说明确实逐个试了);
   - `Xms ≈ 3000` = 等不到 `OPEN_CONFIRMATION` (会话读线程被堵 / 服务器还没把目标连上);
   - `Xms` 只有几十~几百 ms = sshd **秒回** `OPEN_FAILURE` (目标不可达, 与本地栈无关)。
+  > **2026-10-18 真机解析完这条分支的完整因果链** (Play 下载 + YouTube, 3.5 分钟内 ~200 条连接里
+  > 只出现 1 次): `SSH 通道打开失败 · rr3---sn-q4fzen7r.googlevideo.com:443 — channel is not opened.
+  > · 试了 3/3 个候选 · 末次耗时 131ms` —— 该节点名在 **8.8.8.8 与 1.1.1.1 上都是 NXDOMAIN**
+  > (同族 `sn-q4fzen7y`/`sn-q4fl6nsl`/`sn-hgn7rn7y` 全部 NOERROR, VPS 的 `/etc/resolv.conf`
+  > 也是正常 systemd-resolved 软链), 即 Google 交给客户端的节点名**在全局 DNS 里就不存在**。
+  > 链路: 假 IP 模式**不查上游直接就答** (`DnsInterceptor` "走隧道: 不做真实 DNS 解析, 分配假 IP"),
+  > 所以这个不存在的名字照样拿到假 IP → 客户端 CONNECT → sshd `getaddrinfo` NXDOMAIN →
+  > **秒回** `CHANNEL_OPEN_FAILURE` → `createDirectChannel` 返回 null → `rep=5`。客户端当场换节点重试,
+  > 同一批次 `gvt1.com`/`googlevideo.com` 正常下完 5~27MB (单条最大 26MB, clean EOF)。
+  > 结论: **秒回分支 = 目标/服务端侧, 不要动本栈**; 假 IP 模式的固有代价是"不存在的名字不会以
+  > NXDOMAIN 回给客户端, 而是变成一次快速失败的 CONNECT + 客户端重试"(~200ms)。
+  > 判据补充: 同一批次里 `试了 3/3` 本身就证明候选预算没退化 —— 老 bug 的形态是 `试了 1/M`。
 - **不得出现**: `试了 1/3 个候选` 且 `末次耗时 ≈ 3000` (说明"逐个尝试"又退化了);
   同一批候选在 30s 内反复出现 `通道打开失败` (stall 后置失效 → 越坏越优先)。
 
