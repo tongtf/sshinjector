@@ -1261,9 +1261,9 @@ class TcpStateMachine(
      * 锁纪律 (改动前先读, 违反会死锁):
      * - 谓词计算与 wait 必须同持 [TcpConnection.flowLock], 否则 notify 与等待竞态漏唤醒;
      * - 1s 超时重查是漏通知兜底, 不可移除;
-     * - TUN 写入 ([writeTcpPayloadToTun] 的 writer 调用) 严禁在锁内: writeToTun 是
-     *   @Synchronized 且可能阻塞, 而 packetLoop 发窗口更新 ACK 前要抢 flowLock ——
-     *   持 flowLock 写 TUN 会与 packetLoop 形成锁序死锁 (TUN 满 → packetLoop 卡 → 更满)。
+     * - TUN 写入 ([writeTcpPayloadToTun] 的 sink 调用) 严禁在锁内: 回程数据走
+     *   `TunSink.writeBlocking` (单写者队列满时会阻塞), 而 packetLoop 发窗口更新 ACK 前要抢
+     *   flowLock —— 持 flowLock 写 TUN 会与 packetLoop 形成锁序死锁 (TUN 满 → packetLoop 卡 → 更满)。
      */
     @Suppress("ReturnCount") // closed/interrupted 各自早退, 合并单出口反而绕
     private fun awaitFlowCapacity(conn: TcpConnection): Int {

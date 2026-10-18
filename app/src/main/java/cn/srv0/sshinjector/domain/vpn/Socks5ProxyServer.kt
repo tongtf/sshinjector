@@ -917,7 +917,7 @@ private class Socks5Connection(
                     if (read > 0) {
                         lastActivity = System.currentTimeMillis()
                         // 必须在 callback **之前**计数: callback 走 writeTcpPayloadToTun →
-                        // @Synchronized writeToTun, 可能阻塞; 之后再计数会把"SSH 其实读到了"
+                        // TunSink.writeBlocking (队列满时会阻塞); 之后再计数会把"SSH 其实读到了"
                         // 的字节藏起来, 零回程诊断就把"回程堵在 TUN 写"误判成"远端没回话"。
                         fromTunnelTotal.addAndGet(read.toLong())
                         if (IS_DEBUG) {

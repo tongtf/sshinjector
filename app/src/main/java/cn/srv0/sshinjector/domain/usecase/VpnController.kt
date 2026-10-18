@@ -18,6 +18,7 @@ import cn.srv0.sshinjector.domain.vpn.IpPacketParser
 import cn.srv0.sshinjector.domain.vpn.PacketProcessor
 import cn.srv0.sshinjector.domain.vpn.StageCounters
 import cn.srv0.sshinjector.domain.vpn.StageHealthEvaluator
+import cn.srv0.sshinjector.domain.vpn.TunWriter
 import cn.srv0.sshinjector.domain.vpn.VpnNetwork
 import cn.srv0.sshinjector.domain.vpn.dnsTransportFor
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelConfig
@@ -62,6 +63,7 @@ private val IS_DEBUG = Log.isLoggable("VpnController", Log.DEBUG)
  * 协调隧道插件、DNS 拦截、数据包处理
  */
 @Singleton
+@Suppress("TooManyFunctions") // 编排 + TUN 读写 + DNS 投递 + 统计 + 健康; 待按 F-03 拆 StatsPublisher/DnsDelivery
 class VpnController
     @Inject
     constructor(
@@ -108,6 +110,13 @@ class VpnController
         // 数据面快照的上一窗口基线 (用于算速率)
         private var lastSnapshotUp = 0L
         private var lastSnapshotDown = 0L
+
+        /** TUN 写出口 (单写者)。null = 当前无出口 (未连接/正在重建)。 */
+        @Volatile private var tunWriter: TunWriter? = null
+
+        /** 因写队列满被丢弃的**控制包** (SYN-ACK/ACK/关闭包); 客户端会重传, 但连续增长说明 TUN 写跟不上。 */
+        private val droppedTunControlPackets = AtomicLong(0)
+        private val droppedTunControlBytes = AtomicLong(0)
 
         /** 一次 TUN 读取里没能解析成包的残留字节 (批量读取路径的监控点)。 */
         private val trailingBytesDropped = AtomicLong(0)
@@ -491,8 +500,8 @@ class VpnController
                     addLog("排除路由: ${excludedRoutes.size} 条规则", LogLevel.INFO)
                 }
 
-                // 5. 注册 TUN 写回回调
-                packetProcessor.setTunWriter { data -> writeToTun(data) }
+                // 5. 建 TUN 写出口 (单写者队列) 并接上 PacketProcessor
+                startTunWriter()
                 addLog("TUN 写回通道已就绪", LogLevel.DEBUG)
 
                 // 6. 启动连接清理定时任务
@@ -566,6 +575,7 @@ class VpnController
             // 关闭输入输出流
             try {
                 inputStream?.close()
+                closeTunWriter()
                 outputStream?.close()
                 addLog("TUN 数据流已关闭", LogLevel.DEBUG)
             } catch (_: Exception) {
@@ -685,6 +695,7 @@ class VpnController
             }
             try {
                 inputStream?.close()
+                closeTunWriter()
                 outputStream?.close()
             } catch (_: Exception) {
             }
@@ -726,12 +737,14 @@ class VpnController
             val generation = ++tunGeneration
             try {
                 inputStream?.close()
+                closeTunWriter()
                 outputStream?.close()
             } catch (_: Exception) {
             }
             vpnInterface = fd
             inputStream = FileInputStream(fd)
             outputStream = FileOutputStream(fd)
+            startTunWriter()
             packetLoopJob?.cancel()
             packetLoopJob = launch { packetLoop(generation) }
             addLog("TUN 接口已重建", LogLevel.INFO)
@@ -922,11 +935,7 @@ class VpnController
                     val bypassVpn =
                         excludedRoutes.isNotEmpty() && shouldBypassVpnRaw(buffer, workVersion)
                     val dstIp =
-                        if (bypassVpn &&
-                            transportMode == DnsInterceptor.DnsTransport.SYSTEM &&
-                            extractProtocol(buffer, workVersion) == IPPROTO_UDP &&
-                            extractDstPort(buffer, workVersion) == DNS_PORT
-                        ) {
+                        if (bypassVpn && isSystemDnsQuery(buffer, workVersion)) {
                             extractDstIp(buffer, workVersion)
                         } else {
                             null
@@ -984,6 +993,18 @@ class VpnController
             } finally {
                 buffer.reset()
             }
+
+        /**
+         * SYSTEM 模式下的 DNS 查询 (UDP:53) —— 只有它能走 protected socket 直接转发 (F1)。
+         * 单独拆出来是因为合并进调用点会让条件数超过 detekt 的 ComplexCondition 阈值。
+         */
+        private fun isSystemDnsQuery(
+            buffer: ByteBuffer,
+            version: Int,
+        ): Boolean =
+            transportMode == DnsInterceptor.DnsTransport.SYSTEM &&
+                extractProtocol(buffer, version) == IPPROTO_UDP &&
+                extractDstPort(buffer, version) == DNS_PORT
 
         private fun extractProtocol(
             buffer: ByteBuffer,
@@ -1116,42 +1137,77 @@ class VpnController
         }
 
         /**
-         * 写 TUN。**只有真正写成功才累计下行字节/包数** —— 早先计数在 try-catch 之外,
-         * 写失败 (流为 null / IOException) 也会被算进 "下行 7MB", 数据面快照据此报出根本
-         * 没送到应用的流量, 把"隧道在搬数据"和"隧道全死"混成同一副样子。
+         * 建 TUN 写出口 (单写者队列) 并接上 [PacketProcessor]。幂等。
+         *
+         * 旧实现是"谁产生包谁抢 `@Synchronized` 写" —— packetLoop 的 ACK、DNS 投递协程、每条 SSH
+         * 回程线程共用一把 monitor, 一条慢连接就能把其它连接一起拖住。改成 [TunWriter] 后:
+         * 控制包 (可丢) 与回程数据 (必须送达) 语义分开, packetLoop 永不阻塞。
+         *
+         * 因为**同一时刻只有一个线程**在写输出流, 写入本身不再需要互斥 —— 这与 T-20 遗留的
+         * "`OutputStream.write(byte[])` 整包原子性未经真机验证"不冲突: 那条遗留针对的是**并发写**
+         * 交错, 单写者结构下并发根本不存在 (不是"赌它原子", 而是"没有第二个写者")。
+         */
+        private fun startTunWriter() {
+            closeTunWriter()
+            val stream =
+                outputStream ?: run {
+                    addLog("TUN 写出口未建立: 输出流为空", LogLevel.WARNING)
+                    return
+                }
+            tunWriter =
+                TunWriter(
+                    onWritten = { size ->
+                        bytesDownCounter.addAndGet(size.toLong())
+                        packetsSentCounter.incrementAndGet()
+                        StageCounters.onTunWrite(success = true)
+                    },
+                    onWriteFailed = { cause ->
+                        StageCounters.onTunWrite(success = false)
+                        appLogThrottled(
+                            "TUN 写入失败 · " +
+                                (cause?.let { "${it::class.simpleName}: ${it.message}" } ?: "输出流未就绪"),
+                            level = LogLevel.WARNING,
+                            throttleKey = "TUN 写入失败",
+                        )
+                    },
+                    onControlDropped = { size ->
+                        droppedTunControlBytes.addAndGet(size.toLong())
+                        droppedTunControlPackets.incrementAndGet()
+                        appLogThrottled(
+                            "TUN 写队列已满 · 丢弃控制包 ${size}B (客户端会重传; 回程数据不丢)",
+                            level = LogLevel.WARNING,
+                            throttleKey = "TUN 写队列已满",
+                        )
+                    },
+                ).also { it.attach(stream) }
+            packetProcessor.setTunSink(tunWriter)
+        }
+
+        /** 停 TUN 写出口: 先停写线程 (排空队列 + 释放等待者), 再由调用方关流。幂等。 */
+        private fun closeTunWriter() {
+            tunWriter?.close()
+            tunWriter = null
+            packetProcessor.setTunSink(null)
+        }
+
+        /**
+         * 写 TUN (回程数据 / DNS 应答语义)。
+         *
+         * **只有真正写成功才累计下行字节/包数** —— 早先计数在 try-catch 之外, 写失败
+         * (流为 null / IOException) 也会被算进 "下行 7MB", 数据面快照据此报出根本没送到应用的
+         * 流量, 把"隧道在搬数据"和"隧道全死"混成同一副样子。现在计数在 [TunWriter] 的写入线程
+         * 回调里完成, 语义不变 (返回 true = 真的进了 TUN)。
          *
          * @return 是否已成功写入 TUN (调用方据此决定要不要计一次分阶段成功信号)
-         *
-         * **T-20 决策: 保留 `@Synchronized`。** 锁内是一次 `FileOutputStream.write(byte[])`,
-         * 其原子性 (一次 write = 一个 TUN 包) 只能靠真机/驱动实测确认; 在拿到证据前移除锁
-         * 可能让并发写交错成半包。可选优化 (A 去锁 / B 专用写线程 + 有界队列) 因缺少设备
-         * 验证而暂缓, 记录在 `docs/specs/2026-10-18-fix-todo.md` T-20。
          */
-        @Synchronized
         fun writeToTun(data: ByteArray): Boolean {
-            val stream = outputStream
-            if (stream == null) {
-                // 必须计失败: 分阶段健康的 TUN 段是按 success/error 比例判的,
-                // 流为 null 的写在这里静默返回, 等于把"没写进去"全判成中性 → TUN 段恒绿。
+            val writer = tunWriter
+            if (writer == null) {
+                // 与旧行为一致: 没有出口就是一次失败 (分阶段健康的 TUN 段要能看到)
                 StageCounters.onTunWrite(success = false)
                 return false
             }
-            return try {
-                stream.write(data)
-                bytesDownCounter.addAndGet(data.size.toLong())
-                packetsSentCounter.incrementAndGet()
-                StageCounters.onTunWrite(success = true)
-                true
-            } catch (e: Exception) {
-                StageCounters.onTunWrite(success = false)
-                Log.e("VpnController", "writeToTun FAILED: ${e.message}")
-                appLogThrottled(
-                    "TUN 写入失败 · ${e::class.simpleName}: ${e.message}",
-                    level = LogLevel.WARNING,
-                    throttleKey = "TUN 写入失败",
-                )
-                false
-            }
+            return writer.writeBlocking(data)
         }
 
         /**
@@ -1202,6 +1258,8 @@ class VpnController
                         appLog(
                             "数据面快照 · 上行 $up B / 下行 $down B · 包 ↑${packetsReceivedCounter.get()} " +
                                 "↓${packetsSentCounter.get()} · $rateText · " +
+                                "TUN 写丢弃 ${droppedTunControlPackets.get()} 个" +
+                                "(${droppedTunControlBytes.get()}B 控制包) · " +
                                 "TUN 残留未解析 ${trailingBytesDropped.get()}B · " +
                                 "TUN 接口空丢包 ${droppedNoTun.get()} · " +
                                 "${packetProcessor.tcpDiagnostics()} · " +

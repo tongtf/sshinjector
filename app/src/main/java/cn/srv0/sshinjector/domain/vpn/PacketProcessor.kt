@@ -52,16 +52,12 @@ class PacketProcessor
             }
         }
 
-        fun setTunSink(sink: TunSink) {
-            tunSink = sink
-        }
-
         /**
-         * 兼容入口: 把纯 lambda 包成 [TunSink] (两类写入都直调 lambda)。
-         * 生产路径用 [setTunSink] 接 [TunWriter]; 这里留给只需要"收到哪些包"的场景。
+         * 接上/摘掉 TUN 写出口。生产路径接 [cn.srv0.sshinjector.domain.vpn.TunWriter];
+         * `null` = 无出口 (未连接/正在重建), 此时写入按失败结算 (分阶段健康的 TUN 段据此判)。
          */
-        fun setTunWriter(writer: (ByteArray) -> Unit) {
-            tunSink = tunSinkOf(writer)
+        fun setTunSink(sink: TunSink?) {
+            tunSink = sink
         }
 
         fun setDnsInterceptor(interceptor: DnsInterceptor) {

@@ -388,7 +388,7 @@ class JschSshClient
              * 而写方向完全正常 (走的是 session 的 socket, 与该管道无关)。
              * 现场形态: 多个通道同时「已写 517B / 读回 0B」、新通道 `connect` 慢 1~2.5s、
              * 浏览正常但下载卡"等待中"。放大到 1MB 让管道可增长, 单个慢消费者
-             * (TUN 写被 `@Synchronized writeToTun` 卡住) 不再 32KB 就冻住整条会话。
+             * (TUN 写被阻塞的 `TunSink.writeBlocking` 卡住) 不再 32KB 就冻住整条会话。
              */
             private const val MAX_INPUT_BUFFER_SIZE = "1048576"
             private const val CHANNEL_SEND_MAX_PACKET_SIZE = 64 * 1024

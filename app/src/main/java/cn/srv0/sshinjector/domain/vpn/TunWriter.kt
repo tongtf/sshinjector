@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * @param capacity 队列容量 (包数)。满时控制包被丢并计数, 数据包阻塞等待 —— 有界, 不会无限堆积。
  * @param joinTimeoutMs [close] 等待写线程退出的上限 (写线程可能正卡在 TUN 写上)。
  * @param onWritten 成功写入回调 (字节数) —— 计数必须在这里做, 保证"只有真写出去才算"。
- * @param onWriteFailed 写入失败/未挂载输出流回调。
+ * @param onWriteFailed 写入失败回调 (null = 尚未挂载输出流; 否则为写入抛出的异常)。
  * @param onControlDropped 控制包因队列满被丢弃回调 (字节数)。
  */
 class TunWriter(
@@ -36,7 +36,7 @@ class TunWriter(
     private val joinTimeoutMs: Long = DEFAULT_JOIN_TIMEOUT_MS,
     private val queueWaitTimeoutMs: Long = DEFAULT_QUEUE_WAIT_TIMEOUT_MS,
     private val onWritten: (Int) -> Unit = {},
-    private val onWriteFailed: () -> Unit = {},
+    private val onWriteFailed: (Throwable?) -> Unit = {},
     private val onControlDropped: (Int) -> Unit = {},
 ) : TunSink,
     AutoCloseable {
@@ -110,7 +110,7 @@ class TunWriter(
                 break
             }
             if (System.currentTimeMillis() > deadline) {
-                onWriteFailed()
+                onWriteFailed(null)
                 Log.e(TAG, "TUN 写队列 ${queueWaitTimeoutMs}ms 未腾出空间, 回程数据写入失败 (${data.size}B)")
                 return false
             }
@@ -171,7 +171,7 @@ class TunWriter(
         try {
             val out = stream
             if (out == null) {
-                onWriteFailed()
+                onWriteFailed(null)
                 return
             }
             out.write(item.data)
@@ -179,7 +179,7 @@ class TunWriter(
             onWritten(item.data.size)
         } catch (e: Exception) {
             item.written = false
-            onWriteFailed()
+            onWriteFailed(e)
             Log.e(TAG, "TUN 写入失败: ${e::class.simpleName}: ${e.message}", e)
         } finally {
             item.done?.countDown()
@@ -192,7 +192,7 @@ class TunWriter(
             val item = queue.poll() ?: return
             item.written = false
             item.done?.countDown()
-            onWriteFailed()
+            onWriteFailed(null)
         }
     }
 
