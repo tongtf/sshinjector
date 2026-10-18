@@ -109,23 +109,29 @@
 
 ### F-03 拆 `VpnController`
 
-#### T-C01 提取 `StatsPublisher` — 状态 ✅
-- 新文件 `domain/vpn/StatsPublisher.kt`：承接 `statsFlushLoop` + 60s 快照拼装 + 计数器持有（`bytesUp/Down`、`packets*`）。
-- **机械搬迁**：字段与函数原样移动，仅改调用点；零行为变更。
-- **护栏**：`statsFlushLoop` 整段 `try/catch`（`delay` 留在 try 外，`CancellationException` rethrow）必须保留。
-- **回滚**：独立 revert。
-- **DoD**：搬迁前后快照输出字段一致。
+#### T-C01 提取 `DataPlaneSnapshot`（纯快照 + 速率算术）— 状态 ◐ 部分完成
+- 实际落地：新文件 `domain/vpn/DataPlaneSnapshot.kt`（纯 data class + `render()` + `rateText()`），
+  文案**逐字**保持原样；`VpnController.statsFlushLoop` 只负责采样计数器后传入。
+- 单测 `DataPlaneSnapshotTest`：方向语义（`upBytes`=读 TUN=上行 / `downBytes`=写 TUN=下行）、
+  每个排障字段都在、整数除法速率、首窗口不出假速率。
+- **未做（维持排后）**：把 `bytesUp/Down`、`packets*` 计数器与 `statsFlushLoop` 整体搬到
+  `StatsPublisher`。理由：那一步动的是**跨会话累计基线**与 `_connectionStats` 的发布时序
+  （`lastSnapshotUp` 必须在 connect 时按当前值取基线），是行为面而非纯搬迁，需要更长的回归观察窗；
+  本轮只做"纯函数可测"的那一片。
+- **护栏**：`statsFlushLoop` 的整段 `try/catch`（`delay` 留在 try 外，`CancellationException` rethrow）原样保留。
+- **DoD**：搬迁前后快照输出字段一致 ✅（输出逐字一致）。
 
 #### T-C02 / T-C03（⛔ 排后）
 - C-3 DNS 投递外移、C-4 会话状态外移：依赖 C-2 稳定 + 更长回归观察窗。
 
 ### F-05 观测事件化
 
-#### T-E01 `AppEvent` / `AppMetrics` 基础设施 + 双写入口 — 状态 ✅
-- 新文件 `domain/obs/AppEvent.kt`（sealed interface + `level` + `throttleKey` + `render()`）、`domain/obs/AppMetrics.kt`（原子计数）。
-- `VpnController.appLog(event)` / `appLogThrottled(event)`：渲染 + 计数双写，**旧字符串入口保留**。
-- 渲染单测：每个事件 `render()` 文案与旧字符串**逐字相等**（G-7）。
-- **回滚**：旧入口未删，单事件回退 = 改回一行。
+#### T-E01 `AppEvent` / `AppMetrics` 基础设施 + 双写入口 — 状态 ⛔ 排后（仅设计）
+- 未实施。**理由**（计划时低估了这一点）：基础设施本身**零运行时收益**，收益全部来自
+  F-05.2/F-05.3 把 40+ 处失败/丢弃日志迁到类型化事件；而迁移调用点又是本轮风险最高的改动
+  （每一处都可能改变节流键与可见文案，见 G-7）。在无设备验证的前提下，先铺一层没有调用方的
+  空壳属于"只增面积不增价值"，故整体推迟到能一起做迁移时再动。
+- 设计保留在 `2026-10-18-arch-optimization-design.md` 的 F-05 节（可直接照做）。
 
 #### T-E02 失败/丢弃类迁移（⛔ 排后）
 - 仅迁移排障面事件（上行丢段/回程溢出/零回程/握手失败…）；生命周期 INFO 保持默认 `throttleKey`。
@@ -204,11 +210,46 @@ T-E01a (新文件) ──► T-E01b (VpnController 入口)
 ### 5.5 范围决策 ✅
 - `F-04`（连接对象化）与 `F-03 C-3/C-4` **本轮不实施**：触碰最高缺陷密度区且无真机回归，符合护栏 G-6。
 - 已在 design 文档末尾\"附：本轮实施范围\"与本表状态列显式标注，不隐藏。
-- `T-20`（摘 `@Synchronized`）**不被本计划替代为\"已证明安全\"**：`T-B04` 用单写者消除阻塞，但**不声称**`write(byte[])` 整包原子性已证 —— 该遗留项在 `2026-10-18-fix-todo.md` 中维持原状态。
+- `T-20`（摘 `@Synchronized`）**不是"已证明安全"**：`T-B04` 在**结构上**消除了"并发写"这一前提
+  （单写者线程是唯一调用 `stream.write` 的线程），因此 monitor 失去意义而移除；**仍然没有**任何
+  真机证据说明 `OutputStream.write(byte[])` 的整包原子性 —— 只是"没有第二个写者"成立，所以该风险
+  不再适用。`2026-10-18-fix-todo.md` 的 T-20 条目按"风险前提消失"结案，而不是按"实测通过"结案。
 
 ### 5.6 遗漏检查 ✅
 - 是否漏了 `UdpRelay` 的 TUN 写？→ `buildUdpResponsePacket` 经 `writeToTun`（数据语义）→ 归 `B04` 覆盖。
-- 是否漏了 `Icmpv6Responder`？→ 同样走 `writeToTun` → `B04` 覆盖。
+- 是否漏了 `Icmpv6Responder`？→ 走 `TunSink.write`（NA/RA 是控制包，且跑在 packetLoop 上**必须非阻塞**）→ `B03` 覆盖。
 - 是否漏了 `VpnController.forwardDnsBypassPacket` 的 `writeToTun`？→ 已在设计文档点名（数据语义）。
 - 是否漏了 `VpnControllerTest` 对 `extractDstIp` 的既有断言？→ `A04` 保留参考实现，测试不改。
-- `throttleKey` 形参语义（表键）→ `E01` 由枚举派生，天然满足。
+- `throttleKey` 形参语义（表键）→ `E01` 由枚举派生，天然满足（本轮未实施，见上）。
+
+---
+
+## 6. 实施结果（2026-10-18 收尾）
+
+| 任务 | 状态 | 提交 |
+|---|---|---|
+| T-A01/T-A02 | ✅ | `perf(uplink): compute the connection key without per-packet address clones` |
+| T-A03 | ✅ | `perf(uplink): pass the parsed packet into processTcpPacket and cache the connection key` |
+| T-A04 | ✅ | `perf(uplink): match excluded routes straight from the packet buffer` |
+| T-B01/B02/B03 | ✅ | `perf(tun): split TUN writes into drop-able control and must-deliver data` |
+| T-B04 | ✅ | `perf(tun): drive TUN writes from a single writer queue in the controller` |
+| T-C01（部分） | ◐ | `refactor(stats): extract the TUN data-plane snapshot into a pure builder` |
+| T-A05 / T-C02 / T-C03 / T-E01 / T-E02 / F-04 | ⛔ | —（理由见上表与 design 文档"附：本轮实施范围"） |
+
+四道门 + `assembleDebug` 全绿：`ktlintCheck` / `detekt` / `lint` / `testDebugUnitTest` / `assembleDebug`。
+
+### 6.1 实施时发现的两处"计划没写、必须写"的点（施工图教训）
+
+1. **`matchesRaw` 必须显式传地址族**（T-A04）。`CidrRoute.matches` 靠"两边字节长度不等"免费拒绝跨族；
+   缓冲区版本没有 `InetAddress` 可比 —— 而 `0.0.0.0/0` 的 `prefixLen=0` 让整字节循环 **0 次**，
+   于是它会**命中任意 IPv6 包**，把 IPv6 流量误判成"排除路由直连"。等价性矩阵（IPv4 地址 × IPv6 路由
+   与反向）第一次跑就把它抓了出来。护栏已写进 `matchesRaw` 的 KDoc 与
+   `CidrRouteTest.matchesRaw agrees with matches across a CIDR by address matrix`。
+2. **控制包丢弃不得计成"TUN 写失败"**（T-B04）。队列满 → 丢控制包是**背压**不是写错误；若按失败计入
+   `StageCounters.onTunWrite(false)`，一次瞬时背压就会把分阶段健康的 TUN 段拉降级（假故障）。
+   实现选择：`onControlDropped` 单独计数 + WARNING 日志 + 快照字段，不计失败样本。
+   反向的决定：**关闭包走阻塞写**（`writeBlocking`）—— 它是"让对端立刻收尾/abort"的唯一信号 (F6)。
+3. **`writeBlocking` 的入队等待必须有界**。入队本身可能因队列满而阻塞；若写线程卡死，无界等待会让
+   回程线程永久搁浅。最终语义：入队等待 ≤ `queueWaitTimeoutMs`（默认 10s，超时**计一次失败并返回 false**，
+   既不无限等也不丢数据），入队之后的无超时等待由"写线程必定处理到它 / `close()` 必定释放"两条路兜底。
+
