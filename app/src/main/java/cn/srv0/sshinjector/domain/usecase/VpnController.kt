@@ -112,6 +112,7 @@ class VpnController
         // 数据面快照的上一窗口基线 (用于算速率)
         private var lastSnapshotUp = 0L
         private var lastSnapshotDown = 0L
+        private var lastSnapshotAtMs = 0L
 
         /** TUN 写出口 (单写者)。null = 当前无出口 (未连接/正在重建)。 */
         @Volatile private var tunWriter: TunWriter? = null
@@ -565,6 +566,12 @@ class VpnController
 
             // 排空 DNS 残留响应, 避免旧会话数据泄漏到下一次连接
             dnsInterceptor.clearPendingResponses()
+
+            // 断开前补一条数据面快照: 60s 周期在 30~50s 的短会话里一次都打不出来, 而"无 adb"
+            // 现场只有导出的日志 —— 资源节/回程闸门/地址惰性失效/在途通道 必须每条会话都留痕。
+            // 位置很关键: 必须在 resetTcpState() (清 TCP 计数) 与 tunnelManager.stopAll() /
+            // closeTunWriter() (拆掉 SSH 池与写队列) **之前**取样, 否则拿到的是空壳。
+            emitDataPlaneSnapshot(force = true)
 
             // 清空 TCP 连接表, 跨会话残留不复用 (F6-4)
             packetProcessor.resetTcpState()
@@ -1230,7 +1237,7 @@ class VpnController
         private suspend fun statsFlushLoop() {
             // 置为当前时间: 否则首帧就满足 >=60s, 连接后 ~100ms 打一条
             // "数据面快照 … 速率待下一窗口" 的空基线噪声
-            var lastSnapshotAt = System.currentTimeMillis()
+            lastSnapshotAtMs = System.currentTimeMillis()
             // 基线同时取当前值: 计数器是**跨会话累计**的, 不重置会让首窗口速率
             // 把上个会话已传的字节也摊进来 (首次启动时为 0, 无影响)
             lastSnapshotUp = bytesUpCounter.get()
@@ -1247,46 +1254,7 @@ class VpnController
                             bytesReceived = bytesUpCounter.get(),
                         )
                     }
-                    // 每 60s 一条数据面快照 (应用内日志是唯一可见面, 无 adb):
-                    // 只看累计总数无法判断"此刻隧道还在不在搬数据", 增量+速率才能区分
-                    // 「连接空转」与「隧道全死」。QUIC 丢弃计数由 UdpRelay 自行周期上报。
-                    val now = System.currentTimeMillis()
-                    if (now - lastSnapshotAt >= DATA_SNAPSHOT_INTERVAL_MS) {
-                        val prevAt = lastSnapshotAt
-                        lastSnapshotAt = now
-                        val windowSec = if (prevAt == 0L) 0 else (now - prevAt) / 1000
-                        val up = bytesUpCounter.get()
-                        val down = bytesDownCounter.get()
-                        val rateText =
-                            DataPlaneSnapshot.rateText(windowSec, up, down, lastSnapshotUp, lastSnapshotDown)
-                        lastSnapshotUp = up
-                        lastSnapshotDown = down
-                        val tunnelStats = tunnelManager.getActiveOrFallback().tunnelDiagnostics()
-                        // 文案拼装与速率算术已抽到 DataPlaneSnapshot (纯函数 + 单测锁死方向语义):
-                        // up = 读 TUN = 上行, down = 写 TUN = 下行, 别再弄反。
-                        appLog(
-                            DataPlaneSnapshot(
-                                upBytes = up,
-                                downBytes = down,
-                                packetsReceived = packetsReceivedCounter.get(),
-                                packetsSent = packetsSentCounter.get(),
-                                rateText = rateText,
-                                tunControlDropped = droppedTunControlPackets.get(),
-                                tunControlDroppedBytes = droppedTunControlBytes.get(),
-                                tunTrailingDropped = trailingBytesDropped.get(),
-                                tunNoInterfaceDropped = droppedNoTun.get(),
-                                // 资源占用: 泄漏类问题 (队列堆积 / 映射表打满) 的唯一可见面
-                                resourceDiagnostics =
-                                    "TUN 写队列 ${tunWriter?.depth() ?: 0} · ${dnsInterceptor.diagnostics()}",
-                                tcpDiagnostics = packetProcessor.tcpDiagnostics(),
-                                udpDiagnostics = packetProcessor.udpDiagnostics(),
-                                ipv6Diagnostics = packetProcessor.ipv6Diagnostics(),
-                                tunnelDiagnostics = tunnelStats,
-                                // 本会话 WARNING/ERROR 归因 (无故障时为空, 该节整省)
-                                failureSummary = AppMetrics.summary(),
-                            ).render(),
-                        )
-                    }
+                    emitDataPlaneSnapshot(force = false)
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -1298,6 +1266,59 @@ class VpnController
                     )
                 }
             }
+        }
+
+        /**
+         * 打一条**数据面快照** (60s 周期 / 断开前强制)。
+         *
+         * 两个调用点: [statsFlushLoop] 的 60s 周期, 与 [disconnect] 断开前的强制一条。
+         * 后者是必需的 —— 真机试用的会话普遍只有 30~50s (装完就断/来回切服务器),
+         * 60s 周期**一次都打不出来**, 于是"无 adb 现场"看不到 资源节 / 回程闸门等待 /
+         * 地址惰性失效 / 在途通道 这些计数, 正是本轮真机日志暴露的观测面缺口。
+         *
+         * `@Synchronized`: `statsFlushLoop` 被 [disconnect] 里的 `cancelChildren()` 取消时可能
+         * 正跑到这里 (取消是协作式的), 与强制快照并发写 `lastSnapshotUp/Down` 基线会让速率算错。
+         *
+         * @param force true = 不看 60s 间隔, 立即输出 (断开前那次)
+         */
+        @Synchronized
+        private fun emitDataPlaneSnapshot(force: Boolean) {
+            val now = System.currentTimeMillis()
+            if (!force && now - lastSnapshotAtMs < DATA_SNAPSHOT_INTERVAL_MS) return
+            val prevAt = lastSnapshotAtMs
+            lastSnapshotAtMs = now
+            val windowSec = if (prevAt == 0L) 0 else (now - prevAt) / 1000
+            val up = bytesUpCounter.get()
+            val down = bytesDownCounter.get()
+            val rateText = DataPlaneSnapshot.rateText(windowSec, up, down, lastSnapshotUp, lastSnapshotDown)
+            lastSnapshotUp = up
+            lastSnapshotDown = down
+            val tunnelStats = tunnelManager.getActiveOrFallback().tunnelDiagnostics()
+            // 文案拼装与速率算术已抽到 DataPlaneSnapshot (纯函数 + 单测锁死方向语义):
+            // up = 读 TUN = 上行, down = 写 TUN = 下行, 别再弄反。
+            appLog(
+                DataPlaneSnapshot(
+                    upBytes = up,
+                    downBytes = down,
+                    packetsReceived = packetsReceivedCounter.get(),
+                    packetsSent = packetsSentCounter.get(),
+                    rateText = rateText,
+                    tunControlDropped = droppedTunControlPackets.get(),
+                    tunControlDroppedBytes = droppedTunControlBytes.get(),
+                    tunTrailingDropped = trailingBytesDropped.get(),
+                    tunNoInterfaceDropped = droppedNoTun.get(),
+                    // 资源占用: 泄漏类问题 (队列堆积 / 映射表打满) 的唯一可见面
+                    resourceDiagnostics =
+                        "TUN 写队列 ${tunWriter?.depth() ?: 0} · ${dnsInterceptor.diagnostics()}",
+                    tcpDiagnostics = packetProcessor.tcpDiagnostics(),
+                    udpDiagnostics = packetProcessor.udpDiagnostics(),
+                    ipv6Diagnostics = packetProcessor.ipv6Diagnostics(),
+                    tunnelDiagnostics = tunnelStats,
+                    // 本会话 WARNING/ERROR 归因 (无故障时空串, 该节整省)。
+                    // 断开前那条不吃这一节: 紧接着就是完整的 `故障归因` 行, 不重复。
+                    failureSummary = if (force) "" else AppMetrics.summary(),
+                ).render(),
+            )
         }
 
         /**
