@@ -8,6 +8,7 @@ import cn.srv0.sshinjector.ui.viewmodel.LogLevel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.IOException
 import java.net.InetAddress
@@ -64,6 +65,16 @@ class TcpStateMachine(
          * 远端 SSH 握手慢时能到数秒。给足余量, 否则误杀正常慢连接。
          */
         private const val SOCKS_CONNECT_REPLY_TIMEOUT_MS = 15000
+
+        /**
+         * 非阻塞握手轮询间隔 (T-22)。用 `delay` 而不是 `Thread.sleep`: 本路径跑在协程里,
+         * 轮询期间应当**释放线程** (SSH IO 池上限 128, 被自旋钉住 = 新连接全拒)。
+         * 2ms 与改造前一致 (loopback 上一般首轮就成功, 循环极少进入第二次)。
+         */
+        private const val SOCKS_POLL_MS = 2L
+
+        /** 旁路直连的 finishConnect 轮询间隔, 与改造前的 `Thread.sleep(10)` 一致。 */
+        private const val BYPASS_CONNECT_POLL_MS = 10L
         private const val MAX_INFLIGHT_SANITY = 1L shl 31 // 在途超过该值视为 ack/seq 状态异常 (放开闸门)
         private const val FLOW_WAIT_TIMEOUT_MS = 1000L // 窗口等待重查间隔 (漏通知兜底, 不可移除)
         private const val MAX_WINDOW_SCALE = 14 // RFC 7323 上限, 防畸形 SYN 溢出
@@ -509,6 +520,15 @@ class TcpStateMachine(
     /**
      * 将 TCP SYN 转发到隧道插件建立连接
      * SOCKS5 优先：先回 SYN-ACK 再异步建 SSH 隧道，避免客户端超时
+     *
+     * **T-22 (已结案)**: 这条路径曾用 `Thread.sleep` 轮询 (SOCKS 握手 / finishConnect), 每个建连
+     * 自旋期间钉住一条线程 —— 因为它是"半阻塞"的, 所以当初的搬迁计划是"挪去 `SshIoDispatcher`",
+     * 但那只会把自旋从共享 IO 池搬到**专用**池, 反而挤掉回程读线程 (128 上限)。
+     * 真正的修法是让轮询**真挂起**: 三个轮询点 (`readSocksFully`/`writeSocksFully`/
+     * `awaitLoopbackConnect`) 与旁路 `finishConnect` 全部改成 `delay`。现在这条路径在等待期间
+     * **不持线程**, 尺寸唯一的阻塞点只剩握手完成后的回程中继 (那是刻意占用专用池的)。
+     * 因此它**继续留在 `Dispatchers.IO`**: 普通协程池足够, `SshIoDispatcher` 只服务
+     * "阻塞且不可挂起"的 JSch 读写 —— 别把本函数搬过去 (会把可挂起的代码塞进专用池).
      */
     private fun forwardSynToTunnel(conn: TcpConnection) {
         scope.launch {
@@ -562,7 +582,7 @@ class TcpStateMachine(
      * 复用现有上行 forwardToSocks (conn.socksChannel) 与下行 startRelayFromSocks 路径。
      * 与 forwardThroughDirectChannel 同构, 只是本地 socket 直连、不经 Socks5ProxyServer/SSH。
      */
-    private fun forwardThroughBypass(conn: TcpConnection) {
+    private suspend fun forwardThroughBypass(conn: TcpConnection) {
         val connKey = conn.key
         val protect = protectSocketFn
         val sc = SocketChannel.open()
@@ -582,6 +602,9 @@ class TcpStateMachine(
                 return
             }
             // 非阻塞 connect + finishConnect 轮询 (SocketChannel 无带超时的阻塞 connect)
+            // 非阻塞 connect + finishConnect 轮询 (SocketChannel 无带超时的阻塞 connect)。
+            // T-22: 轮询用 `delay` 而不是 `Thread.sleep` —— 本函数跑在协程里, delay 会**真挂起**
+            // (不占线程), Thread.sleep 则把 Dispatchers.IO 的一条线程钉在自旋上 (128 条时新连接全拒)。
             sc.configureBlocking(false)
             val addr = InetSocketAddress(conn.dstIp, conn.dstPort)
             if (!sc.connect(addr)) {
@@ -590,7 +613,7 @@ class TcpStateMachine(
                     if (System.currentTimeMillis() > deadline) {
                         throw java.net.SocketTimeoutException("bypass connect timeout")
                     }
-                    Thread.sleep(10)
+                    delay(BYPASS_CONNECT_POLL_MS)
                 }
             }
             // 上行 forwardToSocks 依赖非阻塞 write 的 write()==0 背压语义, 保持非阻塞。
@@ -633,7 +656,7 @@ class TcpStateMachine(
      * 耗尽后新连接全被拒), 同时客户端在 SYN_SENT 干等到自己超时。日志里见过 6577ms 的
      * 建连耗时 (已超过 TUN_CONNECT_TIMEOUT_MS=5000), 说明走的正是这条无保护路径。
      */
-    private fun readSocksFully(
+    private suspend fun readSocksFully(
         sock: SocketChannel,
         dst: ByteBuffer,
         deadline: Long,
@@ -643,7 +666,8 @@ class TcpStateMachine(
             if (n < 0) return false
             if (n == 0) {
                 if (System.currentTimeMillis() > deadline) return false
-                Thread.sleep(2)
+                // T-22: 真挂起而非占线程自旋 (见 forwardThroughBypass 的同一说明)
+                delay(SOCKS_POLL_MS)
             }
         }
         return true
@@ -654,7 +678,7 @@ class TcpStateMachine(
      * 握手请求虽只有几字节, 但非阻塞模式下单次 write 不保证写完 (loopback 一般够,
      * 仍不能假设) —— 部分写会让 SOCKS5 解析器读到半截报文。
      */
-    private fun writeSocksFully(
+    private suspend fun writeSocksFully(
         sock: SocketChannel,
         src: ByteArray,
         deadline: Long,
@@ -665,7 +689,7 @@ class TcpStateMachine(
             if (n < 0) return false
             if (n == 0) {
                 if (System.currentTimeMillis() > deadline) return false
-                Thread.sleep(2)
+                delay(SOCKS_POLL_MS)
             }
         }
         return true
@@ -676,14 +700,14 @@ class TcpStateMachine(
      * 任一步失败/超时都只记日志并返回 false, 由调用方统一关连接。
      */
     @Suppress("ReturnCount") // 每步 fail-fast 早退并各自记日志, 合并出口会丢掉归因
-    private fun socksNegotiate(
+    private suspend fun socksNegotiate(
         sock: SocketChannel,
         creds: Pair<String, String>,
         conn: TcpConnection,
         deadline: Long,
     ): Boolean {
-        val readFully: (ByteBuffer) -> Boolean = { dst -> readSocksFully(sock, dst, deadline) }
-        val writeFully: (ByteArray) -> Boolean = { src -> writeSocksFully(sock, src, deadline) }
+        val readFully: suspend (ByteBuffer) -> Boolean = { dst -> readSocksFully(sock, dst, deadline) }
+        val writeFully: suspend (ByteArray) -> Boolean = { src -> writeSocksFully(sock, src, deadline) }
 
         if (IS_DEBUG_SOCKS) {
             Log.d("Socks5Proxy", "[socks] conn=${conn.id} writing handshake 05 01 02 to ${conn.dstIp}:${conn.dstPort}")
@@ -781,7 +805,7 @@ class TcpStateMachine(
         if (sock.connect(InetSocketAddress("127.0.0.1", socksPort))) return true
         while (!sock.finishConnect()) {
             if (System.currentTimeMillis() > deadline) return false
-            Thread.sleep(2)
+            delay(SOCKS_POLL_MS)
         }
         return true
     }
