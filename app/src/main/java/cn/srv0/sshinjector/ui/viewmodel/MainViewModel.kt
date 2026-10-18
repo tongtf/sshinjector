@@ -10,7 +10,6 @@ import android.net.VpnService
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Debug
-import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -228,37 +227,9 @@ class MainViewModel
                         "Wi-Fi"
                     }
                 }
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> {
-                    try {
-                        val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-                        val networkType =
-                            if (
-                                androidx.core.content.ContextCompat.checkSelfPermission(
-                                    context,
-                                    android.Manifest.permission.READ_PHONE_STATE,
-                                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-                            ) {
-                                tm.dataNetworkType
-                            } else {
-                                TelephonyManager.NETWORK_TYPE_UNKNOWN
-                            }
-                        when (networkType) {
-                            TelephonyManager.NETWORK_TYPE_LTE -> "4G"
-                            TelephonyManager.NETWORK_TYPE_NR -> "5G"
-                            TelephonyManager.NETWORK_TYPE_HSDPA,
-                            TelephonyManager.NETWORK_TYPE_UMTS,
-                            TelephonyManager.NETWORK_TYPE_EVDO_0,
-                            TelephonyManager.NETWORK_TYPE_EVDO_A,
-                            -> "3G"
-                            TelephonyManager.NETWORK_TYPE_GPRS,
-                            TelephonyManager.NETWORK_TYPE_EDGE,
-                            -> "2G"
-                            else -> context.getString(R.string.network_type_mobile)
-                        }
-                    } catch (_: Exception) {
-                        "-"
-                    }
-                }
+                // T-23: 不再申请 READ_PHONE_STATE 读 4G/5G —— 蜂窝网络统一显示粗粒度标签
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ->
+                    context.getString(R.string.network_type_mobile)
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "VPN"
                 else -> "-"
             }

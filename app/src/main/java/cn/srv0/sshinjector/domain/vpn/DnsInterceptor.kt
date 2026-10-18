@@ -459,7 +459,7 @@ class DnsInterceptor
         private val fakeIpv6Counter = AtomicInteger(FAKE_IPV6_BASE) // fd00::2 开始 (fd00::1 是 VPN 网关)
 
         // 用于绕过 VPN 的 socket 保护函数 (由 VpnService 提供)
-        private var protectSocket: ((DatagramSocket) -> Boolean)? = null
+        @Volatile private var protectSocket: ((DatagramSocket) -> Boolean)? = null
 
         fun setProtectFunction(protectSocket: (DatagramSocket) -> Boolean) {
             this.protectSocket = protectSocket

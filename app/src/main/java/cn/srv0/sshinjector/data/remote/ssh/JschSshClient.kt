@@ -422,10 +422,10 @@ class JschSshClient
                     "diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256"
             internal const val HOST_KEY_ALGORITHMS =
                 "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521," +
-                    "rsa-sha2-512,rsa-sha2-256,ssh-rsa"
+                    "rsa-sha2-512,rsa-sha2-256"
             internal const val PUBKEY_ACCEPTED_ALGORITHMS =
                 "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521," +
-                    "rsa-sha2-512,rsa-sha2-256,ssh-rsa"
+                    "rsa-sha2-512,rsa-sha2-256"
             internal const val CIPHER_ALGORITHMS =
                 "aes128-gcm@openssh.com,aes256-gcm@openssh.com,aes128-ctr,aes256-ctr"
             internal const val MAC_ALGORITHMS =

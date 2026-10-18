@@ -40,7 +40,7 @@ class UdpRelay(
     val droppedUdp: Long
         get() = droppedUdpCount.get()
 
-    private var dnsInterceptor: DnsInterceptor? = null
+    @Volatile private var dnsInterceptor: DnsInterceptor? = null
 
     fun setDnsInterceptor(interceptor: DnsInterceptor) {
         dnsInterceptor = interceptor

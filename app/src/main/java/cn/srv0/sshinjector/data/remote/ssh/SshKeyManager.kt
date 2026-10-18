@@ -86,6 +86,8 @@ class SshKeyManager
                                 if (requireBiometric) {
                                     setUserAuthenticationRequired(true)
                                     setUserAuthenticationParameters(300, KeyProperties.AUTH_BIOMETRIC_STRONG)
+                                    // T-23: 录入新指纹会使旧密钥失效 (与门禁 key 的安全语义一致)
+                                    setInvalidatedByBiometricEnrollment(true)
                                 }
                             }.build(),
                     )
@@ -116,6 +118,8 @@ class SshKeyManager
                                 if (requireBiometric) {
                                     setUserAuthenticationRequired(true)
                                     setUserAuthenticationParameters(300, KeyProperties.AUTH_BIOMETRIC_STRONG)
+                                    // T-23: 录入新指纹会使旧密钥失效 (与门禁 key 的安全语义一致)
+                                    setInvalidatedByBiometricEnrollment(true)
                                 }
                             }
                     kg.initialize(specBuilder.build())
