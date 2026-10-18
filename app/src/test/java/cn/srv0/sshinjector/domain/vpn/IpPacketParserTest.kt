@@ -4,6 +4,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.net.InetAddress
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -195,6 +196,67 @@ class IpPacketParserTest {
         return udp
     }
 
+    // ------------------------------------------------------------ connectionKey 零分配路径
+
+    /**
+     * 五元组 key 就是连接身份: 位布局一旦漂移, 回程数据会被投给别的连接 (或连接凭空消失)。
+     * 这里用**独立于生产实现**的参考公式 (直接拼字节, 见 [referenceKey]) 锁定, 再显式断言
+     * 两个地址各自取了哪 4 字节 —— 参考公式与生产实现同时改错才会漏过。
+     */
+    @Test
+    fun `connection key layout is locked for IPv4 and IPv6`() {
+        val v4src = InetAddress.getByName("10.0.0.2")
+        val v4dst = InetAddress.getByName("192.168.1.1")
+        assertEquals(0x0A000002L, IpPacketParser.addressLow32(v4src))
+        assertEquals(0xC0A80101L, IpPacketParser.addressLow32(v4dst))
+        assertEquals(
+            referenceKey(v4src.address, v4dst.address, 12345, 80),
+            IpPacketParser.connectionKey(v4src, v4dst, 12345, 80),
+        )
+        assertEquals(
+            IpPacketParser.connectionKey(0x0A000002L, 0xC0A80101L, 12345, 80),
+            IpPacketParser.connectionKey(v4src, v4dst, 12345, 80),
+        )
+
+        // IPv6 只取**后 4 字节** (历史行为, 不改成前 4 字节 —— 改了 key 就变)。
+        val v6src = InetAddress.getByName("2001:db8::1")
+        val v6dst = InetAddress.getByName("fd00::abcd:1234")
+        assertEquals(0x00000001L, IpPacketParser.addressLow32(v6src))
+        assertEquals(0xABCD1234L, IpPacketParser.addressLow32(v6dst))
+        assertEquals(
+            referenceKey(v6src.address, v6dst.address, 443, 54321),
+            IpPacketParser.connectionKey(v6src, v6dst, 443, 54321),
+        )
+    }
+
+    /** 直接从 buffer 绝对下标取低 32 位: IPv4 取 offset 起 4 字节, IPv6 取后 4 字节。 */
+    @Test
+    fun `address low32 from buffer matches the InetAddress version`() {
+        val v4 = ipv4With("10.0.0.2", "192.168.1.1")
+        assertEquals(0x0A000002L, IpPacketParser.addressLow32(buffer(v4), 4, 12))
+        assertEquals(0xC0A80101L, IpPacketParser.addressLow32(buffer(v4), 4, 16))
+
+        val v6 = ipv6With("2001:db8::1", "fd00::abcd:1234")
+        assertEquals(0x00000001L, IpPacketParser.addressLow32(buffer(v6), 6, 8))
+        assertEquals(0xABCD1234L, IpPacketParser.addressLow32(buffer(v6), 6, 24))
+    }
+
+    /** 解析出的 `srcLow`/`dstLow` 必须与逐字段算出的值一致 (零分配路径不许引入偏差)。 */
+    @Test
+    fun `parsed packet carries low32 values matching the addresses`() {
+        val v4 = ipv4With("10.0.0.2", "192.168.1.1")
+        val parsed4 = IpPacketParser.parseIpv4Header(buffer(v4))
+        assertEquals(0x0A000002L, parsed4!!.srcLow)
+        assertEquals(0xC0A80101L, parsed4.dstLow)
+        assertEquals(IpPacketParser.addressLow32(parsed4.srcIp), parsed4.srcLow)
+
+        val v6 = ipv6With("2001:db8::1", "fd00::abcd:1234")
+        val parsed6 = IpPacketParser.parseIpv6Header(buffer(v6))
+        assertEquals(0x00000001L, parsed6!!.srcLow)
+        assertEquals(0xABCD1234L, parsed6.dstLow)
+        assertEquals(IpPacketParser.addressLow32(parsed6.dstIp), parsed6.dstLow)
+    }
+
     /** 按 `ipPacketTotalLength` 步进走完整个缓冲区, 返回每个包的定界长度。 */
     private fun frameAll(buffer: ByteBuffer): List<Int> {
         val outerLimit = buffer.limit()
@@ -230,5 +292,45 @@ class IpPacketParserTest {
         head[6] = 6 // next header = TCP
         head[7] = 64 // hop limit
         return head + payload
+    }
+
+    private fun ipv4With(
+        src: String,
+        dst: String,
+    ): ByteArray {
+        val pkt = ipv4Packet(ByteArray(8))
+        System.arraycopy(InetAddress.getByName(src).address, 0, pkt, 12, 4)
+        System.arraycopy(InetAddress.getByName(dst).address, 0, pkt, 16, 4)
+        return pkt
+    }
+
+    private fun ipv6With(
+        src: String,
+        dst: String,
+    ): ByteArray {
+        val pkt = ipv6Packet(ByteArray(8))
+        System.arraycopy(InetAddress.getByName(src).address, 0, pkt, 8, 16)
+        System.arraycopy(InetAddress.getByName(dst).address, 0, pkt, 24, 16)
+        return pkt
+    }
+
+    /**
+     * **独立于生产实现**的参考公式: 低位取样 + 位布局按 `AGENTS.md`/历史实现写死。
+     * IPv4 取 bytes[0..3]; IPv6 取 bytes[12..15]。
+     */
+    private fun referenceKey(
+        src: ByteArray,
+        dst: ByteArray,
+        srcPort: Int,
+        dstPort: Int,
+    ): Long {
+        fun low(b: ByteArray): Long {
+            val off = if (b.size == 16) 12 else 0
+            return ((b[off].toLong() and 0xFF) shl 24) or
+                ((b[off + 1].toLong() and 0xFF) shl 16) or
+                ((b[off + 2].toLong() and 0xFF) shl 8) or
+                (b[off + 3].toLong() and 0xFF)
+        }
+        return (low(src) shl 48) xor (low(dst) shl 32) xor (srcPort.toLong() shl 16) xor dstPort.toLong()
     }
 }

@@ -152,8 +152,14 @@ object IpPacketParser {
         val protocol = buffer.get().toInt() and 0xFF
         buffer.getShort() // headerChecksum
 
+        // 低 32 位在**读地址的同一次遍历**里从 buffer 直接取 (绝对下标, 不建 ByteArray/InetAddress):
+        // 每包省掉两次 `InetAddress.address` 克隆, 见 IpPacketParser.connectionKey(addressLow32...)。
+        val srcPos = buffer.position()
         val srcIp = readIpv4Address(buffer)
+        val srcLow = addressLow32(buffer, 4, srcPos)
+        val dstPos = buffer.position()
         val dstIp = readIpv4Address(buffer)
+        val dstLow = addressLow32(buffer, 4, dstPos)
 
         // 处理选项
         if (ihl > 5) {
@@ -163,7 +169,7 @@ object IpPacketParser {
         val payloadStart = buffer.position()
         val payloadLength = buffer.remaining()
 
-        return ParsedPacket(srcIp, dstIp, protocol, payloadStart, payloadLength)
+        return ParsedPacket(srcIp, dstIp, protocol, payloadStart, payloadLength, srcLow, dstLow)
     }
 
     /**
@@ -185,8 +191,12 @@ object IpPacketParser {
         var nextHeader = buffer.get().toInt() and 0xFF
         buffer.get() // hop limit
 
+        val srcPos = buffer.position()
         val srcIp = readIpv6Address(buffer)
+        val srcLow = addressLow32(buffer, 6, srcPos)
+        val dstPos = buffer.position()
         val dstIp = readIpv6Address(buffer)
+        val dstLow = addressLow32(buffer, 6, dstPos)
 
         // 解析 IPv6 扩展头部，找到最终的上层协议
         val (payloadStart, finalNextHeader) = parseIpv6ExtensionHeaders(buffer, payloadLength, nextHeader)
@@ -197,7 +207,7 @@ object IpPacketParser {
         val actualPayloadLength = payloadLength - extensionHeaderLen
         if (actualPayloadLength < 0) return null
 
-        return ParsedPacket(srcIp, dstIp, finalNextHeader, payloadStart, actualPayloadLength)
+        return ParsedPacket(srcIp, dstIp, finalNextHeader, payloadStart, actualPayloadLength, srcLow, dstLow)
     }
 
     /**
@@ -252,50 +262,73 @@ object IpPacketParser {
     }
 
     /**
-     * 五元组连接标识符
+     * 取 IP 地址的**低 32 位**，供 [connectionKey] 使用。
+     *
+     * 取样规则与历史实现完全一致: IPv4 = 全部 4 字节 (offset 起)，IPv6 = **后 4 字节**
+     * (offset+12 起，不是前 4 字节)。这条规则不改 —— 改了 key 就会变，连接会被错投。
+     *
+     * 用**绝对下标**读而非推进 `position`，因此可在解析过程中紧挨着 `readIpv4Address` /
+     * `readIpv6Address` 调用而不破坏 buffer 游标。**零分配**（不建 ByteArray / InetAddress）。
+     *
+     * @param buffer 报文缓冲区
+     * @param version IP 版本号 (4 / 6)
+     * @param absOffset 该地址在 buffer 里的**绝对**起始下标
+     * @return 低 32 位 (0..0xFFFFFFFF); 越界返回 0 (调用方已做过头部长度校验)
+     */
+    fun addressLow32(
+        buffer: ByteBuffer,
+        version: Int,
+        absOffset: Int,
+    ): Long {
+        val start = if (version == 6) absOffset + 12 else absOffset
+        if (start < 0 || start + 3 >= buffer.limit()) return 0L
+        return ((buffer.get(start).toLong() and 0xFF) shl 24) or
+            ((buffer.get(start + 1).toLong() and 0xFF) shl 16) or
+            ((buffer.get(start + 2).toLong() and 0xFF) shl 8) or
+            (buffer.get(start + 3).toLong() and 0xFF)
+    }
+
+    /** [addressLow32] 的 [InetAddress] 版本 (冷路径: 测试 / 无原始报文的场景)。 */
+    fun addressLow32(address: InetAddress): Long {
+        val bytes = address.address
+        val off = if (bytes.size == 16) 12 else 0
+        return ((bytes[off].toLong() and 0xFF) shl 24) or
+            ((bytes[off + 1].toLong() and 0xFF) shl 16) or
+            ((bytes[off + 2].toLong() and 0xFF) shl 8) or
+            (bytes[off + 3].toLong() and 0xFF)
+    }
+
+    /**
+     * 五元组连接标识符。
+     *
+     * @param srcIp 源地址
+     * @param dstIp 目的地址
+     * @param srcPort 源端口
+     * @param dstPort 目的端口
      */
     fun connectionKey(
         srcIp: InetAddress,
         dstIp: InetAddress,
         srcPort: Int,
         dstPort: Int,
-    ): Long {
-        val srcBytes = srcIp.address
-        val dstBytes = dstIp.address
-        val isSrc6 = srcBytes.size == 16
-        val isDst6 = dstBytes.size == 16
+    ): Long = connectionKey(addressLow32(srcIp), addressLow32(dstIp), srcPort, dstPort)
 
-        val srcLow =
-            if (isSrc6) {
-                (srcBytes[12].toLong() and 0xFF shl 24) or
-                    (srcBytes[13].toLong() and 0xFF shl 16) or
-                    (srcBytes[14].toLong() and 0xFF shl 8) or
-                    (srcBytes[15].toLong() and 0xFF)
-            } else {
-                (srcBytes[0].toLong() and 0xFF shl 24) or
-                    (srcBytes[1].toLong() and 0xFF shl 16) or
-                    (srcBytes[2].toLong() and 0xFF shl 8) or
-                    (srcBytes[3].toLong() and 0xFF)
-            }
-
-        val dstLow =
-            if (isDst6) {
-                (dstBytes[12].toLong() and 0xFF shl 24) or
-                    (dstBytes[13].toLong() and 0xFF shl 16) or
-                    (dstBytes[14].toLong() and 0xFF shl 8) or
-                    (dstBytes[15].toLong() and 0xFF)
-            } else {
-                (dstBytes[0].toLong() and 0xFF shl 24) or
-                    (dstBytes[1].toLong() and 0xFF shl 16) or
-                    (dstBytes[2].toLong() and 0xFF shl 8) or
-                    (dstBytes[3].toLong() and 0xFF)
-            }
-
-        return (srcLow shl 48) xor
+    /**
+     * 五元组连接标识符 (**零分配**重载): 直接由两个地址的低 32 位组合。
+     *
+     * 位布局与 [connectionKey] 的 [InetAddress] 版本**逐位一致** —— 由
+     * `IpPacketParserTest` 的 golden 用例锁定, 改动即视为破坏性变更。
+     */
+    fun connectionKey(
+        srcLow: Long,
+        dstLow: Long,
+        srcPort: Int,
+        dstPort: Int,
+    ): Long =
+        (srcLow shl 48) xor
             (dstLow shl 32) xor
             (srcPort.toLong() shl 16) xor
             dstPort.toLong()
-    }
 
     data class ParsedPacket(
         val srcIp: InetAddress,
@@ -303,5 +336,9 @@ object IpPacketParser {
         val protocol: Int,
         val payloadStart: Int,
         val payloadLength: Int,
+        /** 源地址低 32 位 (零分配算出, 见 [addressLow32]); 供 `connectionKey` 直接使用。 */
+        val srcLow: Long = addressLow32(srcIp),
+        /** 目的地址低 32 位; 供 `connectionKey` 直接使用。 */
+        val dstLow: Long = addressLow32(dstIp),
     )
 }
