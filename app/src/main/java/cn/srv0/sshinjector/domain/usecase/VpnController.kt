@@ -9,6 +9,7 @@ import cn.srv0.sshinjector.domain.model.ConnectionStats
 import cn.srv0.sshinjector.domain.model.HealthStep
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.model.VpnState
+import cn.srv0.sshinjector.domain.obs.AppMetrics
 import cn.srv0.sshinjector.domain.vpn.AdBlocker
 import cn.srv0.sshinjector.domain.vpn.CidrRoute
 import cn.srv0.sshinjector.domain.vpn.DNS_MODE_WHITELIST
@@ -256,6 +257,9 @@ class VpnController
             message: String,
             level: LogLevel,
         ) {
+            // 故障归因: **全仓唯一的落盘出口**, WARNING/ERROR 按静态前缀计数 (见 AppMetrics)。
+            // 放这里而不是 appLogThrottled: 后者经 appLogSink 转调本函数, 两处都记会重复计数。
+            AppMetrics.record(level, message)
             // 时间戳在写入侧生成: LogViewModel 打开界面时回放 replay 缓存不会把历史条目
             // 全部伪造成 "现在"; clear 也能按 cutoff 精确剔除存量
             _logFlow.tryEmit(
@@ -383,6 +387,8 @@ class VpnController
             // 新一轮连接: 分阶段计数与评估窗口清零, 避免上一会话的增量污染本轮归因
             StageCounters.reset()
             stageEvaluator.reset()
+            // 故障归因按会话清零: "本会话 N 类 M 次" 必须名副其实
+            AppMetrics.resetSession()
             // 新一轮连接: 清掉上一次的健康归因/出口 IP/流程阶段, 重新从"未验证"开始
             updateState {
                 it.copy(
@@ -594,6 +600,9 @@ class VpnController
                     server = null,
                 )
             }
+            // 会话结束前打一次最终归因: 导出的日志末尾就能看到"这次会话哪类故障占主导",
+            // 不用在几百行里数 (无 adb 现场的唯一判据)
+            AppMetrics.summary().takeIf { it.isNotEmpty() }?.let { addLog(it, LogLevel.INFO) }
             addLog("VPN 连接已完全断开", LogLevel.INFO)
         }
 
@@ -1263,10 +1272,15 @@ class VpnController
                                 tunControlDroppedBytes = droppedTunControlBytes.get(),
                                 tunTrailingDropped = trailingBytesDropped.get(),
                                 tunNoInterfaceDropped = droppedNoTun.get(),
+                                // 资源占用: 泄漏类问题 (队列堆积 / 映射表打满) 的唯一可见面
+                                resourceDiagnostics =
+                                    "TUN 写队列 ${tunWriter?.depth() ?: 0} · ${dnsInterceptor.diagnostics()}",
                                 tcpDiagnostics = packetProcessor.tcpDiagnostics(),
                                 udpDiagnostics = packetProcessor.udpDiagnostics(),
                                 ipv6Diagnostics = packetProcessor.ipv6Diagnostics(),
                                 tunnelDiagnostics = tunnelStats,
+                                // 本会话 WARNING/ERROR 归因 (无故障时为空, 该节整省)
+                                failureSummary = AppMetrics.summary(),
                             ).render(),
                         )
                     }

@@ -25,7 +25,10 @@ package cn.srv0.sshinjector.domain.vpn
  * @param tcpDiagnostics `PacketProcessor.tcpDiagnostics()`
  * @param udpDiagnostics `PacketProcessor.udpDiagnostics()`
  * @param ipv6Diagnostics `PacketProcessor.ipv6Diagnostics()`
- * @param tunnelDiagnostics 活跃隧道的 `tunnelDiagnostics()`
+ * @param tunnelDiagnostics 活跃隧道的 `tunnelDiagnostics()` (代理连接/流量 + SSH 会话池 + SSH IO 线程池)
+ * @param resourceDiagnostics 本栈自己的资源占用 (TUN 写队列深度、DNS 映射表占用) —— 泄漏类问题的判据
+ * @param failureSummary [cn.srv0.sshinjector.domain.obs.AppMetrics] 的会话失败归因;
+ *   空串 = 本会话无 WARNING/ERROR, 渲染时整节省略 (健康会话不产生噪声, 也不打印"0 次"假数据)
  */
 internal data class DataPlaneSnapshot(
     val upBytes: Long,
@@ -37,18 +40,24 @@ internal data class DataPlaneSnapshot(
     val tunControlDroppedBytes: Long,
     val tunTrailingDropped: Long,
     val tunNoInterfaceDropped: Long,
+    val resourceDiagnostics: String,
     val tcpDiagnostics: String,
     val udpDiagnostics: String,
     val ipv6Diagnostics: String,
     val tunnelDiagnostics: String,
+    val failureSummary: String,
 ) {
-    fun render(): String =
-        "数据面快照 · 上行 $upBytes B / 下行 $downBytes B · " +
-            "包 ↑$packetsReceived ↓$packetsSent · $rateText · " +
-            "TUN 写丢弃 $tunControlDropped 个(${tunControlDroppedBytes}B 控制包) · " +
-            "TUN 残留未解析 ${tunTrailingDropped}B · " +
-            "TUN 接口空丢包 $tunNoInterfaceDropped · " +
-            "$tcpDiagnostics · $udpDiagnostics · $ipv6Diagnostics · $tunnelDiagnostics"
+    fun render(): String {
+        val head =
+            "数据面快照 · 上行 $upBytes B / 下行 $downBytes B · " +
+                "包 ↑$packetsReceived ↓$packetsSent · $rateText · " +
+                "TUN 写丢弃 $tunControlDropped 个(${tunControlDroppedBytes}B 控制包) · " +
+                "TUN 残留未解析 ${tunTrailingDropped}B · " +
+                "TUN 接口空丢包 $tunNoInterfaceDropped · " +
+                "$resourceDiagnostics · " +
+                "$tcpDiagnostics · $udpDiagnostics · $ipv6Diagnostics · $tunnelDiagnostics"
+        return if (failureSummary.isEmpty()) head else "$head · $failureSummary"
+    }
 
     companion object {
         /**

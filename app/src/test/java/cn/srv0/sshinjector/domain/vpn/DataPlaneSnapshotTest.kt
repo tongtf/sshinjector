@@ -15,23 +15,23 @@ class DataPlaneSnapshotTest {
     private fun snapshot(
         up: Long = 1000,
         down: Long = 2000,
-        received: Long = 11,
-        sent: Long = 22,
-        rate: String = "↑1 B/s ↓2 B/s",
+        failure: String = "",
     ) = DataPlaneSnapshot(
         upBytes = up,
         downBytes = down,
-        packetsReceived = received,
-        packetsSent = sent,
-        rateText = rate,
+        packetsReceived = 11,
+        packetsSent = 22,
+        rateText = "↑1 B/s ↓2 B/s",
         tunControlDropped = 3,
         tunControlDroppedBytes = 300,
         tunTrailingDropped = 7,
         tunNoInterfaceDropped = 5,
+        resourceDiagnostics = "TUN 写队列 2 · 假 IP 映射 9/16384",
         tcpDiagnostics = "TCP 连接=1",
         udpDiagnostics = "UDP 丢弃 2 个",
         ipv6Diagnostics = "IPv6 NA=4",
         tunnelDiagnostics = "SA 通道数=2",
+        failureSummary = failure,
     )
 
     @Test
@@ -52,10 +52,27 @@ class DataPlaneSnapshotTest {
         assertTrue(text.contains("TUN 写丢弃 3 个(300B 控制包)"))
         assertTrue(text.contains("TUN 残留未解析 7B"))
         assertTrue(text.contains("TUN 接口空丢包 5"))
+        assertTrue(text.contains("TUN 写队列 2"))
+        assertTrue(text.contains("假 IP 映射 9/16384"))
         assertTrue(text.contains("TCP 连接=1"))
         assertTrue(text.contains("UDP 丢弃 2 个"))
         assertTrue(text.contains("IPv6 NA=4"))
         assertTrue(text.contains("SA 通道数=2"))
+    }
+
+    @Test
+    fun `failure attribution section is omitted when the session had no failures`() {
+        val text = snapshot(failure = "").render()
+        assertTrue("无故障时不得出现空节或 0 次假数据: $text", !text.contains("故障归因"))
+        assertTrue(!text.endsWith(" · "))
+    }
+
+    @Test
+    fun `failure attribution section is appended when present`() {
+        val text = snapshot(failure = "故障归因 · 本会话 1 类 12 次 — 上行背压丢段 ×12").render()
+        assertTrue(text.endsWith(" · 故障归因 · 本会话 1 类 12 次 — 上行背压丢段 ×12"))
+        // 归因必须在最后 (与它要解释的计数同屏, 且固定位置便于肉眼扫)
+        assertTrue(text.indexOf("故障归因") > text.indexOf("TCP 连接=1"))
     }
 
     @Test

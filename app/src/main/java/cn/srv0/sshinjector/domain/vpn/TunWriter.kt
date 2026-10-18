@@ -70,6 +70,12 @@ class TunWriter(
         this.stream = stream
     }
 
+    /**
+     * 当前队列深度 (包数), 诊断用。
+     * 贴近 [capacity] = 持续背压; **长期大于 0 且不下降** = 写线程卡在 TUN 写上 (回程数据正在堆积)。
+     */
+    fun depth(): Int = queue.size
+
     override fun write(data: ByteArray): Boolean {
         // 关闭后的写入不计数: 会话已结束, 这不是数据面故障 (计进去会污染快照/健康窗口)
         if (!accepting.get()) return false

@@ -26,7 +26,16 @@ class Socks5TunnelPlugin
         override val localSocksPort: Int
             get() = socksServer?.boundPort?.value ?: 0
 
-        override fun tunnelDiagnostics(): String = socksServer?.diagnostics() ?: ""
+        /**
+         * 隧道侧资源快照: 代理连接/流量 + SSH 会话池 + SSH IO 线程池。
+         * 三段合起来回答"资源有没有在泄漏" (旧实现只有第一段, 池/线程数不可见)。
+         */
+        override fun tunnelDiagnostics(): String =
+            listOf(
+                socksServer?.diagnostics() ?: "",
+                jschClient.poolDiagnostics(),
+                sshIoDispatcher.diagnostics(),
+            ).filter { it.isNotEmpty() }.joinToString(" · ")
 
         override suspend fun connect(config: TunnelConfig): Result<Unit> {
             val c = config as TunnelConfig.Socks5

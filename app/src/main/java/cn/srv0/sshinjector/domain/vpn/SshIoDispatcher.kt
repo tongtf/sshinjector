@@ -2,9 +2,11 @@ package cn.srv0.sshinjector.domain.vpn
 
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
+import java.util.concurrent.RejectedExecutionHandler
 import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -24,6 +26,8 @@ import javax.inject.Singleton
 class SshIoDispatcher
     @Inject
     constructor() {
+        /** 饱和回执次数 (见 [diagnostics]); 声明在 [executor] 之前, 避免初始化顺序上的任何疑义。 */
+        private val callerRunsCount = AtomicLong(0)
         private val executor: ThreadPoolExecutor = createExecutor()
 
         val dispatcher: CoroutineDispatcher = executor.asCoroutineDispatcher()
@@ -35,6 +39,17 @@ class SshIoDispatcher
          */
         fun isSaturated(): Boolean = executor.activeCount >= MAX_THREADS
 
+        /**
+         * SSH IO 线程池资源快照 (周期日志用)。
+         *
+         * [callerRunsCount] 是**饱和回执次数**: 池满时 `CallerRunsPolicy` 会把阻塞 SSH 操作直接
+         * 跑在调用线程上 (eventLoop / packetLoop) —— 这正是"一条连接卡住所有人"的成因, 而它在
+         * 老实现里是**静默**的 (无计数无日志)。持续增长 = 池上限 128 已成瓶颈。
+         */
+        fun diagnostics(): String =
+            "SSH IO 线程 ${executor.activeCount}/${executor.poolSize} (上限 $MAX_THREADS) · " +
+                "饱和回执 ${callerRunsCount.get()} 次"
+
         private fun createExecutor(): ThreadPoolExecutor {
             val e =
                 ThreadPoolExecutor(
@@ -44,7 +59,12 @@ class SshIoDispatcher
                     TimeUnit.SECONDS,
                     SynchronousQueue(),
                     { r -> Thread(r, "ssh-io").also { it.isDaemon = true } },
-                    ThreadPoolExecutor.CallerRunsPolicy(),
+                    // 语义与 CallerRunsPolicy 完全一致, 只多一次计数: 池满时把任务跑在调用线程上
+                    // (不丢弃任务 —— SSH 读协程被丢 = 该连接永久无回程)。
+                    RejectedExecutionHandler { r, pool ->
+                        callerRunsCount.incrementAndGet()
+                        if (!pool.isShutdown) r.run()
+                    },
                 )
             // core 线程空闲同样回收, 完全空闲时回到 0 线程
             e.allowCoreThreadTimeOut(true)

@@ -1031,6 +1031,22 @@ class JschSshClient
         fun hasUnhealthySession(): Boolean = pool.any { !it.healthy }
 
         /**
+         * SSH 会话池资源快照 (周期日志用): 连接数 / 健康数 / 在途通道总数。
+         *
+         * 在途通道总数(= 各会话 `activeChannels` 之和)**持续不下降** = 通道泄漏 (某条关闭路径漏了
+         * `activeChannels.decrementAndGet`), 早晚把会话读线程拖死 → 新连接全拿 0x05。
+         * 这个数在旧实现里完全不可见 (只能靠"连接数对不上"猜)。
+         */
+        fun poolDiagnostics(): String {
+            val now = pool.toList()
+            val connected = now.count { it.session.isConnected }
+            val healthy = now.count { it.healthy }
+            val channels = now.sumOf { it.activeChannels.get() }
+            val suspect = now.count { it.suspect }
+            return "SSH 会话 $connected/${now.size} (健康 $healthy, 可疑 $suspect, 在途通道 $channels)"
+        }
+
+        /**
          * 创建直连通道 - 从 session 池中轮询选择健康的 session
          */
         override fun createDirectChannel(

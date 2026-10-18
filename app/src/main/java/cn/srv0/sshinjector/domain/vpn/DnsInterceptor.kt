@@ -359,6 +359,18 @@ class DnsInterceptor
         }
 
         /**
+         * DNS 侧资源占用 (周期快照用): 假 IP 映射/真实 IP 映射/待摘除各自与上限的比例。
+         *
+         * 假 IP 池打满是"后续 CONNECT 全 0x03 → 卡连接中"的成因, 而它在日志里只表现为
+         * 一堆分散的失败行; 这里给出**当前占用**, 一眼看出是不是快满了。
+         */
+        fun diagnostics(): String =
+            "假 IP 映射 ${ipToDomain.size}/$MAX_IP_DOMAIN_MAP_SIZE · " +
+                "待摘除 ${pendingFakeIpRelease.size} · " +
+                "真实 IP 映射 ${realIpToDomain.size}/$MAX_REAL_IP_MAP_SIZE · " +
+                "域名→IP ${domainToIp.size}/$MAX_DOMAIN_IP_MAP_SIZE"
+
+        /**
          * 归零但仍在摘除宽限期内的假 IP → 摘除截止时刻; 到期由 cleanupScheduler 真正删除。
          * 期间映射保持可解析 (客户端可能仍持有这张假 IP), 见 [FAKE_IP_RELEASE_GRACE_MS]。
          */

@@ -16,6 +16,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.channels.SocketChannel
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 private val IS_DEBUG = Log.isLoggable("PacketProcessor", Log.DEBUG)
@@ -101,6 +102,13 @@ class TcpStateMachine(
 
     /** 假 IP → 活动连接数; 只在归零时才释放 DNS 映射 (见 releaseUnusedFakeIps)。 */
     private val fakeIpActiveConns = ConcurrentHashMap<String, Int>()
+
+    /**
+     * 此刻正卡在回程闸门 ([awaitFlowCapacity]) 上的回程线程数。
+     * 持续 > 0 = 客户端 ACK 不再回补 (与"闸门阻塞秒数"互为佐证); 与"回程窗口耗尽"日志同时出现
+     * 即隧道死锁现场。仅计数, 不改变等待语义。
+     */
+    private val flowWaiters = AtomicInteger(0)
 
     // 建连耗时统计 (慢握手占比 = SYN-ACK 延迟发送的总代价, 见 reportSlowHandshakeRate)
     private val handshakeCount = AtomicLong(0)
@@ -1291,11 +1299,14 @@ class TcpStateMachine(
                     )
                 }
                 val waitStartNs = System.nanoTime()
+                flowWaiters.incrementAndGet()
                 try {
                     conn.flowLock.wait(FLOW_WAIT_TIMEOUT_MS)
                 } catch (e: InterruptedException) {
                     Thread.currentThread().interrupt()
                     return 0
+                } finally {
+                    flowWaiters.decrementAndGet()
                 }
                 // 闸门阻塞时长累计: 持续增长 = 客户端 ACK 停止回补, 回程整体停摆
                 // (与"上行背压丢段"互为因果, 两者一起出现在快照即隧道死锁)。
@@ -1318,6 +1329,7 @@ class TcpStateMachine(
     fun diagnostics(): String =
         "TCP 连接 ${tcpConnections.size} · 背压丢段 ${droppedByBackpressure.get()}B · " +
             "上行缓存 ${upstreamBufferedBytes.get()}B · 回程闸门阻塞 ${flowBlockedMillis.get() / 1000}s · " +
+            "闸门等待 ${flowWaiters.get()} · 假 IP 引用 ${fakeIpActiveConns.size} · " +
             "孤儿包 ${droppedOrphanPackets.get()}(${droppedOrphanBytes.get()}B · " +
             "fin ${orphanFinPackets.get()}/rst ${orphanRstPackets.get()}" +
             "/ack ${orphanAckPackets.get()}/data ${orphanDataPackets.get()}) · " +
