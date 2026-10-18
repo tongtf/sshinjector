@@ -102,7 +102,10 @@ class TcpStateMachine(
     // 回程窗口闸门累计阻塞时长 (客户端 ACK 停止回补的证据)
     private val flowBlockedMillis = AtomicLong(0)
 
-    // 上行缓存累计字节 (进入缓存而非丢弃的数据量; 与 TUN 计数对比可知隧道是否在空转)
+    // 上行缓存累计字节 (进入缓存而非丢弃的数据量; 与 TUN 计数对比可知隧道是否在空转)。
+    // **这是累计量, 不是 backlog** —— 快照里必须带「累计」二字: 光看 `上行缓存 24B` 会被读成
+    // "此刻卡着 24B"(本会话已入队 24B 而已)。真正的瞬时 backlog 是 `conn.pendingUpstreamBytes`,
+    // 只在 `上行等待通道 · <域名> — (state=…, 队列 NB) 已缓存` 那行的「队列」里出现。
     private val upstreamBufferedBytes = AtomicLong(0)
 
     // 无连接(孤儿)上行包: 连接已关闭/被清理后客户端仍在发包的数量与字节。
@@ -1337,7 +1340,7 @@ class TcpStateMachine(
      */
     fun diagnostics(): String =
         "TCP 连接 ${tcpConnections.size} · 背压丢段 ${droppedByBackpressure.get()}B · " +
-            "上行缓存 ${upstreamBufferedBytes.get()}B · 回程闸门阻塞 ${flowBlockedMillis.get() / 1000}s · " +
+            "上行缓存累计 ${upstreamBufferedBytes.get()}B · 回程闸门阻塞 ${flowBlockedMillis.get() / 1000}s · " +
             "闸门等待 ${flowWaiters.get()} · 假 IP 引用 ${fakeIpActiveConns.size} · " +
             "孤儿包 ${droppedOrphanPackets.get()}(${droppedOrphanBytes.get()}B · " +
             "fin ${orphanFinPackets.get()}/rst ${orphanRstPackets.get()}" +
