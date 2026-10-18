@@ -155,7 +155,7 @@ grep -E '^(AllowTcpForwarding|GatewayPorts)' /etc/ssh/sshd_config
 |--------|--------|------|
 | MTU | 1500 | 低 MTU 可解决某些网络下的断流 |
 | 保活间隔 | 30s | SSH 心跳，防止服务端断开长连接 |
-| 连通性探测地址 | 默认 | 状态检测的 HTTP 端点；留空用默认（`connect.rom.miui.com/generate_204`），可换为自建 204/200 端点 |
+| 连通性探测地址 | 默认 | 状态检测的 HTTP 端点；留空用默认（`http://www.gstatic.com/generate_204`），可换为自建 204/200 端点。**端点要选服务端出口 (海外 VPS) 能稳定访问的**，中国区端点（如 `connect.rom.miui.com`）从海外出口会超时 |
 | DNS 模式 | 远端解析 | 防 DNS 泄露；需服务端可访问公共 DNS |
 | IPv6 | 开启 | 双栈网络，访问 IPv6 站点 |
 | 生物识别 | 开启 | 保护私钥，解锁需指纹/面容 |

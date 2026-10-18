@@ -52,7 +52,7 @@ class SettingsViewModel
             settingsDataStore.language
                 .stateIn(viewModelScope, SharingStarted.Eagerly, "system")
 
-        /** null = 未设置 → 探测走默认端点 (connect.rom.miui.com/generate_204)。 */
+        /** null = 未设置 → 探测走默认端点 (http://www.gstatic.com/generate_204, 服务端出口需可达)。 */
         val probeUrl: StateFlow<String?> =
             settingsDataStore.probeUrl
                 .stateIn(viewModelScope, SharingStarted.Eagerly, null)

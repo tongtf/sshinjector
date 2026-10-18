@@ -11,7 +11,7 @@
 
 | # | 决策 | 结论 |
 |---|------|------|
-| D1 | 探测端点 | 默认 `http://connect.rom.miui.com/generate_204`，**可配置**（SettingsDataStore 全局 `probeUrl`，null=默认）；收到任意 HTTP 响应状态行（204/200/3xx…）= 端到端可用 |
+| D1 | 探测端点 | 默认 `http://www.gstatic.com/generate_204`（**2026-10-18 订正**: 本行/设置页提示一直写着中国区 `connect.rom.miui.com/generate_204`, 代码默认值其实已在 `fff76a8` 改为 gstatic —— 海外 VPS 出口可达, 当时漏改文档）, **可配置**（SettingsDataStore 全局 `probeUrl`，null=默认）；收到任意 HTTP 响应状态行（204/200/3xx…）= 端到端可用 |
 | D2 | 节奏 | 15s 周期 + 事件触发（连接成功/网络切换/解锁/重连成功）；**连败 2 次降级，1 次成功恢复** |
 | D3 | 失败处置 | **仅显示**；自动重连继续走既有钩子（解锁/网络切换/keepAlive），不因探测失败杀连接 |
 | D4 | 连接阶段归因 | 要，统一步骤枚举；复用 `lastError`/异常消息映射 |

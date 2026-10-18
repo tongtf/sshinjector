@@ -69,7 +69,7 @@
     <string name="settings_keepalive">保活间隔: %d s</string>
     <string name="settings_follow_server">跟随服务器设置</string>
     <string name="settings_probe_url">连通性探测地址</string>
-    <string name="settings_probe_url_hint">http://connect.rom.miui.com/generate_204</string>
+    <string name="settings_probe_url_hint">http://www.gstatic.com/generate_204</string>
     <string name="settings_probe_url_invalid">请输入 http(s):// 完整地址</string>
     <string name="settings_ipv6">IPv6 支持</string>
     <string name="settings_ipv6_desc">启用 IPv6 双栈</string>
