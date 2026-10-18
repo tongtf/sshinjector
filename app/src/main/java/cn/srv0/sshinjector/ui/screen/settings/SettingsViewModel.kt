@@ -67,6 +67,12 @@ class SettingsViewModel
 
         fun setKeepAlive(value: Int) = viewModelScope.launch { settingsDataStore.setKeepAlive(value) }
 
+        /** 清除全局 MTU 覆盖 (回退当前服务器的 mtu)。 */
+        fun clearMtu() = viewModelScope.launch { settingsDataStore.clearMtu() }
+
+        /** 清除全局 keepAlive 覆盖 (回退当前服务器的 keepAliveInterval)。 */
+        fun clearKeepAlive() = viewModelScope.launch { settingsDataStore.clearKeepAlive() }
+
         fun setProbeUrl(url: String) = viewModelScope.launch { settingsDataStore.setProbeUrl(url.ifBlank { null }) }
 
         fun setEnableIPv6(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setEnableIPv6(enabled) }

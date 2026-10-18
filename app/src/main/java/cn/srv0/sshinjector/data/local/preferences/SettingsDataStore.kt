@@ -2,6 +2,7 @@ package cn.srv0.sshinjector.data.local.preferences
 
 import android.content.Context
 import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
@@ -29,8 +30,8 @@ class SettingsDataStore
             private val KEY_AUTO_CONNECT = booleanPreferencesKey("auto_connect")
             private val KEY_LAST_SERVER_ID = longPreferencesKey("last_server_id")
             private val KEY_BIOMETRIC_UNLOCK = booleanPreferencesKey("biometric_unlock")
-            private val KEY_MTU = intPreferencesKey("mtu")
-            private val KEY_KEEP_ALIVE = intPreferencesKey("keep_alive")
+            internal val KEY_MTU = intPreferencesKey("mtu")
+            internal val KEY_KEEP_ALIVE = intPreferencesKey("keep_alive")
             private val KEY_ENABLE_IPV6 = booleanPreferencesKey("enable_ipv6")
             private val KEY_DNS_MODE = intPreferencesKey("dns_mode")
             private val KEY_ADBLOCK_ENABLED = booleanPreferencesKey("ad_block_enabled")
@@ -53,6 +54,19 @@ class SettingsDataStore
             const val DEFAULT_ADBLOCK_REMOTE_URL =
                 "https://cdn.jsdelivr.net/gh/tongtf/sshinjector@main/" +
                     "adblock_rules.txt"
+
+            /**
+             * 清除全局 MTU 覆盖 (回退 per-server 字段)。
+             * 抽成纯变换 (无 Context) 便于 JVM 单测直接验证键被移除。
+             */
+            internal fun clearMtuOverride(prefs: MutablePreferences) {
+                prefs.remove(KEY_MTU)
+            }
+
+            /** 清除全局 keepAlive 覆盖 (回退 per-server 字段)。 */
+            internal fun clearKeepAliveOverride(prefs: MutablePreferences) {
+                prefs.remove(KEY_KEEP_ALIVE)
+            }
         }
 
         val autoConnect: Flow<Boolean> =
@@ -132,6 +146,16 @@ class SettingsDataStore
 
         suspend fun setKeepAlive(value: Int) {
             context.dataStore.edit { it[KEY_KEEP_ALIVE] = value }
+        }
+
+        /** 清除全局 MTU 覆盖 → 运行时回退 per-server 的 mtu。 */
+        suspend fun clearMtu() {
+            context.dataStore.edit { clearMtuOverride(it) }
+        }
+
+        /** 清除全局 keepAlive 覆盖 → 运行时回退 per-server 的 keepAliveInterval。 */
+        suspend fun clearKeepAlive() {
+            context.dataStore.edit { clearKeepAliveOverride(it) }
         }
 
         suspend fun setEnableIPv6(enabled: Boolean) {

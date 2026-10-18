@@ -208,13 +208,18 @@ fun SettingsScreen(
                 Slider(
                     value = (mtu ?: 1500).toFloat(),
                     onValueChange = { viewModel.setMtu(it.toInt()) },
-                    valueRange = 1280f..1500f,
-                    steps = 54,
+                    valueRange = 576f..1500f,
+                    steps = 0,
                     modifier =
                         Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp),
                 )
+                if (mtu != null) {
+                    TextButton(onClick = { viewModel.clearMtu() }) {
+                        Text(stringResource(R.string.settings_follow_server))
+                    }
+                }
 
                 Text(
                     stringResource(R.string.settings_keepalive, keepAlive ?: 30),
@@ -224,13 +229,18 @@ fun SettingsScreen(
                 Slider(
                     value = (keepAlive ?: 30).toFloat(),
                     onValueChange = { viewModel.setKeepAlive(it.toInt()) },
-                    valueRange = 10f..120f,
-                    steps = 21,
+                    valueRange = 0f..3600f,
+                    steps = 0,
                     modifier =
                         Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp),
                 )
+                if (keepAlive != null) {
+                    TextButton(onClick = { viewModel.clearKeepAlive() }) {
+                        Text(stringResource(R.string.settings_follow_server))
+                    }
+                }
 
                 OutlinedTextField(
                     value = probeDraft,
