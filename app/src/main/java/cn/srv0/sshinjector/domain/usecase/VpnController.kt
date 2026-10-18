@@ -916,16 +916,22 @@ class VpnController
                     // 仅 SYSTEM 模式 DNS(UDP:53) 走 protected socket 直接转发 (对 UDP 有效, 非回注);
                     // TCP 落入 PacketProcessor → forwardSynToTunnel → shouldBypassTcp → 用户态直连;
                     // UDP 非 53 由 UdpRelay 丢弃计数。
-                    val needDstIp = excludedRoutes.isNotEmpty()
-                    val dstIp = if (needDstIp) extractDstIp(buffer, workVersion) else null
-                    val isSystemDnsUdp53 =
-                        transportMode == DnsInterceptor.DnsTransport.SYSTEM &&
+                    // 旁路判定改为**直接在报文缓冲区里做前缀匹配** (T-A04): 旧路径为每个包构造 dstIp
+                    // 并对每条排除路由克隆一次地址字节 (N 条规则 = N+1 次分配/包)。dstIp 只在真正要
+                    // 转发 (SYSTEM 模式 DNS:53) 时才构造。
+                    val bypassVpn =
+                        excludedRoutes.isNotEmpty() && shouldBypassVpnRaw(buffer, workVersion)
+                    val dstIp =
+                        if (bypassVpn &&
+                            transportMode == DnsInterceptor.DnsTransport.SYSTEM &&
                             extractProtocol(buffer, workVersion) == IPPROTO_UDP &&
                             extractDstPort(buffer, workVersion) == DNS_PORT
-                    if (dstIp != null &&
-                        shouldBypassVpn(dstIp) &&
-                        isSystemDnsUdp53
-                    ) {
+                        ) {
+                            extractDstIp(buffer, workVersion)
+                        } else {
+                            null
+                        }
+                    if (dstIp != null) {
                         forwardDnsBypassPacket(buffer, dstIp, workVersion)
                     } else {
                         when (workVersion) {
@@ -1015,15 +1021,33 @@ class VpnController
                 -1
             }
 
-        private fun shouldBypassVpn(dstIp: InetAddress): Boolean {
-            val result = excludedRoutes.any { CidrRoute.matches(dstIp, it) }
-            if (result) {
-                Log.d(
-                    "VpnController",
-                    "shouldBypassVpn: TRUE for $dstIp (excludedRoutes=${excludedRoutes.size})",
-                )
+        /**
+         * 排除路由直连判定 (**零分配**): 直接在报文缓冲区里对每条路由做前缀匹配。
+         *
+         * 旧写法 `excludedRoutes.any { CidrRoute.matches(dstIp, it) }` 需要先为每个包构造 dstIp
+         * (另一次 InetAddress 分配), 再对每条路由克隆 `InetAddress.address`。
+         * 语义与 [computeShouldBypassTcp] 里的同一分支一致 (同一 [CidrRoute] 算法), 差别只是
+         * 数据来源是报文缓冲区而非 InetAddress; 由 `CidrRouteTest` 的等价性矩阵锁定。
+         *
+         * @param buffer 当前包缓冲区 (position 已指向包起点)
+         * @param version 4 / 6
+         */
+        private fun shouldBypassVpnRaw(
+            buffer: ByteBuffer,
+            version: Int,
+        ): Boolean {
+            val routes = excludedRoutes
+            if (routes.isEmpty()) return false
+            val isV4 = version == 4
+            val dstOffset = buffer.position() + if (isV4) 16 else 24
+            val ipSize = if (isV4) 4 else 16
+            for (i in routes.indices) {
+                if (CidrRoute.matchesRaw(buffer, dstOffset, ipSize, routes[i])) {
+                    Log.d("VpnController", "shouldBypassVpn: TRUE (excludedRoutes=${routes.size})")
+                    return true
+                }
             }
-            return result
+            return false
         }
 
         /**
