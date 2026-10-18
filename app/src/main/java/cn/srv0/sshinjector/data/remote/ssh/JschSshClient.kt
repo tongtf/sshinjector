@@ -337,7 +337,51 @@ internal data class PooledSession(
     /** 往返心跳失败标记: 静默黑洞 (单向心跳无感) 的会话级证据, 通道失败时据此判定会话层失效 */
     @Volatile var suspect: Boolean = false,
     var activeChannels: AtomicInteger = AtomicInteger(0),
-)
+) {
+    /**
+     * 最近一次「开通道**超时**」的时刻 (毫秒, 0 = 从未发生)。
+     *
+     * 必须是 **body 属性而不是构造参数**: data class 的 equals 含全部构造参数, 而
+     * `pool.indexOf(pooled)` 靠 equals 定位重建槽位 —— 一个会变化的构造参数会让 indexOf
+     * 返回 -1 (被 `coerceAtLeast(0)` 吞成 0), 重建打到错误的槽位上。
+     *
+     * 用途见 [createDirectChannel]: 开通道超时的会话 `activeChannels` 反而更低,
+     * 只按活跃通道数排序会**每次都先挑它** (越坏越优先), 真机日志里表现为
+     * 25s 内 3 次 3s 超时反复落在同一批候选上。
+     */
+    @Volatile var lastOpenStallAtMs: Long = 0L
+}
+
+/**
+ * `createDirectChannel` 候选循环的预算算术与「坏会话后置」判据 (纯逻辑, 单测锁死)。
+ *
+ * 为什么要单独抽出来: 曾经把「总预算 / 候选数」**当成总预算**用
+ * (`budgetLeft = connectStartedAt + share - now`), 于是首个候选吃满 3s 后预算就耗尽 →
+ * `break` → 后面两个健康会话**一次都没试过**, 客户端只等到 `rep=5`。
+ * 真机日志里就是 `SSH 通道打开失败 · www.google.com:443 — channel is not opened.` +
+ * 3s 后 `SOCKS 连接被拒`, 而同一时刻其它连接的建连只要 60~100ms (会话是好的)。
+ */
+internal object ChannelOpenBudget {
+    /** 「开通道迟滞」后的**后置**时长: 期内该会话排在候选最后 (仍会试, 只是不再优先)。 */
+    const val STALL_DEMOTE_MS = 30_000L
+
+    /**
+     * 单候选 `channel.connect` 的超时 (毫秒) = `min(候选份额, 剩余总预算, 硬上限)`。
+     * 返回 `<= 0` 表示总预算已耗尽, 调用方**必须停止**尝试后续候选。
+     */
+    fun attemptTimeoutMs(
+        deadlineAtMs: Long,
+        nowMs: Long,
+        shareMs: Long,
+        maxMs: Long,
+    ): Long = minOf(maxMs, shareMs, deadlineAtMs - nowMs)
+
+    /** 最近 [STALL_DEMOTE_MS] 内发生过开通道超时 → 排序后置 (`lastStallAtMs == 0` = 从未)。 */
+    fun isRecentlyStalled(
+        lastStallAtMs: Long,
+        nowMs: Long,
+    ): Boolean = lastStallAtMs > 0L && nowMs - lastStallAtMs < STALL_DEMOTE_MS
+}
 
 @Singleton
 class JschSshClient
@@ -403,7 +447,23 @@ class JschSshClient
              * 留 1s 余量给 loopback connect + SOCKS 协商, 保证在代理关连接前收尾。
              */
             private const val CHANNEL_BUDGET_MS = 9000L
+
+            /**
+             * 单候选的预算份额 = 总预算 / 会话数。
+             *
+             * 两个数缺一不可: 只有总预算 (9s) 时首个候选会把 9s 全吃掉, 后两个候选一点时间
+             * 都拿不到; 只有份额 (3s) 时总预算变成 3s, 首候选超时后循环直接 `break` ——
+             * 后者就是真机日志里"3 个健康会话, 却只试了 1 个"的成因
+             * (见 [ChannelOpenBudget])。
+             */
             private const val CHANNEL_BUDGET_PER_CANDIDATE_MS = CHANNEL_BUDGET_MS / SESSION_POOL_SIZE
+
+            /**
+             * 「开通道迟滞」判据 (毫秒): 单次候选尝试耗时超过它就记一次 stall, 该会话在
+             * 后续选择中后置。取 1s —— 服务器直接回 `OPEN_FAILURE` (目标不可达) 是 RTT 级
+             * (几十~几百 ms), 只有"等不到 `OPEN_CONFIRMATION`"才可能拖到秒级。
+             */
+            private const val OPEN_STALL_MIN_MS = 1000L
 
             // 通道健康统计 (排障唯一可见面): 区分「目标层拒绝」与「会话层失效」是本次雪崩 bug 的关键,
             // 只看单条错误日志无法判断是远端连不上目标还是 SSH 会话坏了。
@@ -1067,11 +1127,19 @@ class JschSshClient
             val size = snapshot.size
             if (size == 0) return null
             val start = sessionIndex.getAndIncrement()
+            val now = System.currentTimeMillis()
             val candidates =
                 (0 until size)
                     .map { snapshot[Math.floorMod(start + it, size)] }
                     .filter { it.session.isConnected && it.healthy }
-                    .sortedBy { it.activeChannels.get() }
+                    // 刚开通道超时的会话排到最后: 它的 activeChannels 因失败反而更低,
+                    // 只按活跃数排序等于"越坏越优先", 会在它身上反复烧掉整个预算。
+                    .sortedWith(
+                        compareBy(
+                            { ChannelOpenBudget.isRecentlyStalled(it.lastOpenStallAtMs, now) },
+                            { it.activeChannels.get() },
+                        ),
+                    )
 
             if (candidates.isEmpty()) {
                 Log.w(TAG, "createDirectChannel: all sessions failed for $host:$port")
@@ -1093,13 +1161,22 @@ class JschSshClient
             }
 
             var lastError: Exception? = null
+            var attempted = 0
+            var lastAttemptMs = 0L
             val connectStartedAt = System.currentTimeMillis()
-            val perCandidateBudgetMs = CHANNEL_BUDGET_PER_CANDIDATE_MS
+            val deadlineAtMs = connectStartedAt + CHANNEL_BUDGET_MS
             for (pooled in candidates) {
-                // 单候选预算: 总预算 / 候选数，防止前几个候选抢尽预算导致后续候选无时间可用
-                val candidateBudgetMs = perCandidateBudgetMs
-                val budgetLeftMs = connectStartedAt + candidateBudgetMs - System.currentTimeMillis()
-                if (budgetLeftMs <= 0) break
+                // 单候选超时 = min(候选份额, 剩余总预算, 硬上限): 份额保证首个候选吃满就换人,
+                // 总预算保证所有候选加起来不超 CHANNEL_BUDGET_MS (代理 10s 关连接前必须收尾)。
+                val attemptMs =
+                    ChannelOpenBudget.attemptTimeoutMs(
+                        deadlineAtMs = deadlineAtMs,
+                        nowMs = System.currentTimeMillis(),
+                        shareMs = CHANNEL_BUDGET_PER_CANDIDATE_MS,
+                        maxMs = CHANNEL_CONNECT_TIMEOUT_MS.toLong(),
+                    )
+                if (attemptMs <= 0) break
+                attempted++
                 val candidateStartedAt = System.currentTimeMillis()
                 try {
                     val channel =
@@ -1113,14 +1190,15 @@ class JschSshClient
                     val output = channel.getOutputStream()
                     pooled.activeChannels.incrementAndGet()
                     try {
-                        channel.connect(minOf(CHANNEL_CONNECT_TIMEOUT_MS.toLong(), budgetLeftMs).toInt())
+                        channel.connect(attemptMs.toInt())
                     } catch (e: Exception) {
                         pooled.activeChannels.decrementAndGet()
                         throw e
                     }
                     statChannelOk.incrementAndGet()
-                    // 通道成功 = 往返证据: 清除往返心跳的 suspect 标记
+                    // 通道成功 = 往返证据: 清除往返心跳的 suspect 标记 + 撤销 stall 后置
                     pooled.suspect = false
+                    pooled.lastOpenStallAtMs = 0L
                     maybeLogChannelStats(host)
                     // 会话标识: 「已写未读」排障时用来区分会话级冻结 vs 单主机不应答
                     val sessionTag = "S" + Integer.toHexString(System.identityHashCode(pooled.session))
@@ -1129,6 +1207,11 @@ class JschSshClient
                     }
                 } catch (e: Exception) {
                     val elapsedMs = System.currentTimeMillis() - candidateStartedAt
+                    lastAttemptMs = elapsedMs
+                    // 拖到秒级 = 等不到 OPEN_CONFIRMATION (服务器还没把目标连上/会话读线程被堵),
+                    // 与"服务器秒回 OPEN_FAILURE (目标不可达)"是两回事: 后者是目标问题, 不该怪会话。
+                    // 这个区分只能靠耗时 —— JSch 对两种情况抛的是**同一条** "channel is not opened."
+                    if (elapsedMs >= OPEN_STALL_MIN_MS) pooled.lastOpenStallAtMs = System.currentTimeMillis()
                     Log.w(TAG, "createDirectChannel failed: $host:$port", e)
                     lastError = e
                     // 区分「SSH 会话坏了」与「这一个 channel 打不开」:
@@ -1169,13 +1252,17 @@ class JschSshClient
                 }
             }
 
-            // 所有候选均失败: 附 pool 快照 (暴露"选择时 isConnected 与 connect 时状态脱节"的模式)
+            // 所有候选均失败: 附 pool 快照 (暴露"选择时 isConnected 与 connect 时状态脱节"的模式)。
+            // 「末次耗时」是 timeout (≈候选份额) 与「服务器秒回 OPEN_FAILURE」(RTT 级) 的唯一区分手段
+            // —— JSch 两种情况的 message 完全一样, 不带上这个数就只能猜。
             val poolState =
                 pool.joinToString(prefix = "[", postfix = "]") {
                     "conn=${it.session.isConnected}/healthy=${it.healthy}"
                 }
             VpnController.appLogThrottled(
-                "SSH 通道打开失败 · $host:$port — ${lastError?.message} (pool: $poolState)",
+                "SSH 通道打开失败 · $host:$port — ${lastError?.message} · 试了 $attempted/${candidates.size} 个候选" +
+                    " · 末次耗时 ${lastAttemptMs}ms · 在途通道 ${pool.sumOf { it.activeChannels.get() }}" +
+                    " (pool: $poolState)",
                 level = LogLevel.ERROR,
                 throttleKey = "SSH 通道打开失败",
             )
