@@ -768,6 +768,9 @@ class VpnController
             Log.d("VpnController", "packetLoop started gen=$generation")
             while (isRunning && inputStream != null && generation == tunGeneration) {
                 try {
+                    // T-A05: 帧边界。下面的 read 会整块覆盖 readBuffer, 惰性地址必须在本次迭代内读完
+                    // (越帧读取会被 IpPacketParser.staleAddressReads 计数, 见 ParsedPacket 的类 KDoc)。
+                    IpPacketParser.newFrame()
                     val bytesRead = inputStream!!.read(readBuffer.array())
                     // EOF 不忙循环: 转异常走 catch 的连续失败计数 + backoff
                     if (bytesRead < 0) throw IOException("TUN read EOF")

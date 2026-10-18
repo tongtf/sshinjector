@@ -309,8 +309,8 @@ class TcpStateMachine(
         buffer: ByteBuffer,
         parsed: IpPacketParser.ParsedPacket,
     ): Boolean {
-        val srcIp = parsed.srcIp
-        val dstIp = parsed.dstIp
+        // T-A05: 地址**不再在这里物化** —— `parsed.srcIp/dstIp` 是惰性的, 只有真正要建连接
+        // (SYN) 或打 DEBUG 孤儿日志时才取, 数据包热路径因此 0 次 InetAddress 分配。
         val payloadStart = parsed.payloadStart
         val payloadLength = parsed.payloadLength
         if (payloadLength < 20) return false // 最小 TCP 头部
@@ -352,7 +352,7 @@ class TcpStateMachine(
 
         if (syn && !ack) {
             if (conn == null) {
-                conn = createTcpConnection(connKey, srcIp, dstIp, srcPort, dstPort)
+                conn = createTcpConnection(connKey, parsed, srcPort, dstPort)
                 // 必须先于 forwardSynToTunnel 赋值: 协程可能立刻读取这些字段构建 SYN-ACK
                 conn.clientWindowRaw = windowSize
                 conn.clientWscaleOffered = wscaleOffered
@@ -367,7 +367,7 @@ class TcpStateMachine(
                 // "新 browserSeq + 旧 forwardedBytes", 客户端不认我们的 ACK, 只能无限重传
                 // (实测上行 3.5MB 重传而服务器侧只收到 0.2MB)。
                 closeTcpConnection(connKey, conn, notifyBrowser = false)
-                val fresh = createTcpConnection(connKey, srcIp, dstIp, srcPort, dstPort)
+                val fresh = createTcpConnection(connKey, parsed, srcPort, dstPort)
                 fresh.clientWindowRaw = windowSize
                 fresh.clientWscaleOffered = wscaleOffered
                 fresh.browserSeq = (seqNum.toLong()) and UINT32_MASK
@@ -475,8 +475,8 @@ class TcpStateMachine(
             if (IS_DEBUG) {
                 Log.d(
                     TAG,
-                    "orphan packet (no connection) ${srcIp.hostAddress}:$srcPort → " +
-                        "${dstIp.hostAddress}:$dstPort payload=${payloadLen}B",
+                    "orphan packet (no connection) ${parsed.srcIp.hostAddress}:$srcPort → " +
+                        "${parsed.dstIp.hostAddress}:$dstPort payload=${payloadLen}B",
                 )
             }
         }
@@ -1330,7 +1330,8 @@ class TcpStateMachine(
             "/ack ${orphanAckPackets.get()}/data ${orphanDataPackets.get()}) · " +
             "回程丢弃 ${droppedDownstreamBytes.get()}B · 回程缓存溢出 ${droppedReturnQueueBytes.get()}B · " +
             "零回程 ${tunnelBlackHoleConns.get()}" +
-            "(秒断 ${tunnelBlackHoleImmediate.get()}/迟断 ${tunnelBlackHoleDelayed.get()})"
+            "(秒断 ${tunnelBlackHoleImmediate.get()}/迟断 ${tunnelBlackHoleDelayed.get()}) · " +
+            "地址惰性失效 ${IpPacketParser.staleAddressReads()}"
 
     /**
      * 闸门可用容量 = 客户端通告窗口 (含 scale) - 在途字节 (serverSeq - clientAck, u32 回绕安全)。
@@ -1792,13 +1793,14 @@ class TcpStateMachine(
 
     private fun createTcpConnection(
         key: Long,
-        srcIp: InetAddress,
-        dstIp: InetAddress,
+        parsed: IpPacketParser.ParsedPacket,
         srcPort: Int,
         dstPort: Int,
     ): TcpConnection {
         val id = connectionIdCounter.incrementAndGet()
-        val conn = TcpConnection(id, srcIp, dstIp, srcPort, dstPort)
+        // T-A05: 地址在这里**唯一一次**物化 (每连接 2 个 InetAddress, 而不是每包), 因为它要跨帧
+        // 长期持有 (bypass 判定 / 假 IP 查表 / 日志)。TcpConnection 内部把字节拷成自有副本。
+        val conn = TcpConnection(id, parsed.srcIp, parsed.dstIp, srcPort, dstPort)
         tcpConnections[key] = conn
         return conn
     }

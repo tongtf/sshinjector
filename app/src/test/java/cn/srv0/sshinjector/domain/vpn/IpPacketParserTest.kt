@@ -2,6 +2,7 @@ package cn.srv0.sshinjector.domain.vpn
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.InetAddress
@@ -255,6 +256,63 @@ class IpPacketParserTest {
         assertEquals(0x00000001L, parsed6!!.srcLow)
         assertEquals(0xABCD1234L, parsed6.dstLow)
         assertEquals(IpPacketParser.addressLow32(parsed6.dstIp), parsed6.dstLow)
+    }
+
+    // ---------------------------------------------------------------- T-A05 惰性地址
+
+    /**
+     * T-A05: 地址改为惰性物化 (只记 buffer + **绝对下标**)。低 32 位对**不代表**完整地址对
+     * (IPv6 的 key 只取后 4 字节), 所以两个地址族都要断言完整字节。
+     */
+    @Test
+    fun `lazy addresses materialize the full address for both families`() {
+        val parsed4 = IpPacketParser.parseIpv4Header(buffer(ipv4With("10.0.0.2", "192.168.1.1")))!!
+        assertArrayEquals(InetAddress.getByName("10.0.0.2").address, parsed4.srcIp.address)
+        assertArrayEquals(InetAddress.getByName("192.168.1.1").address, parsed4.dstIp.address)
+
+        val parsed6 = IpPacketParser.parseIpv6Header(buffer(ipv6With("2001:db8::1", "fd00::abcd:1234")))!!
+        assertArrayEquals(InetAddress.getByName("2001:db8::1").address, parsed6.srcIp.address)
+        assertArrayEquals(InetAddress.getByName("fd00::abcd:1234").address, parsed6.dstIp.address)
+    }
+
+    /**
+     * 惰性地址用**绝对**下标, 与解析器推进的 `position` 无关: 同一个包放在缓冲区偏移 8 处
+     * (粘连包/前缀场景) 必须读出同样的地址 —— 记下标而不是记 position 的自证点。
+     */
+    @Test
+    fun `lazy addresses are correct at a non zero packet start offset`() {
+        val buf = buffer(ByteArray(8) + ipv4With("10.0.0.2", "192.168.1.1"))
+        buf.position(8)
+        val parsed = IpPacketParser.parseIpv4Header(buf)!!
+        assertArrayEquals(InetAddress.getByName("10.0.0.2").address, parsed.srcIp.address)
+        assertArrayEquals(InetAddress.getByName("192.168.1.1").address, parsed.dstIp.address)
+        assertEquals(0x0A000002L, parsed.srcLow)
+    }
+
+    /**
+     * T-A05 的核心不变量 (自证点): 惰性地址必须在**同一次 TUN read 的帧内**读完 —— 帧外 buffer
+     * 已被下一包覆盖, 读到的会是一个"看起来合法"的脏地址 (比抛异常更危险)。用代际哨兵
+     * ([IpPacketParser.newFrame] / [IpPacketParser.staleAddressReads]) 把这件事变成可断言的行为。
+     */
+    @Test
+    fun `reading a lazy address after the frame ended is counted not silent`() {
+        IpPacketParser.newFrame()
+        val parsed = IpPacketParser.parseIpv4Header(buffer(ipv4With("10.0.0.2", "192.168.1.1")))!!
+        val before = IpPacketParser.staleAddressReads()
+
+        // 同帧内物化: 不计失效
+        assertArrayEquals(InetAddress.getByName("10.0.0.2").address, parsed.srcIp.address)
+        assertEquals(before, IpPacketParser.staleAddressReads())
+
+        // 新的一帧 (等价于 TUN 又读了一包) 之后, 新对象的地址照常物化、不计失效
+        IpPacketParser.newFrame()
+        val next = IpPacketParser.parseIpv4Header(buffer(ipv4With("10.0.0.3", "192.168.1.1")))!!
+        assertNotNull(next.srcIp)
+        assertEquals(before, IpPacketParser.staleAddressReads())
+
+        // 越帧读**旧**对象 (dst 此时才首次物化) → 计一次失效, 且不抛异常
+        assertNotNull(parsed.dstIp)
+        assertEquals(before + 1, IpPacketParser.staleAddressReads())
     }
 
     /** 按 `ipPacketTotalLength` 步进走完整个缓冲区, 返回每个包的定界长度。 */

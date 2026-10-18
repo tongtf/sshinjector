@@ -234,7 +234,8 @@ T-E01a (新文件) ──► T-E01b (VpnController 入口)
 | T-B01/B02/B03 | ✅ | `perf(tun): split TUN writes into drop-able control and must-deliver data` |
 | T-B04 | ✅ | `perf(tun): drive TUN writes from a single writer queue in the controller` |
 | T-C01（部分） | ◐ | `refactor(stats): extract the TUN data-plane snapshot into a pure builder` |
-| T-A05 / T-C02 / T-C03 / T-E01 / T-E02 | ⛔ | —（理由见上表与 design 文档"附：本轮实施范围"） |
+| T-A05（惰性地址） | ✅ | `perf(uplink): materialize packet addresses lazily within the read frame` |
+| T-C02 / T-C03 / T-E01 / T-E02 | ⛔ | —（理由见上表与 design 文档"附：本轮实施范围"） |
 | F-04（step ① 切片） | ◐ | `refactor(tcp): funnel establishment through a single guarded entry point` |
 | D-01/D-02（诊断面扩容 + 失败归因，新增） | ✅ | `feat(diag): surface resource pressure and attribute session failures in the snapshot` |
 
@@ -249,6 +250,8 @@ T-E01a (新文件) ──► T-E01b (VpnController 入口)
 | D-01 | 快照资源节 (`TUN 写队列` / DNS 三表占用) + `poolDiagnostics` + `SshIoDispatcher.diagnostics`(饱和回执) + `闸门等待`/`假 IP 引用`; `resetSessionCounters()` 把计数改成**本会话**口径 | `feat(diag)` |
 | D-02 | `domain/obs/AppMetrics.kt` 在唯一落盘出口按静态前缀统计 WARNING/ERROR, 快照追加"故障归因"节 + 断开时再打一次 | `feat(diag)` |
 | F-04 step① | `markEstablished` 唯一建立入口 (守卫 + 假 IP acquire 同一临界区) + `TcpEstablishedGuardTest` | `refactor(tcp)` |
+| T-22 | SYN 转发的四处轮询改 `delay` (真挂起) —— 前提消失故**不搬** `SshIoDispatcher` | `refactor(tcp)` |
+| T-A05 | `ParsedPacket` 地址惰性化 (同帧物化) + `newFrame`/`staleAddressReads` 帧哨兵 + 快照 `地址惰性失效` | `perf(uplink)` |
 | — | 真机验收清单 `2026-10-18-device-verification-checklist.md`（S0–S10 + 阈值表） | 同 `refactor(tcp)` |
 
 新增护栏（施工图教训，已写进 AGENTS.md）：

@@ -3,13 +3,41 @@ package cn.srv0.sshinjector.domain.vpn
 import java.net.InetAddress
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.atomic.AtomicLong
 
 /**
- * IP/TCP/UDP 包头解析，纯函数无状态。
+ * IP/TCP/UDP 包头解析。
+ *
+ * 除了 [newFrame] 维护的帧代际 (惰性地址的越帧哨兵, 见下) 之外无状态。
+ *
+ * **惰性地址 (T-A05)**: [ParsedPacket] 只记 `buffer` + 绝对下标, 地址在真正需要时才物化。
+ * 代价是一条不变量 —— 惰性地址必须在**同一次 TUN read 的帧内**读完 (帧外 buffer 已被覆盖),
+ * 由 [newFrame]/[staleAddressReads] 这对哨兵守着: 越帧读取会被计数而不是静默返回脏地址。
  */
 object IpPacketParser {
     // IPv6 扩展头部类型: Hop-by-Hop(0), Routing(43), Fragment(44), Destination Options(60), Reserved(255)
     private val IPV6_EXTENSION_HEADERS = setOf(0, 43, 44, 60, 255)
+
+    /** 帧代际: 每次 TUN read 前递增, 惰性地址读取时比对 (见 [newFrame] / [staleAddressReads])。 */
+    @Volatile
+    private var frameId = 0
+
+    /** 惰性地址失效读取计数 (跨帧 / 越界), 见 [staleAddressReads]。 */
+    private val staleReads = AtomicLong(0)
+
+    /**
+     * 标记一次**帧边界** (每次 `TUN read` 之前调一次)。
+     *
+     * 惰性地址的生命周期就是这一帧: `readBuffer` 在下一轮 read 时被整块覆盖, 因此
+     * [ParsedPacket.srcIp]/[ParsedPacket.dstIp] 越帧读取拿到的必然是**别人包的字节** ——
+     * 比抛异常更危险 (看起来是个合法地址)。这里递增代际, 供惰性读取比对。
+     */
+    fun newFrame() {
+        frameId++
+    }
+
+    /** 惰性地址的失效读取次数。**恒为 0 才是对的**; > 0 = 帧不变量被破坏 (T-A05 自证点)。 */
+    fun staleAddressReads(): Long = staleReads.get()
 
     /** UDP 头固定 8 字节 (RFC 768)。 */
     private const val UDP_HEADER_LEN = 8
@@ -152,14 +180,14 @@ object IpPacketParser {
         val protocol = buffer.get().toInt() and 0xFF
         buffer.getShort() // headerChecksum
 
-        // 低 32 位在**读地址的同一次遍历**里从 buffer 直接取 (绝对下标, 不建 ByteArray/InetAddress):
-        // 每包省掉两次 `InetAddress.address` 克隆, 见 IpPacketParser.connectionKey(addressLow32...)。
+        // 地址只记**绝对下标** (T-A05): 低 32 位就地零分配算出, 完整 `InetAddress` 惰性物化 ——
+        // 上行热路径绝大多数包只查连接 key/端口, 不再每包建 2 个 InetAddress + 2 个 byte[]。
         val srcPos = buffer.position()
-        val srcIp = readIpv4Address(buffer)
         val srcLow = addressLow32(buffer, 4, srcPos)
+        buffer.position(srcPos + 4)
         val dstPos = buffer.position()
-        val dstIp = readIpv4Address(buffer)
         val dstLow = addressLow32(buffer, 4, dstPos)
+        buffer.position(dstPos + 4)
 
         // 处理选项
         if (ihl > 5) {
@@ -169,7 +197,7 @@ object IpPacketParser {
         val payloadStart = buffer.position()
         val payloadLength = buffer.remaining()
 
-        return ParsedPacket(srcIp, dstIp, protocol, payloadStart, payloadLength, srcLow, dstLow)
+        return ParsedPacket(buffer, srcPos, 4, protocol, payloadStart, payloadLength, srcLow, dstLow, frameId)
     }
 
     /**
@@ -192,11 +220,11 @@ object IpPacketParser {
         buffer.get() // hop limit
 
         val srcPos = buffer.position()
-        val srcIp = readIpv6Address(buffer)
         val srcLow = addressLow32(buffer, 6, srcPos)
+        buffer.position(srcPos + 16)
         val dstPos = buffer.position()
-        val dstIp = readIpv6Address(buffer)
         val dstLow = addressLow32(buffer, 6, dstPos)
+        buffer.position(dstPos + 16)
 
         // 解析 IPv6 扩展头部，找到最终的上层协议
         val (payloadStart, finalNextHeader) = parseIpv6ExtensionHeaders(buffer, payloadLength, nextHeader)
@@ -207,7 +235,17 @@ object IpPacketParser {
         val actualPayloadLength = payloadLength - extensionHeaderLen
         if (actualPayloadLength < 0) return null
 
-        return ParsedPacket(srcIp, dstIp, finalNextHeader, payloadStart, actualPayloadLength, srcLow, dstLow)
+        return ParsedPacket(
+            buffer,
+            srcPos,
+            6,
+            finalNextHeader,
+            payloadStart,
+            actualPayloadLength,
+            srcLow,
+            dstLow,
+            frameId,
+        )
     }
 
     /**
@@ -249,16 +287,22 @@ object IpPacketParser {
         return Pair(pos, currentNextHeader)
     }
 
-    private fun readIpv4Address(buffer: ByteBuffer): InetAddress {
-        val bytes = ByteArray(4)
-        buffer.get(bytes)
-        return InetAddress.getByAddress(bytes)
-    }
-
-    private fun readIpv6Address(buffer: ByteBuffer): InetAddress {
-        val bytes = ByteArray(16)
-        buffer.get(bytes)
-        return InetAddress.getByAddress(bytes)
+    /**
+     * 从 [buffer] 的**绝对**下标 [absOffset] 拷出地址字节 (IPv4 = 4 / IPv6 = 16); 越界返回 null。
+     *
+     * 与 [addressLow32] 一样用绝对下标读, 不推进 `position`。返回的数组是新分配的 ——
+     * **惰性地址的一次物化 = 1 个 byte[] + 1 个 InetAddress**, 而不再是每包 2+2。
+     */
+    fun addressBytes(
+        buffer: ByteBuffer,
+        absOffset: Int,
+        version: Int,
+    ): ByteArray? {
+        val len = if (version == 6) 16 else 4
+        if (absOffset < 0 || absOffset + len > buffer.limit()) return null
+        val bytes = ByteArray(len)
+        for (i in 0 until len) bytes[i] = buffer.get(absOffset + i)
+        return bytes
     }
 
     /**
@@ -330,15 +374,83 @@ object IpPacketParser {
             (srcPort.toLong() shl 16) xor
             dstPort.toLong()
 
-    data class ParsedPacket(
-        val srcIp: InetAddress,
-        val dstIp: InetAddress,
+    /**
+     * 解析结果：协议、载荷区间, 以及**惰性物化**的源/目的地址。
+     *
+     * 生产路径只记 `buffer` + 绝对下标 (T-A05): 上行热路径的绝大多数包只用来查连接 key
+     * (由零分配的 [srcLow]/[dstLow] 组合) 与端口, 于是每包省掉 2 个 `InetAddress` + 2 个 byte[]。
+     *
+     * **帧不变量**: [srcIp]/[dstIp] 必须在**同一次 TUN read 的帧内**读取完毕 —— 帧外 buffer
+     * 已被下一包覆盖。越帧读取会被 [IpPacketParser.staleAddressReads] 计数 (不是静默错误值)。
+     * 所有生产消费者都在 `processPacket` 的同一次调用内物化 (新建连接 / UDP 拦截 / ICMPv6 回包),
+     * `TcpConnection` 另行拷字节自持, 因此不存在跨帧持有。
+     */
+    class ParsedPacket internal constructor(
+        private val buffer: ByteBuffer,
+        private val srcOffset: Int,
+        private val version: Int,
         val protocol: Int,
         val payloadStart: Int,
         val payloadLength: Int,
         /** 源地址低 32 位 (零分配算出, 见 [addressLow32]); 供 `connectionKey` 直接使用。 */
-        val srcLow: Long = addressLow32(srcIp),
+        val srcLow: Long,
         /** 目的地址低 32 位; 供 `connectionKey` 直接使用。 */
-        val dstLow: Long = addressLow32(dstIp),
-    )
+        val dstLow: Long,
+        private val frame: Int,
+    ) {
+        /** 目的地址紧跟在源地址之后 (IPv4 4 字节 / IPv6 16 字节), 因此只存一个偏移。 */
+        private val dstOffset: Int = srcOffset + if (version == 6) 16 else 4
+
+        // 惰性地址用**普通可空字段**而不是 `by lazy`: 后者每个属性额外建一个 Lazy 对象,
+        // 会把这里刚省下来的分配又加回去。本对象是单帧作用域 (只在 packetLoop 线程内使用),
+        // 因此不需要同步 —— 最坏情况是同一地址物化两次, 无正确性影响。
+        private var srcCache: InetAddress? = null
+        private var dstCache: InetAddress? = null
+
+        /** 源地址 (惰性物化 + 缓存; 见类 KDoc 的帧不变量)。 */
+        val srcIp: InetAddress
+            get() = srcCache ?: materialize(srcOffset).also { srcCache = it }
+
+        /** 目的地址 (惰性物化 + 缓存)。 */
+        val dstIp: InetAddress
+            get() = dstCache ?: materialize(dstOffset).also { dstCache = it }
+
+        /**
+         * 测试 / 无原始报文场景的构造: 地址直接给定, 立刻拷进一个私有缓冲区。
+         *
+         * 刻意走**同一条**物化代码 (读地址字节 → `InetAddress.getByAddress`), 所以测试覆盖的
+         * 就是线上路径, 而不是一条只有测试才走的旁路。
+         */
+        constructor(
+            srcIp: InetAddress,
+            dstIp: InetAddress,
+            protocol: Int,
+            payloadStart: Int,
+            payloadLength: Int,
+        ) : this(
+            buffer = addressPairBuffer(srcIp, dstIp),
+            srcOffset = 0,
+            version = if (srcIp.address.size == 16) 6 else 4,
+            protocol = protocol,
+            payloadStart = payloadStart,
+            payloadLength = payloadLength,
+            srcLow = addressLow32(srcIp),
+            dstLow = addressLow32(dstIp),
+            frame = frameId,
+        )
+
+        private fun materialize(offset: Int): InetAddress {
+            if (frame != frameId) staleReads.incrementAndGet()
+            val bytes = addressBytes(buffer, offset, version)
+            return bytes?.let { InetAddress.getByAddress(it) } ?: InetAddress.getLoopbackAddress()
+        }
+    }
+
+    private fun addressPairBuffer(
+        srcIp: InetAddress,
+        dstIp: InetAddress,
+    ): ByteBuffer {
+        val bytes = srcIp.address + dstIp.address
+        return ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN)
+    }
 }
