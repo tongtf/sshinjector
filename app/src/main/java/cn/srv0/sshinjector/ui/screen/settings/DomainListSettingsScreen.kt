@@ -21,6 +21,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +51,8 @@ fun DomainListSettingsScreen(
     val state by viewModel.state.collectAsState()
     val domainListUrl by viewModel.domainListUrl.collectAsState()
     var urlInput by remember { mutableStateOf(domainListUrl) }
+    // T-16: 持久值变化后同步输入框 (与 AdBlockSettingsScreen 同款)
+    LaunchedEffect(domainListUrl) { urlInput = domainListUrl }
     val guard = rememberClickGuard()
 
     Scaffold(
