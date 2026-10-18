@@ -667,6 +667,13 @@ private class Socks5Connection(
 
         // 异步连接目标 (通过 SSH 隧道)
         state = SocksState.Connecting
+        // Connecting 期间必须把本地 OP_READ 按下, 让客户端的上行留在内核接收缓冲里
+        // (由 TCP 反向背压), 而不是读进 buffer: handleRead 的 Connecting 分支不消费数据,
+        // 读进来只能躺在 buffer 里等**下一次** OP_READ 事件, 而内核缓冲已被读空时不会有
+        // 下一次 → 单请求场景 (HTTP 探测 / 一次性 GET / 发完 ClientHello 就等的客户端)
+        // 永久卡到超时 (老实现: 偶发 4s 超时的探测失败 / 回程拿不到)。
+        // 状态翻 Relaying 时由 onTargetConnected 放开。
+        suspendLocalRead()
         connectToTarget()
         return true
     }
@@ -849,12 +856,20 @@ private class Socks5Connection(
     }
 
     private fun onTargetConnected() {
+        // 顺序要紧: 先把状态推过 Connecting 并放开本地读, 再发成功应答。
+        // 应答一写出客户端就立刻发上行数据; 若那一刻 eventLoop 看到的 state 还是 Connecting,
+        // 数据只会被留在 buffer 里等下一次 OP_READ 事件 —— 而内核缓冲已空就不会再有事件,
+        // 这批数据永远发不出去 (单请求场景 = 永久卡死; 老实现 sendReply 在前, 正好把这个
+        // 窗口敞开, 实测在 CI 慢 runner 上偶发探测/一次性请求 4s 超时)。
+        state = SocksState.Relaying
+        lastActivity = System.currentTimeMillis()
+        // 放开 Connecting 期间按下的 OP_READ; 此刻闸必然为空 (Connecting 期间没有任何
+        // 入队路径可达 outgoingGate), 所以无条件放开是安全的。
+        resumeLocalReadOps()
+
         // 发送成功响应
         val reply = buildSuccessReply()
         sendReply(reply)
-
-        state = SocksState.Relaying
-        lastActivity = System.currentTimeMillis()
 
         // 启动反向中继线程: SSH Tunnel → SOCKS5 Client
         startRelayFromTarget()
@@ -1067,10 +1082,10 @@ private class Socks5Connection(
      * 仅在 eventLoop 线程调用 (handleRead 的 Relaying 分支)。
      */
     private fun enqueueToSsh() {
-        if (state != SocksState.Relaying) {
-            buffer.position(buffer.limit())
-            return
-        }
+        // 本函数只从 handleRead 的 Relaying 分支进来, 所以这里只可能是 close() 把状态推成了
+        // Closed。保持"不消费"让 handleRead 尾部 compact 把字节留在 buffer 里, 而不是静默
+        // 丢弃 —— 静默丢正是"各丢弃计数全 0 但数据真丢了"的形态。
+        if (state != SocksState.Relaying) return
         if (!buffer.hasRemaining()) {
             return
         }
@@ -1135,13 +1150,20 @@ private class Socks5Connection(
 
     /**
      * 解除背压: 恢复本地 OP_READ。由 BackpressureGate 在锁内回填单槽成功后回调,
+     * 也由 onTargetConnected 在通道就绪时调用 (放开 Connecting 期间按下的读)。
      * 不直接持有任何闸状态。
+     *
+     * interestOps 的 RMW 自取 [backpressureLock] (可重入, 闸内回调调用也安全):
+     * 它与 sendReply(加 OP_WRITE) / handleWrite(去 OP_WRITE) 并发, 丢一次 OP_READ 位
+     * 就是连接此后再也不会被读 —— 永久卡死。
      */
     private fun resumeLocalReadOps() {
         val sk = selectionKey
         if (sk == null || !sk.isValid) return
         try {
-            sk.interestOps(sk.interestOps() or SelectionKey.OP_READ)
+            synchronized(backpressureLock) {
+                sk.interestOps(sk.interestOps() or SelectionKey.OP_READ)
+            }
             sk.selector().wakeup()
         } catch (e: Exception) {
             VpnController.appLogThrottled(
@@ -1153,14 +1175,17 @@ private class Socks5Connection(
     }
 
     /**
-     * Channel 已满, 暂停本地 OP_READ 以向上游背压。
-     * 必须在持有 backpressureLock 时调用。
+     * Channel 已满, 暂停本地 OP_READ 以向上游背压; 也用于 Connecting 期间让上行
+     * 留在内核接收缓冲 (见 onTargetConnected 的说明)。可由任何线程调用:
+     * interestOps 的 RMW 自取 [backpressureLock] (可重入)。
      */
     private fun suspendLocalRead() {
         val sk = selectionKey
         if (sk == null || !sk.isValid) return
         try {
-            sk.interestOps(sk.interestOps() and SelectionKey.OP_READ.inv())
+            synchronized(backpressureLock) {
+                sk.interestOps(sk.interestOps() and SelectionKey.OP_READ.inv())
+            }
         } catch (e: Exception) {
             VpnController.appLogThrottled(
                 "本地代理暂停读失败 · ${targetForLog()} — ${e.message}",
