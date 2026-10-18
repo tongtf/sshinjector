@@ -125,6 +125,10 @@ class ServerWizardViewModel
 
         /** 校验 Step1 输入，合法则进入 Step2 */
         fun submitServerInfo(onInvalid: (Int) -> Unit): Boolean {
+            // 归一化首尾空白: 校验函数内部会 trim, 但后续拨号/写入用的是 state 原值 ——
+            // " example.com " 能过校验却会让 JSch 连一个不存在的域名
+            _serverName.value = _serverName.value.trim()
+            _host.value = _host.value.trim()
             val nameError = ServerFormValidator.nameError(_serverName.value)
             val hostError = ServerFormValidator.hostError(_host.value)
             val portError = ServerFormValidator.portError(_port.value)
