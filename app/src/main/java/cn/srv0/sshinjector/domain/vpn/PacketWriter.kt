@@ -1,6 +1,7 @@
 package cn.srv0.sshinjector.domain.vpn
 
 import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * IP/TCP 头写入与校验和回填，纯函数无状态。
@@ -16,6 +17,12 @@ object PacketWriter {
     private const val IPV4_IHL = 0x45 // version=4, IHL=5 (20B, 无选项)
     private const val IP_CSUM_OFFSET = 10
     private const val TCP_CSUM_OFFSET = 16
+
+    /**
+     * T-24: IPv4 identification 用单调计数器而非 `currentTimeMillis() and 0xFFFF`。
+     * 计数器不读时钟 (热路径少一次 vDSO 调用), 且同一毫秒内连发多包不会撞同一个 id。
+     */
+    private val ipv4IdCounter = AtomicInteger()
 
     /**
      * 写 40B IPv6 / 20B IPv4 头 (校验和字段留 0, IPv4 由 [writeIpv4HeaderChecksum] 回填)。
@@ -44,7 +51,7 @@ object PacketWriter {
             packet.put(IPV4_IHL.toByte())
             packet.put(0x00)
             packet.putShort(totalLen.toShort())
-            packet.putShort((System.currentTimeMillis() and 0xFFFF).toShort())
+            packet.putShort((ipv4IdCounter.incrementAndGet() and 0xFFFF).toShort())
             packet.putShort(ipv4Flags.toShort())
             packet.put(DEFAULT_HOP_LIMIT.toByte())
             packet.put(protocol.toByte())

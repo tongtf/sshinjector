@@ -1097,6 +1097,11 @@ class VpnController
          * 没送到应用的流量, 把"隧道在搬数据"和"隧道全死"混成同一副样子。
          *
          * @return 是否已成功写入 TUN (调用方据此决定要不要计一次分阶段成功信号)
+         *
+         * **T-20 决策: 保留 `@Synchronized`。** 锁内是一次 `FileOutputStream.write(byte[])`,
+         * 其原子性 (一次 write = 一个 TUN 包) 只能靠真机/驱动实测确认; 在拿到证据前移除锁
+         * 可能让并发写交错成半包。可选优化 (A 去锁 / B 专用写线程 + 有界队列) 因缺少设备
+         * 验证而暂缓, 记录在 `docs/specs/2026-10-18-fix-todo.md` T-20。
          */
         @Synchronized
         fun writeToTun(data: ByteArray): Boolean {

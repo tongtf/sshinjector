@@ -181,6 +181,14 @@ class TcpStateMachine(
         var socksLocalPort: Int = 0,
     ) {
         /**
+         * T-21: 建连时缓存地址字节。`InetAddress.address` 每次调用都会克隆一个 ByteArray,
+         * 回程每段组包各取一次 = 每包 2 次分配。缓存在连接上, 组包直接复用。
+         * 放在类体内 (而非构造参数) 以免影响 data class 的 equals/hashCode/copy 语义。
+         */
+        val srcIpBytes: ByteArray = srcIp.address
+        val dstIpBytes: ByteArray = dstIp.address
+
+        /**
          * 本连接是否已对假 IP 计数表 acquire 过 (只在 Established 且映射存在时置位)。
          *
          * 必须有这个标志: `closeTcpConnection` 会在**大量**从未走到 Established 的路径上被调
@@ -489,7 +497,9 @@ class TcpStateMachine(
                 // F1: 排除路由/域名分流未命中 → 用户态直连 (包已进 TUN, 回注是黑洞, 只能本地直连)
                 // 分流决策每连接一条 (非每包): 0% 下载失败排查时用于确认下载主机是否绕过隧道
                 val bypass = bypassPredicate?.invoke(conn.dstIp, conn.dstPort) == true
-                Log.d(TAG, "SYN conn=${conn.id} dst=${conn.dstIp.hostAddress}:${conn.dstPort} bypass=$bypass")
+                if (IS_DEBUG) {
+                    Log.d(TAG, "SYN conn=${conn.id} dst=${conn.dstIp.hostAddress}:${conn.dstPort} bypass=$bypass")
+                }
                 if (bypass) {
                     forwardThroughBypass(conn)
                     return@launch
@@ -1090,7 +1100,7 @@ class TcpStateMachine(
         // 早于 CONNECT 应答)。SOCKS 路径下 relay 在 CONNECT 前就启动了, 所以这里必须缓存。
         if (queued) return
         var pos = offset
-        val maxSegment = if (conn.dstIp.address.size == 16) MAX_TCP_SEGMENT_V6 else MAX_TCP_SEGMENT
+        val maxSegment = if (conn.dstIpBytes.size == 16) MAX_TCP_SEGMENT_V6 else MAX_TCP_SEGMENT
         while (pos < end) {
             val capacity = awaitFlowCapacity(conn)
             if (capacity <= 0) {
@@ -1394,8 +1404,8 @@ class TcpStateMachine(
         try {
             val srcPort = conn.dstPort
             val dstPort = conn.srcPort
-            val srcIp = conn.dstIp.address
-            val dstIp = conn.srcIp.address
+            val srcIp = conn.dstIpBytes
+            val dstIp = conn.srcIpBytes
             val isIPv6 = srcIp.size == 16
 
             val seqNum = conn.serverSeq
@@ -1455,8 +1465,8 @@ class TcpStateMachine(
         try {
             val srcPort = conn.dstPort
             val dstPort = conn.srcPort
-            val srcIp = conn.dstIp.address
-            val dstIp = conn.srcIp.address
+            val srcIp = conn.dstIpBytes
+            val dstIp = conn.srcIpBytes
             val isIPv6 = srcIp.size == 16
 
             val seqNum = conn.serverSeq
@@ -1495,8 +1505,8 @@ class TcpStateMachine(
         try {
             val srcPort = conn.dstPort
             val dstPort = conn.srcPort
-            val srcIp = conn.dstIp.address
-            val dstIp = conn.srcIp.address
+            val srcIp = conn.dstIpBytes
+            val dstIp = conn.srcIpBytes
             val isIPv6 = srcIp.size == 16
             val wscale = conn.clientWscaleOffered
             val tcpHeaderLen = if (wscale != null) 28 else 24
@@ -1567,8 +1577,8 @@ class TcpStateMachine(
         try {
             val srcPort = conn.dstPort
             val dstPort = conn.srcPort
-            val srcIp = conn.dstIp.address
-            val dstIp = conn.srcIp.address
+            val srcIp = conn.dstIpBytes
+            val dstIp = conn.srcIpBytes
             val isIPv6 = srcIp.size == 16
 
             val seqNum = conn.serverSeq
@@ -1620,8 +1630,8 @@ class TcpStateMachine(
         try {
             val srcPort = conn.dstPort
             val dstPort = conn.srcPort
-            val srcIp = conn.dstIp.address
-            val dstIp = conn.srcIp.address
+            val srcIp = conn.dstIpBytes
+            val dstIp = conn.srcIpBytes
             val isIPv6 = srcIp.size == 16
 
             val seqNum = conn.serverSeq

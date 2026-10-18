@@ -18,7 +18,11 @@ internal class LruStringMap(
     private class Entry(
         val value: String,
     ) {
-        @Volatile var lastAccessMs: Long = System.currentTimeMillis()
+        /**
+         * T-24: 用 `nanoTime` 而非 `currentTimeMillis` —— 后者会随时钟同步回跳,
+         * 让"刚访问过"的条目看起来最旧、被优先淘汰 (假 IP 映射被误删 = 连接黑洞)。
+         */
+        @Volatile var lastAccessNanos: Long = System.nanoTime()
     }
 
     private val map = ConcurrentHashMap<String, Entry>()
@@ -37,7 +41,9 @@ internal class LruStringMap(
     /** 读取并刷新访问时间; 未命中返回 null。 */
     operator fun get(key: String): String? {
         val entry = map[key] ?: return null
-        entry.lastAccessMs = System.currentTimeMillis()
+        // 每次命中都刷新 (LRU 语义不可打折): 只把时钟换成单调的 nanoTime,
+        // 避免时钟回跳把刚访问的条目判成最旧而优先淘汰。
+        entry.lastAccessNanos = System.nanoTime()
         return entry.value
     }
 
@@ -68,7 +74,7 @@ internal class LruStringMap(
         val target = maxSize - (maxSize / 10)
         val toRemove = map.size - target
         map.entries
-            .sortedBy { it.value.lastAccessMs }
+            .sortedBy { it.value.lastAccessNanos }
             .take(toRemove)
             .forEach { evicted -> map.remove(evicted.key, evicted.value) }
     }
