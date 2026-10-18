@@ -140,13 +140,23 @@ class ConnectivityProber(
                 "User-Agent: sshinjector-health\r\n\r\n"
         output.write(request.toByteArray(Charsets.US_ASCII))
         output.flush()
+        val requestSentAt = System.currentTimeMillis()
         val statusLine = readLine(input)
         return when {
-            // 0 字节关闭: 探测端点 (miui 204 / ipify) 是**必然**回状态行的健康服务,
+            // 0 字节关闭: 探测端点 (gstatic 204 / ipify) 是**必然**回状态行的健康服务,
             // 一个字节都没回来 = 本栈到远端之间的路径断了。归 TUNNEL 而非 REMOTE ——
             // 归 REMOTE 会把排查方向带向"远端不可达", 而真正该看的是隧道侧的
             // 零回程 / 回程读取异常 / 隧道无回程 日志 (SSH 会话健康但单条通道死也长这样)。
-            statusLine == null -> Result.Failed(HealthStep.TUNNEL, "tunnel closed with 0B before status line")
+            statusLine == null -> {
+                // 带上"请求发出→EOF"的耗时: 几 ms = 通道刚开就被远端秒关 (目标/服务端侧),
+                // 接近 readTimeoutMs = 静默一段才关。现场判读必须配合
+                // `隧道通道空转关闭 · host:port — ... 客户端已交 NB` 那条看 (见 Socks5ProxyServer)。
+                val waitedMs = System.currentTimeMillis() - requestSentAt
+                Result.Failed(
+                    HealthStep.TUNNEL,
+                    "tunnel closed with 0B before status line (请求后 ${waitedMs}ms)",
+                )
+            }
             statusLine.startsWith("HTTP/1.") -> Result.Ok
             else -> Result.Failed(HealthStep.REMOTE, "no http status line: ${statusLine.take(32)}")
         }

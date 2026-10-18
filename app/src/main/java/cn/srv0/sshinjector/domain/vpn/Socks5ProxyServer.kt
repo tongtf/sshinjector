@@ -918,6 +918,7 @@ private class Socks5Connection(
                     val readWaitMs = (System.nanoTime() - readStart) / 1000000
                     if (read == -1) {
                         Log.w("Socks5Proxy", "[conn=$id] relayFromTarget: EOF from tunnel")
+                        reportEmptyChannelCloseIfNeeded(tunnel)
                         // remove-and-invoke: 与 close() 的 remove 竞争时也只触发一次
                         // (CHM.remove 原子, 谁拿到非 null 谁负责上报)。
                         // 必须先于 close(): close() 走 onClosed 会清掉这条回调。
@@ -1220,6 +1221,30 @@ private class Socks5Connection(
                 "只有本连接=远端不应答)",
             level = LogLevel.WARNING,
             throttleKey = "隧道无回程",
+        )
+    }
+
+    /**
+     * 「通道开了但一个字节都没走」的现场: SSH 通道**先于本栈**关闭 (state 仍 Relaying), 且
+     * 上行/下行都是 0B。这是 [close] 里 `隧道侧零回程` 的盲区 —— 那条要求 `toTunnelTotal > 0`,
+     * 0B/0B 时一句话都不打, 于是「网络探测失败 · tunnel closed with 0B before status line」
+     * 在现场无处归因 (2026-10-19 真机 4 次/会话, 服务器侧端点 IPv4/IPv6 各 12/12 正常,
+     * 却判不出是本栈没写出还是远端秒关)。
+     *
+     * `客户端已交 N` = [bytesToTunnel] (已进本栈出向闸的字节):
+     * - N > 0 = 客户端请求已被本栈读走, 却没写进 SSH 通道就 EOF → 通道打开即被远端/sshd 关;
+     * - N == 0 = 客户端压根没发东西, sshd 关了一条静默通道。
+     * 只在**远端先关**时记录: 本栈自己 close() 会先把 state 置 Closed, 走不到这里。
+     */
+    private fun reportEmptyChannelCloseIfNeeded(tunnel: TunnelChannel) {
+        if (state != SocksState.Relaying) return
+        if (toTunnelTotal.get() != 0L || fromTunnelTotal.get() != 0L) return
+        VpnController.appLogThrottled(
+            "隧道通道空转关闭 · ${targetForLog()}:$remotePort — SSH 0B 写出 / 0B 读回 · " +
+                "客户端已交 ${bytesToTunnel.get()}B · 存活 ${System.currentTimeMillis() - openedAt}ms " +
+                "(会话 ${tunnel.sessionId}; 客户端已交>0 = 请求还没出去通道就被远端关了)",
+            level = LogLevel.WARNING,
+            throttleKey = "隧道通道空转关闭",
         )
     }
 
