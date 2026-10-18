@@ -15,6 +15,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.channels.ClosedChannelException
 import java.nio.channels.SocketChannel
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -1007,10 +1008,23 @@ class TcpStateMachine(
             // 握手完成后切非阻塞: 转发失败时丢弃段 + 不回 ACK, 由浏览器 TCP 重传兜底,
             // 避免慢连接阻塞 packetLoop 全局数据通路
             sock.configureBlocking(false)
-        } catch (e: IOException) {
-            Log.w(TAG, "configureBlocking(false) failed for conn ${conn.id}: ${e.message}")
+        } catch (e: ClosedChannelException) {
+            // 这一支是**常态竞态**: 握手刚完成、客户端就 RST/FIN 了, socket 已被关闭 →
+            // `SocketChannel.configureBlocking` 的 `ensureOpen()` 抛 `ClosedChannelException`
+            // (它的 message 是 **null**, 曾经直接打成 "SOCKS 非阻塞切换失败 · host — null")。
+            // 不是故障: 曾在"故障归因"里和真故障并列占地 (真机会话 1 里 4 类故障之一就是它)。
+            // socket 已关闭时留在阻塞模式无害 —— 后续读写立刻抛 ClosedChannelException。
+            Log.d(TAG, "configureBlocking(false) skipped for conn ${conn.id}: socket already closed")
             VpnController.appLogThrottled(
-                "SOCKS 非阻塞切换失败 · ${target(conn)} — ${e.message}",
+                "SOCKS 非阻塞切换跳过 · ${target(conn)} — socket 已关闭 (客户端提前断开)",
+                level = LogLevel.DEBUG,
+                throttleKey = "SOCKS 非阻塞切换失败",
+            )
+        } catch (e: IOException) {
+            // 其它成因要保留 WARNING: 失败的 socket 会**留在阻塞模式**, 转发写会阻塞 packetLoop。
+            Log.w(TAG, "configureBlocking(false) failed for conn ${conn.id}", e)
+            VpnController.appLogThrottled(
+                "SOCKS 非阻塞切换失败 · ${target(conn)} — ${e.message ?: e::class.simpleName}",
                 level = LogLevel.WARNING,
                 throttleKey = "SOCKS 非阻塞切换失败",
             )
