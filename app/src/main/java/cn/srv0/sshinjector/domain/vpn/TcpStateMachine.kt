@@ -29,7 +29,7 @@ private val IS_DEBUG_SOCKS = Log.isLoggable("Socks5Proxy", Log.DEBUG)
 @Suppress("LargeClass", "TooManyFunctions") // 组包+转发+背压+流控全在一处; 待拆 TcpPacketBuilder / TcpRelay
 class TcpStateMachine(
     private val tunnelManager: TunnelManager,
-    private val tunWriterProvider: () -> ((ByteArray) -> Unit)?,
+    private val tunWriterProvider: () -> TunSink?,
     private val stats: PacketStats,
     private val sshIoDispatcher: SshIoDispatcher,
 ) {
@@ -280,9 +280,6 @@ class TcpStateMachine(
     }
 
     /**
-     * 处理 TCP 数据包
-     */
-    /**
      * 处理 TCP 数据包。
      *
      * 头部信息统一从 [IpPacketParser.ParsedPacket] 取, 而不是散开的 5 个参数: 除了参数表更短,
@@ -368,7 +365,7 @@ class TcpStateMachine(
                 if (conn.state != TcpConnection.TcpState.Closed && conn.synAckSeq >= 0) {
                     val again = buildSynAckPacket(conn)
                     if (again != null) {
-                        tunWriterProvider()?.invoke(again)
+                        tunWriterProvider()?.write(again)
                         conn.synAckWritten = true
                     }
                     VpnController.appLogThrottled(
@@ -605,7 +602,7 @@ class TcpStateMachine(
             }
             val synAckPacket = buildSynAckPacket(conn)
             if (synAckPacket != null) {
-                tunWriterProvider()?.invoke(synAckPacket)
+                tunWriterProvider()?.write(synAckPacket)
                 conn.synAckWritten = true
             }
             startRelayFromSocks(conn, connKey)
@@ -990,7 +987,7 @@ class TcpStateMachine(
         // 通道就绪 = 现在才能安全发 SYN-ACK (客户端此前只重传 SYN, 不会发应用数据)
         val synAckPacket = buildSynAckPacket(conn)
         if (synAckPacket != null) {
-            tunWriterProvider()?.invoke(synAckPacket)
+            tunWriterProvider()?.write(synAckPacket)
             conn.synAckWritten = true
         }
         // 握手期间缓存的回程数据 (banner/早到响应) 现在按序下发
@@ -1080,7 +1077,7 @@ class TcpStateMachine(
         length: Int,
         fromFlush: Boolean = false,
     ) {
-        val writer = tunWriterProvider() ?: return
+        val sink = tunWriterProvider() ?: return
         val end = offset + length
         // 入队判定必须在 pendingReturnLock 内一次性完成 (SYN-ACK 未真正写进 TUN / 队列非空 /
         // flushing 中, 任一成立都要入队)。旧实现在锁外读 pendingReturn.isNotEmpty():
@@ -1128,7 +1125,8 @@ class TcpStateMachine(
             val responsePacket = buildTcpResponsePacket(conn, payload, pos, chunkLen)
             pos += chunkLen
             if (responsePacket != null) {
-                writer(responsePacket)
+                // 回程数据走**阻塞**写入: 组包时 serverSeq 已推进, 本栈无重传, 丢了就是永久洞
+                sink.writeBlocking(responsePacket)
                 conn.downstreamBytes += chunkLen.toLong()
             } else {
                 droppedDownstreamBytes.addAndGet(chunkLen.toLong())
@@ -1769,10 +1767,12 @@ class TcpStateMachine(
     }
 
     private fun sendAckToBrowser(conn: TcpConnection) {
-        val writer = tunWriterProvider() ?: return
+        val sink = tunWriterProvider() ?: return
         val ackPacket = buildAckPacket(conn) ?: return
         try {
-            writer.invoke(ackPacket)
+            // 纯 ACK 走**非阻塞**写入: 队列满时丢弃即可 (客户端会重传, 我们也会再补 ACK),
+            // 绝不能为此阻塞 packetLoop —— 那正是旧实现跨连接 head-of-line 的来源。
+            sink.write(ackPacket)
         } catch (e: Exception) {
             Log.e(TAG, "sendAckToBrowser failed: ${e::class.simpleName}: ${e.message}", e)
             VpnController.appLogThrottled(
@@ -1837,7 +1837,9 @@ class TcpStateMachine(
             try {
                 val flags = if (graceful) TCP_FLAGS_FIN_ACK else TCP_FLAGS_RST_ACK
                 val closePacket = buildClosePacket(conn, flags)
-                if (closePacket != null) tunWriterProvider()?.invoke(closePacket)
+                // 关闭包用**阻塞**写入: 这是"让客户端立刻 abort/收尾"的唯一信号 (F6),
+                // 每个连接只发一次且很小, 丢掉就会让对端挂到自己的超时。
+                if (closePacket != null) tunWriterProvider()?.writeBlocking(closePacket)
             } catch (e: Exception) {
                 Log.e(TAG, "send close packet on close failed: ${e::class.simpleName}: ${e.message}")
                 VpnController.appLogThrottled(

@@ -31,14 +31,14 @@ class PacketProcessor
         private val stats = PacketStats()
         private val statsScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
-        @Volatile private var tunWriter: ((ByteArray) -> Unit)? = null
+        @Volatile private var tunSink: TunSink? = null
 
         @Volatile private var dnsInterceptor: DnsInterceptor? = null
 
         private val tcpStateMachine =
-            TcpStateMachine(tunnelManager, { tunWriter }, stats, sshIoDispatcher)
+            TcpStateMachine(tunnelManager, { tunSink }, stats, sshIoDispatcher)
         private val udpRelay = UdpRelay(stats)
-        private val icmpv6Responder = Icmpv6Responder({ tunWriter })
+        private val icmpv6Responder = Icmpv6Responder({ tunSink })
 
         val errors: StateFlow<Long> = stats.errors
 
@@ -52,8 +52,16 @@ class PacketProcessor
             }
         }
 
+        fun setTunSink(sink: TunSink) {
+            tunSink = sink
+        }
+
+        /**
+         * 兼容入口: 把纯 lambda 包成 [TunSink] (两类写入都直调 lambda)。
+         * 生产路径用 [setTunSink] 接 [TunWriter]; 这里留给只需要"收到哪些包"的场景。
+         */
         fun setTunWriter(writer: (ByteArray) -> Unit) {
-            tunWriter = writer
+            tunSink = tunSinkOf(writer)
         }
 
         fun setDnsInterceptor(interceptor: DnsInterceptor) {

@@ -508,7 +508,7 @@ class TcpWindowGateTest {
         whenever(tunnelManager.getActiveOrFallback()).thenReturn(plugin)
         return TcpStateMachine(
             tunnelManager,
-            { { p: ByteArray -> tunPackets.add(p) } },
+            { tunSinkOf { p: ByteArray -> tunPackets.add(p) } },
             PacketStats(),
             SshIoDispatcher(),
         ).also { if (dnsInterceptor != null) it.setDnsInterceptor(dnsInterceptor) }

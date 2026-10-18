@@ -11,7 +11,7 @@ private val IS_DEBUG = Log.isLoggable("PacketProcessor", Log.DEBUG)
  * ICMPv6 邻居发现 (ND) 响应：处理 NS/RS 并回 NA/RA。
  */
 class Icmpv6Responder(
-    private val tunWriterProvider: () -> ((ByteArray) -> Unit)?,
+    private val tunWriterProvider: () -> TunSink?,
 ) {
     companion object {
         private const val TAG = "PacketProcessor"
@@ -68,27 +68,28 @@ class Icmpv6Responder(
         }
 
         // 构造 Neighbor Advertisement 响应 (NA 源地址 = 被解析的目标地址)
-        val writer = tunWriterProvider() ?: return false
+        val sink = tunWriterProvider() ?: return false
         val naPacket =
             buildNeighborAdvertisement(
                 srcIp = targetAddr,
                 dstIp = srcIp.address,
                 targetAddr = targetAddr,
             )
-        writer(naPacket)
+        // NA 是控制包且本函数跑在 packetLoop 上: 非阻塞写入, 满了丢掉由邻居发现重试兜底
+        sink.write(naPacket)
         if (IS_DEBUG) Log.d(TAG, "Sent Neighbor Advertisement for ${InetAddress.getByAddress(targetAddr).hostAddress}")
         return true
     }
 
     private fun handleRouterSolicitation(srcIp: InetAddress): Boolean {
         // 响应 Router Advertisement
-        val writer = tunWriterProvider() ?: return false
+        val sink = tunWriterProvider() ?: return false
         val raPacket =
             buildRouterAdvertisement(
                 srcIp = vpnGatewayIpv6.address,
                 dstIp = srcIp.address,
             )
-        writer(raPacket)
+        sink.write(raPacket)
         if (IS_DEBUG) Log.d(TAG, "Sent Router Advertisement")
         return true
     }
