@@ -234,9 +234,27 @@ T-E01a (新文件) ──► T-E01b (VpnController 入口)
 | T-B01/B02/B03 | ✅ | `perf(tun): split TUN writes into drop-able control and must-deliver data` |
 | T-B04 | ✅ | `perf(tun): drive TUN writes from a single writer queue in the controller` |
 | T-C01（部分） | ◐ | `refactor(stats): extract the TUN data-plane snapshot into a pure builder` |
-| T-A05 / T-C02 / T-C03 / T-E01 / T-E02 / F-04 | ⛔ | —（理由见上表与 design 文档"附：本轮实施范围"） |
+| T-A05 / T-C02 / T-C03 / T-E01 / T-E02 | ⛔ | —（理由见上表与 design 文档"附：本轮实施范围"） |
+| F-04（step ① 切片） | ◐ | `refactor(tcp): funnel establishment through a single guarded entry point` |
+| D-01/D-02（诊断面扩容 + 失败归因，新增） | ✅ | `feat(diag): surface resource pressure and attribute session failures in the snapshot` |
 
 四道门 + `assembleDebug` 全绿：`ktlintCheck` / `detekt` / `lint` / `testDebugUnitTest` / `assembleDebug`。
+
+### 6.2 第二轮（约束变了：只能用日志验收）
+
+构建机没有 adb，真机验证只剩"导出应用内日志"一条路。于是先做观测面、再动数据面：
+
+| 任务 | 内容 | 提交 |
+|---|---|---|
+| D-01 | 快照资源节 (`TUN 写队列` / DNS 三表占用) + `poolDiagnostics` + `SshIoDispatcher.diagnostics`(饱和回执) + `闸门等待`/`假 IP 引用`; `resetSessionCounters()` 把计数改成**本会话**口径 | `feat(diag)` |
+| D-02 | `domain/obs/AppMetrics.kt` 在唯一落盘出口按静态前缀统计 WARNING/ERROR, 快照追加"故障归因"节 + 断开时再打一次 | `feat(diag)` |
+| F-04 step① | `markEstablished` 唯一建立入口 (守卫 + 假 IP acquire 同一临界区) + `TcpEstablishedGuardTest` | `refactor(tcp)` |
+| — | 真机验收清单 `2026-10-18-device-verification-checklist.md`（S0–S10 + 阈值表） | 同 `refactor(tcp)` |
+
+新增护栏（施工图教训，已写进 AGENTS.md）：
+**`resetSessionCounters` 的存在本身是"无 adb 判读"的前置** —— `PacketProcessor` 是单例，进程级累计计数
+会让"刚连上就背压丢段 5MB"看起来像故障现场；也不要在 `appLog` 与 `appLogThrottled` 两处都记
+（后者经 sink 转调前者 → 重复计数）：**只在 `addLog` 这一处记**。
 
 ### 6.1 实施时发现的两处"计划没写、必须写"的点（施工图教训）
 

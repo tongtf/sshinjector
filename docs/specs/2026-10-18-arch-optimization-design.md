@@ -237,6 +237,27 @@ class Connection(val key: Long, val srcIp: ByteArray, val dstIp: ByteArray, val 
 2. 真机回归矩阵可用（连接建立/关闭/大文件下载/HTTP2 多路复用/QUIC 降级/断连重连）；
 3. 三步拆解：① `ConnectionRegistry`（只做注册/查找/关闭）→ ② 发送侧（背压队列）→ ③ 接收侧（窗口闸门 + 回程缓存）。
 
+### 已落地的第一刀 (2026-10-18 第二轮, `refactor(tcp)`)
+
+**不是** `Connection` 对象合并，而是把 step ① 里**唯一真正重复的不变量**收敛成单一入口：
+
+```kotlin
+internal fun markEstablished(conn: TcpConnection, channel: SocketChannel): Boolean
+```
+
+原先 SOCKS 主路径与 bypass 直连各自手写 `synchronized(conn) { if (state == Closed) { channel.close(); return } … }`，
+两处的差别只有"关哪个通道"和"要不要 acquire 假 IP"。现在合并为：同锁复查 `Closed` → 就地关通道 + 返回 false；
+否则置 Established 并在**同一临界区**配对 `acquireFakeIp`（旁路目标通常不是假 IP，`fakeIpOrNull` 返回 null，
+行为不变）。新增第三条建立路径时只能调它 → "少写一条守卫" 这一整个缺陷类被结构性消除。
+
+配套：
+- 单测 `TcpEstablishedGuardTest` 覆盖"close 先"（拒绝 + 关通道 + 不 acquire）与"establish 先"两种顺序；
+- `reset()` 新增 `resetSessionCounters()`，让快照计数变成**本会话**口径（`PacketProcessor` 是单例）。
+
+**仍排后的部分不变**：`Connection` 对象（合并 `TcpConnection` + `Socks5Connection` + 回程缓存 + 两把锁）、
+§step ②③。前置条件 2（真机回归矩阵）现由
+`docs/specs/2026-10-18-device-verification-checklist.md` 以"日志核对清单"形式提供。
+
 ---
 
 ## F-05 观测事件化
