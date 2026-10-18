@@ -135,8 +135,11 @@ fun ServerEditScreen(
     val socksPortErr = ServerFormValidator.socksPortError(socksPort)
     val mtuErr = ServerFormValidator.mtuError(mtu)
     val keepAliveErr = ServerFormValidator.keepAliveError(keepAlive)
+    // T-17: 本页只支持密钥登录, keyAlias 为空即无法连接 -- 保存前必须拦住
+    val keyAliasErr = ServerFormValidator.keyAliasError(keyAlias)
     val firstError =
-        listOfNotNull(nameErr, hostErr, portErr, usernameErr, socksPortErr, mtuErr, keepAliveErr).firstOrNull()
+        listOfNotNull(nameErr, hostErr, portErr, usernameErr, socksPortErr, mtuErr, keepAliveErr, keyAliasErr)
+            .firstOrNull()
     val firstErrorMessage = firstError?.let { stringResource(errorRes(it)) }
     val nameErrorText = if (saveAttempted && nameErr != null) stringResource(errorRes(nameErr)) else null
     val hostErrorText = if (saveAttempted && hostErr != null) stringResource(errorRes(hostErr)) else null
@@ -292,6 +295,13 @@ fun ServerEditScreen(
                             }
                         },
                     )
+                    if (saveAttempted && keyAliasErr != null) {
+                        Text(
+                            stringResource(errorRes(keyAliasErr)),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                     if (!isNew) {
                         Text(
                             stringResource(R.string.server_host_fingerprint_label),
@@ -524,6 +534,7 @@ private fun errorRes(error: ServerFormError): Int =
         ServerFormError.KEEPALIVE_RANGE -> R.string.server_error_keepalive_range
         ServerFormError.USERNAME_REQUIRED -> R.string.server_error_username_required
         ServerFormError.USERNAME_INVALID -> R.string.server_error_username_invalid
+        ServerFormError.KEY_REQUIRED -> R.string.server_error_key_required
     }
 
 @Composable

@@ -133,6 +133,10 @@ class ServerWizardViewModel
                     onInvalid(R.string.wizard_require_fields)
                     false
                 }
+                nameError == ServerFormError.NAME_TOO_LONG -> {
+                    onInvalid(R.string.server_error_name_too_long)
+                    false
+                }
                 hostError != null -> {
                     onInvalid(R.string.server_error_host_invalid)
                     false
@@ -238,8 +242,8 @@ class ServerWizardViewModel
                     serverRepository.saveServerEdit(
                         -1L,
                         ServerConfig(
-                            name = _serverName.value,
-                            host = _host.value,
+                            name = _serverName.value.trim(),
+                            host = _host.value.trim(),
                             port = _port.value.toIntOrNull() ?: 22,
                             username = account,
                             keyAlias = alias,

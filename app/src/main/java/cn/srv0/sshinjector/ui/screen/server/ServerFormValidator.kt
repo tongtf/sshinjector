@@ -15,6 +15,7 @@ enum class ServerFormError {
     KEEPALIVE_RANGE,
     USERNAME_REQUIRED,
     USERNAME_INVALID,
+    KEY_REQUIRED,
 }
 
 object ServerFormValidator {
@@ -93,6 +94,15 @@ object ServerFormValidator {
         if (username.length > MAX_USERNAME_LENGTH || ILLEGAL_CHARS.containsMatchIn(username)) {
             return ServerFormError.USERNAME_INVALID
         }
+        return null
+    }
+
+    /**
+     * 密钥别名校验 (T-17)。编辑页/向导都只支持密钥登录, 别名为空的服务器保存后
+     * 必然连不上 (JSch 拿不到 identity), 所以保存前必须拦住。
+     */
+    fun keyAliasError(keyAlias: String?): ServerFormError? {
+        if (keyAlias.isNullOrBlank()) return ServerFormError.KEY_REQUIRED
         return null
     }
 }

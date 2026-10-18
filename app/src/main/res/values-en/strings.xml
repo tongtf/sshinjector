@@ -67,6 +67,7 @@
     <string name="settings_network">Network</string>
     <string name="settings_mtu">MTU: %d</string>
     <string name="settings_keepalive">Keepalive: %d s</string>
+    <string name="settings_follow_server">Use server setting</string>
     <string name="settings_probe_url">Connectivity probe URL</string>
     <string name="settings_probe_url_hint">http://connect.rom.miui.com/generate_204</string>
     <string name="settings_probe_url_invalid">Enter a full http(s):// URL</string>
@@ -197,6 +198,7 @@
     <string name="server_error_keepalive_range">Keep-alive must be 0-3600 seconds</string>
     <string name="server_error_username_required">Username is required</string>
     <string name="server_error_username_invalid">Username must not contain whitespace or control characters</string>
+    <string name="server_error_key_required">Select or generate a key</string>
 
     <string name="wizard_login_username">Login username (SSH)</string>
     <string name="wizard_placeholder_login_username">root</string>

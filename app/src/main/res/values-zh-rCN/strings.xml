@@ -67,6 +67,7 @@
     <string name="settings_network">网络</string>
     <string name="settings_mtu">MTU: %d</string>
     <string name="settings_keepalive">保活间隔: %d s</string>
+    <string name="settings_follow_server">跟随服务器设置</string>
     <string name="settings_probe_url">连通性探测地址</string>
     <string name="settings_probe_url_hint">http://connect.rom.miui.com/generate_204</string>
     <string name="settings_probe_url_invalid">请输入 http(s):// 完整地址</string>
@@ -197,6 +198,7 @@
     <string name="server_error_keepalive_range">保活间隔必须在 0-3600 秒</string>
     <string name="server_error_username_required">请输入用户名</string>
     <string name="server_error_username_invalid">用户名不能包含空白或控制字符</string>
+    <string name="server_error_key_required">请选择或生成密钥</string>
 
     <string name="wizard_login_username">登录账户 (SSH)</string>
     <string name="wizard_placeholder_login_username">root</string>

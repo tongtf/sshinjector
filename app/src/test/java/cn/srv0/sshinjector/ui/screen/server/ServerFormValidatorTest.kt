@@ -74,4 +74,12 @@ class ServerFormValidatorTest {
         assertEquals(ServerFormError.USERNAME_INVALID, ServerFormValidator.usernameError("ro ot"))
         assertEquals(ServerFormError.USERNAME_INVALID, ServerFormValidator.usernameError("ro\noot"))
     }
+
+    @Test
+    fun `key alias is required`() {
+        assertNull(ServerFormValidator.keyAliasError("id_ed25519"))
+        assertEquals(ServerFormError.KEY_REQUIRED, ServerFormValidator.keyAliasError(""))
+        assertEquals(ServerFormError.KEY_REQUIRED, ServerFormValidator.keyAliasError("   "))
+        assertEquals(ServerFormError.KEY_REQUIRED, ServerFormValidator.keyAliasError(null))
+    }
 }
