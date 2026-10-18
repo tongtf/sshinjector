@@ -594,20 +594,9 @@ class TcpStateMachine(
                 }
             }
             // 上行 forwardToSocks 依赖非阻塞 write 的 write()==0 背压语义, 保持非阻塞。
-            // 置 Established 必须与 closeTcpConnection 的 (state=Closed) 同持 conn 锁:
-            // 握手期间客户端可能已 RST, 不加锁会让 close 先跑完、这里再置 Established →
-            // 这条连接已从 map 移除, relay 却继续跑 (forwardThroughLocalSocks 有同款守卫)。
-            synchronized(conn) {
-                if (conn.state == TcpConnection.TcpState.Closed) {
-                    try {
-                        sc.close()
-                    } catch (_: Exception) {
-                    }
-                    return
-                }
-                conn.socksChannel = sc
-                conn.state = TcpConnection.TcpState.Established
-            }
+            // 置 Established 走唯一入口 (内含与 closeTcpConnection 同锁的 Closed 复查):
+            // 握手期间客户端 RST 时这里直接返回, 不会出现"已移除的连接继续跑 relay"或假 IP 计数泄漏。
+            if (!markEstablished(conn, sc)) return
             val synAckPacket = buildSynAckPacket(conn)
             if (synAckPacket != null) {
                 tunWriterProvider()?.write(synAckPacket)
@@ -956,28 +945,10 @@ class TcpStateMachine(
             }
         }
 
-        // 置 Established + acquire 假 IP 必须与 closeTcpConnection 的 (state=Closed → release)
-        // 串在**同一把 conn 锁**内: 握手期间客户端可能已 RST, 若不加锁, close 先跑完
-        // (flag=false → 不递减) 然后这里再 acquire, 这条连接永远不会再走到 release 分支
-        // → 计数只增不减 → 假 IP 池 (16384) 泄漏打满, 后续 CONNECT 全部 0x03 卡"连接中"。
-        synchronized(conn) {
-            if (conn.state == TcpConnection.TcpState.Closed) {
-                // 握手期间已被关闭: 不能置 Established, 也不能 acquire
-                try {
-                    sock.close()
-                } catch (_: Exception) {
-                }
-                return
-            }
-            conn.socksChannel = sock
-            conn.state = TcpConnection.TcpState.Established
-            // 记一次活动连接: closeTcpConnection 归零时才释放假 IP 映射 (见 releaseUnusedFakeIps)。
-            // fakeIpAcquired 必须在 acquire 的同一处置位, 否则未 acquire 的连接也会递减。
-            VpnController.fakeIpOrNull(conn.dstIp)?.let {
-                acquireFakeIp(it)
-                conn.fakeIpAcquired = true
-            }
-        }
+        // 置 Established + acquire 假 IP 走唯一入口 [markEstablished] (内含与 closeTcpConnection
+        // 同锁的 Closed 复查 + 就地关通道): 握手期间客户端 RST 时这里直接返回, 不会出现
+        // "已移除的连接继续跑 relay"或"计数只增不减 → 假 IP 池打满 → 后续 CONNECT 全 0x03"。
+        if (!markEstablished(conn, sock)) return
         // 握手耗时告警: SYN-ACK 是等到这里才发的, 客户端全程在 SYN_SENT 里干等。
         // 分页一次开 6-10 条连接时, 建连耗时直接叠加成"点安装无反应"。
         val handshakeMs = System.currentTimeMillis() - handshakeStartedAt
@@ -1896,6 +1867,52 @@ class TcpStateMachine(
     }
 
     /**
+     * **置 Established 的唯一入口** (SOCKS 主路径 / 旁路直连两条路径共用)。
+     *
+     * 为什么必须是"一个函数"而不是每处各写一遍 `synchronized(conn) { if (Closed) … }`:
+     * 客户端 RST 可以在握手期间到达, 那时 [closeTcpConnection] 已经跑完 (state=Closed → 释放假 IP
+     * → 按 identity 从 map 移除)。建立路径若不持**同一把 conn 锁**重新检查, 会同时踩两个坑:
+     *
+     * 1. 从 map 移除的连接照样跑 relay → 后续包全成孤儿、连接永久卡死;
+     * 2. close 先归零、这里再 acquire → 该连接永远不会走到 release → 假 IP 计数只增不减
+     *    → 16384 条池打满 → 后续 CONNECT 全 0x03 卡"连接中"。
+     *
+     * 两条都是"少写一行守卫"才会出现、且事后无法从日志区分的故障; 结构上只留一个入口后,
+     * 将来新增第三条建立路径不可能再漏 (它只能调本函数)。
+     *
+     * 假 IP acquire 也放在这里 (而非只在 SOCKS 路径): 旁路目标通常不是假 IP,
+     * [VpnController.fakeIpOrNull] 直接返回 null, 所以统一后旁路行为不变; 而`fakeIpAcquired`
+     * 与 acquire 同处置位这一纪律也只剩一个执行点。
+     *
+     * @return true = 已置 Established 且通道已登记, 调用方继续建连流程;
+     *   false = 连接握手期间已被关闭 (刚建立的通道已就地关闭), **调用方必须立即 return**。
+     */
+    internal fun markEstablished(
+        conn: TcpConnection,
+        channel: SocketChannel,
+    ): Boolean {
+        synchronized(conn) {
+            if (conn.state == TcpConnection.TcpState.Closed) {
+                // 关闭流程已经跑完: 这条通道没有任何人会再管它, 就地关掉 (否则会话级 fd 泄漏)
+                try {
+                    channel.close()
+                } catch (_: Exception) {
+                }
+                return false
+            }
+            conn.socksChannel = channel
+            conn.state = TcpConnection.TcpState.Established
+            // 记一次活动连接: closeTcpConnection 归零时才释放假 IP 映射 (见 acquireFakeIp)。
+            // fakeIpAcquired 必须在 acquire 的同一处置位, 否则未 acquire 的连接也会递减。
+            VpnController.fakeIpOrNull(conn.dstIp)?.let {
+                acquireFakeIp(it)
+                conn.fakeIpAcquired = true
+            }
+            return true
+        }
+    }
+
+    /**
      * **隧道黑洞检测**: 通道建立成功, 客户端也把数据交进了隧道 (上行 > 0), 但一个字节的
      * 响应都没回来 (下行 == 0) 就关闭。
      *
@@ -1972,6 +1989,40 @@ class TcpStateMachine(
         }
         tcpConnections.clear()
         fakeIpActiveConns.clear()
+        resetSessionCounters()
+    }
+
+    /**
+     * 会话计数器清零 (调用方: [reset] —— 只在断开 / forceReset 两个会话边界)。
+     *
+     * 为什么必须清零: 这些计数是**进程级** AtomicLong (PacketProcessor 是单例, 对象跨会话存活),
+     * 不清的话新会话的快照里会带着上一个会话的累计值 —— 无 adb 现场只能靠导出的日志判读,
+     * 一个刚连上就显示"背压丢段 5MB / 零回程 12"的快照会把排障直接带偏 (实际是本会话全绿)。
+     * 会话边界清零后, 快照里每个数字都只属于当前会话, 与 [cn.srv0.sshinjector.domain.obs.AppMetrics]
+     * 的"本会话"口径一致。
+     *
+     * 清零的都是**展示/统计量**, 没有一个是决策输入 (闸门只看 clientWindowRaw/clientAck/serverSeq,
+     * 慢握手阈值只看本次样本), 所以这里不影响任何协议行为。
+     */
+    private fun resetSessionCounters() {
+        droppedByBackpressure.set(0)
+        flowBlockedMillis.set(0)
+        upstreamBufferedBytes.set(0)
+        droppedOrphanPackets.set(0)
+        droppedOrphanBytes.set(0)
+        droppedDownstreamBytes.set(0)
+        droppedReturnQueueBytes.set(0)
+        orphanFinPackets.set(0)
+        orphanRstPackets.set(0)
+        orphanAckPackets.set(0)
+        orphanDataPackets.set(0)
+        tunnelBlackHoleConns.set(0)
+        tunnelBlackHoleImmediate.set(0)
+        tunnelBlackHoleDelayed.set(0)
+        handshakeCount.set(0)
+        slowHandshakeCount.set(0)
+        // 两个 gauge: 所有连接已被关闭, 此刻在途应为 0 (清掉是为了不把上一会话的残值当现状)
+        flowWaiters.set(0)
     }
 
     /**
