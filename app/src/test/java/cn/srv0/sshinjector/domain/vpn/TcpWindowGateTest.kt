@@ -317,10 +317,7 @@ class TcpWindowGateTest {
                 }.array()
         sm.processTcpPacket(
             ByteBuffer.wrap(pkt).order(ByteOrder.BIG_ENDIAN),
-            clientIp,
-            serverIp,
-            0,
-            pkt.size,
+            IpPacketParser.ParsedPacket(clientIp, serverIp, 6, 0, pkt.size),
         )
     }
 
@@ -544,7 +541,10 @@ class TcpWindowGateTest {
         fromPort: Int = srcPort,
     ) {
         val pkt = buildTcpPacket(0x02, 12345, 0, options = options, fromPort = fromPort)
-        sm.processTcpPacket(ByteBuffer.wrap(pkt).order(ByteOrder.BIG_ENDIAN), src, dst, 0, pkt.size)
+        sm.processTcpPacket(
+            ByteBuffer.wrap(pkt).order(ByteOrder.BIG_ENDIAN),
+            IpPacketParser.ParsedPacket(src, dst, 6, 0, pkt.size),
+        )
     }
 
     private fun sendAckWindow(
@@ -555,7 +555,10 @@ class TcpWindowGateTest {
         window: Int,
     ) {
         val pkt = buildTcpPacket(0x10, 12346, ack, window = window)
-        sm.processTcpPacket(ByteBuffer.wrap(pkt).order(ByteOrder.BIG_ENDIAN), src, dst, 0, pkt.size)
+        sm.processTcpPacket(
+            ByteBuffer.wrap(pkt).order(ByteOrder.BIG_ENDIAN),
+            IpPacketParser.ParsedPacket(src, dst, 6, 0, pkt.size),
+        )
     }
 
     private fun sendRst(
@@ -565,7 +568,10 @@ class TcpWindowGateTest {
         ack: Int,
     ) {
         val pkt = buildTcpPacket(0x14, 12346, ack)
-        sm.processTcpPacket(ByteBuffer.wrap(pkt).order(ByteOrder.BIG_ENDIAN), src, dst, 0, pkt.size)
+        sm.processTcpPacket(
+            ByteBuffer.wrap(pkt).order(ByteOrder.BIG_ENDIAN),
+            IpPacketParser.ParsedPacket(src, dst, 6, 0, pkt.size),
+        )
     }
 
     @Suppress("LongParameterList")

@@ -92,14 +92,7 @@ class PacketProcessor
             val parsed = IpPacketParser.parseIpv4Header(buffer) ?: return dropUnhandled()
             val handled =
                 when (parsed.protocol) {
-                    0x06 ->
-                        tcpStateMachine.processTcpPacket(
-                            buffer,
-                            parsed.srcIp,
-                            parsed.dstIp,
-                            parsed.payloadStart,
-                            parsed.payloadLength,
-                        )
+                    0x06 -> tcpStateMachine.processTcpPacket(buffer, parsed)
                     0x11 ->
                         udpRelay.processUdpPacket(
                             buffer,
@@ -125,14 +118,7 @@ class PacketProcessor
             val parsed = IpPacketParser.parseIpv6Header(buffer) ?: return dropUnhandled()
             val handled =
                 when (parsed.protocol) {
-                    0x06 ->
-                        tcpStateMachine.processTcpPacket(
-                            buffer,
-                            parsed.srcIp,
-                            parsed.dstIp,
-                            parsed.payloadStart,
-                            parsed.payloadLength,
-                        )
+                    0x06 -> tcpStateMachine.processTcpPacket(buffer, parsed)
                     0x11 ->
                         udpRelay.processUdpPacket(
                             buffer,

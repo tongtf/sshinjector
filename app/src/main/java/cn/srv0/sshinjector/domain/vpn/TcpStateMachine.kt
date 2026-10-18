@@ -189,6 +189,12 @@ class TcpStateMachine(
         val dstIpBytes: ByteArray = dstIp.address
 
         /**
+         * 五元组连接标识。建连时算一次并缓存: 关闭 / 黑洞 / 重传 / 陈旧清理等 6 处都要用它,
+         * 每处重算都会克隆两个 `InetAddress.address`。同样放在类体内以免影响 data class 语义。
+         */
+        val key: Long = IpPacketParser.connectionKey(srcIp, dstIp, srcPort, dstPort)
+
+        /**
          * 本连接是否已对假 IP 计数表 acquire 过 (只在 Established 且映射存在时置位)。
          *
          * 必须有这个标志: `closeTcpConnection` 会在**大量**从未走到 Established 的路径上被调
@@ -276,13 +282,21 @@ class TcpStateMachine(
     /**
      * 处理 TCP 数据包
      */
+    /**
+     * 处理 TCP 数据包。
+     *
+     * 头部信息统一从 [IpPacketParser.ParsedPacket] 取, 而不是散开的 5 个参数: 除了参数表更短,
+     * 关键是 `parsed.srcLow` / `parsed.dstLow` 已由解析器**零分配**算好 —— 连接 key 不再需要
+     * 每包克隆两个 `InetAddress.address` (上行热路径, 见 IpPacketParser.addressLow32)。
+     */
     fun processTcpPacket(
         buffer: ByteBuffer,
-        srcIp: InetAddress,
-        dstIp: InetAddress,
-        payloadStart: Int,
-        payloadLength: Int,
+        parsed: IpPacketParser.ParsedPacket,
     ): Boolean {
+        val srcIp = parsed.srcIp
+        val dstIp = parsed.dstIp
+        val payloadStart = parsed.payloadStart
+        val payloadLength = parsed.payloadLength
         if (payloadLength < 20) return false // 最小 TCP 头部
 
         buffer.position(payloadStart)
@@ -316,8 +330,8 @@ class TcpStateMachine(
         val payloadLen = payloadLength - dataOffset
         val hasPayload = payloadLen > 0
 
-        // 连接标识符 (五元组哈希)
-        val connKey = IpPacketParser.connectionKey(srcIp, dstIp, srcPort, dstPort)
+        // 连接标识符 (五元组哈希): 用解析器零分配算好的低 32 位, 不再克隆 InetAddress.address
+        val connKey = IpPacketParser.connectionKey(parsed.srcLow, parsed.dstLow, srcPort, dstPort)
         var conn = tcpConnections[connKey]
 
         if (syn && !ack) {
@@ -517,7 +531,7 @@ class TcpStateMachine(
                         level = LogLevel.ERROR,
                         throttleKey = "隧道插件异常",
                     )
-                    val connKey = IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort)
+                    val connKey = conn.key
                     // F6: 收敛到 closeTcpConnection (内部发 RST + 移除条目, 允许同五元组重建)
                     closeTcpConnection(connKey, conn)
                 }
@@ -531,7 +545,7 @@ class TcpStateMachine(
                 )
                 stats.addError()
                 closeTcpConnection(
-                    IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort),
+                    conn.key,
                     conn,
                 )
             }
@@ -544,7 +558,7 @@ class TcpStateMachine(
      * 与 forwardThroughDirectChannel 同构, 只是本地 socket 直连、不经 Socks5ProxyServer/SSH。
      */
     private fun forwardThroughBypass(conn: TcpConnection) {
-        val connKey = IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort)
+        val connKey = conn.key
         val protect = protectSocketFn
         val sc = SocketChannel.open()
         try {
@@ -789,7 +803,7 @@ class TcpStateMachine(
     ) {
         // 分阶段健康: 进入隧道转发路径计数 (成功建立在 CONNECT 应答通过后计)
         StageCounters.onForwardAttempt()
-        val connKey = IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort)
+        val connKey = conn.key
         val sock = SocketChannel.open()
         // 握手期非阻塞: readFully/writeFully 靠各阶段自己的 deadline 兜底 (见其 KDoc)。
         // 握手完成后 forwardToSocks/回程中继同样依赖非阻塞 write 的 write()==0 背压语义。
@@ -1749,7 +1763,7 @@ class TcpStateMachine(
                 throttleKey = "上行转发失败",
             )
             stats.addError()
-            closeTcpConnection(IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort), conn)
+            closeTcpConnection(conn.key, conn)
             return 0
         }
     }
@@ -1977,7 +1991,7 @@ class TcpStateMachine(
         tcpConnections.values.removeIf { conn ->
             if (now - conn.lastActivity > timeoutMs) {
                 closeTcpConnection(
-                    IpPacketParser.connectionKey(conn.srcIp, conn.dstIp, conn.srcPort, conn.dstPort),
+                    conn.key,
                     conn,
                 )
                 true

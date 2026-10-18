@@ -95,10 +95,13 @@ class TcpBypassTest {
         val buffer = ByteBuffer.wrap(synPacket).order(ByteOrder.BIG_ENDIAN)
         stateMachine.processTcpPacket(
             buffer,
-            InetAddress.getByName("10.0.0.2"),
-            InetAddress.getByName("127.0.0.1"),
-            0,
-            synPacket.size,
+            IpPacketParser.ParsedPacket(
+                InetAddress.getByName("10.0.0.2"),
+                InetAddress.getByName("127.0.0.1"),
+                6,
+                0,
+                synPacket.size,
+            ),
         )
 
         assertTrue("bypass path (protect) not invoked within 5s", protectCalled.await(5, TimeUnit.SECONDS))

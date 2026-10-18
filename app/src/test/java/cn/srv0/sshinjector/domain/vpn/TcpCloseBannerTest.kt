@@ -232,12 +232,18 @@ class TcpCloseBannerTest {
 
     private fun sendSyn(sm: TcpStateMachine) {
         val pkt = buildTcpPacket(0x02, 12345, 0)
-        sm.processTcpPacket(ByteBuffer.wrap(pkt).order(ByteOrder.BIG_ENDIAN), clientIp, serverIp, 0, pkt.size)
+        sm.processTcpPacket(
+            ByteBuffer.wrap(pkt).order(ByteOrder.BIG_ENDIAN),
+            IpPacketParser.ParsedPacket(clientIp, serverIp, 6, 0, pkt.size),
+        )
     }
 
     private fun sendFinAck(sm: TcpStateMachine) {
         val pkt = buildTcpPacket(0x11, 12346, 1)
-        sm.processTcpPacket(ByteBuffer.wrap(pkt).order(ByteOrder.BIG_ENDIAN), clientIp, serverIp, 0, pkt.size)
+        sm.processTcpPacket(
+            ByteBuffer.wrap(pkt).order(ByteOrder.BIG_ENDIAN),
+            IpPacketParser.ParsedPacket(clientIp, serverIp, 6, 0, pkt.size),
+        )
     }
 
     private fun isRst(p: ByteArray) = p.size >= 34 && (p[33].toInt() and 0x04) != 0
