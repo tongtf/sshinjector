@@ -212,6 +212,73 @@
 ### 4.4 本轮明确不做
 
 - 不做远端解析结果缓存到 `DnsInterceptor` / 不用于隧道决策 (纯展示, 与 P0/P1 一致);
-- 不把 uid 塞进 CSV (列序是冻结契约)、不做按 uid 的隧道决策;
+- ~~不把 uid 塞进 CSV (列序是冻结契约)~~ → **已于 §5.2 修订** (追加在**末尾**两列, 老列号不变),
+  不做按 uid 的隧道决策;
 - 不加"记录应用归属"开关 (拿不到就少一列, 无需开关)。
+
+---
+
+## 5. v1.2.7 真机回灌 (② 轮) → 降噪 + 收尾 (2026-10-19, **不升版本号**)
+
+> 前提: v1.2.7 首版真机日志**四条全过** —— ③ `远端解析 · m.youtube.com — 446ms · 2 个 IP (S… · 1.1.1.1)`;
+> ④ `UID 归属 命中 29/29 查询 · 无归属 0` (v1.2.6 是 `7/105`); 探针弹窗可复制 (用户直接贴出来了);
+> 全篇无 `RelativeNameException`。剩下的只有**噪声**与两个收尾项, 所以这一轮不动数据面:
+> 版本号保持 `1.2.7` / `versionCode 20`, 只改日志定级与展示层。
+
+### 5.1 `远端不解析该目标` (A: 秒拒降噪)
+
+**真机指纹**: `update.kiwibrowser.com.unused` (Kiwi 浏览器的更新探测用的假 TLD) 产生三条:
+
+```
+[ERROR] SSH 通道打开失败 · update.kiwibrowser.com.unused:443 — channel is not opened. · 试了 3/3 个候选 · 末次耗时 124ms · 在途通道 5
+[ERROR] SSH 通道建立失败 · … — 通道工厂返回 null
+[WARNING] SOCKS 连接被拒 · 198.18.0.14:443 — rep=5
+```
+
+**根因 (hk6 取证)**: 该名与 `update.kiwibrowser.com` 在 1.1.1.1 的 **53/TCP** 上都是 **NXDOMAIN**
+(`rcode=3, ancount=0`; 对照 `m.youtube.com` = NOERROR/1)。真实 DNS 会直接回 NXDOMAIN、客户端根本不会建连;
+假 IP 模式把任何 A 查询都回成 `198.18.x.x` → 客户端照常 CONNECT → sshd 侧 `getaddrinfo` 失败 →
+**124ms 秒回 `CHANNEL_OPEN_FAILURE`** → `createDirectChannel` 返回 null → `rep=5`。
+**这不是本栈故障**, 却在 `故障归因` 里凭空多出两类"故障"。
+
+**改法** (只碰失败路径, 数据面逐字节不变):
+
+- `ChannelOpenBudget.isFastRejectOnAllCandidates(attempted, candidateCount, stalledAny)`: 试满全部候选
+  **且**没有任何一次拖到 `OPEN_STALL_MIN_MS` (=1s) 才算"全候选秒拒" (慢失败/预算 `break` 都不算);
+- 命中该判据 → 一条 **INFO** `远端不解析该目标 (域名可能不存在) · <host:port> — <message> · 试了 N/N 个候选 ·
+  末次耗时 Xms · 在途通道 K (pool: …)`, **不再打 ERROR**; 其余 (慢失败) 保持原 ERROR 文案不变;
+- `Socks5ProxyServer` 里那条**重复**的 `SSH 通道建立失败 · … 通道工厂返回 null` 降 **DEBUG** ——
+  `createDirectChannel` 已是唯一权威出口 (它的行里本来就带 `试了 N/M · 末次耗时 · 在途通道 · pool`),
+  同一个失败不该算两类故障;
+- `createDirectChannel` 删掉 `if (size == 0) return null` 这条**静默**出口 (同一刻池被清空时保证仍有日志);
+- `SOCKS 连接被拒` 现在打**域名** (`target(conn)`, 不再是裸假 IP) 且 `rep=5` 带上人话成因;
+- 安全网 (为什么降级不会掩盖真故障): **系统性**拒绝会让 `SSH 通道统计 · 目标层失败` 与快照的同类计数一起涨,
+  且"所有域名一起失败"在 INFO 行里肉眼可见。
+
+### 5.2 CSV 追加「应用」两列 (C)
+
+- 末尾追加 `app_uids` (机器事实, 多值以 `,` 连接 → RFC4180 会加引号) 与 `app` (应用名, 认不出退化成 `uid N`);
+  **老列号 0..10 不变** (契约只增不改); 空槽 (`-1`) 被滤掉 → 两列留空;
+- 纯对象不碰 Android: 应用名由 `DomainStatsViewModel.exportCsv` 经 `resolveAppLabels` (带 `AppUidLabels` 缓存
+  与 `MAX_APP_LABELS=64` 预算) 解析后传入, 与页面「应用」列**同一口径**;
+- `DomainStatsCsvTest` 表头逐字符更新 + 3 条新用例 (单值不加引号 / 多值与退化成 `uid N` / 空槽过滤)。
+
+### 5.3 探针去掉 `用量访问` (B)
+
+`Result.usageStatsGranted`、`AppOpsManager` 那段读取、四份 `strings.xml` 的 `usage=%2$s` 占位、日志里的
+`用量访问=…` 全部删除 —— 它是 `PACKAGE_USAGE_STATS`, 只服务**已被放弃**的 `NetworkStatsManager` 回退,
+留在弹窗里会被误读成 ④ 的判据 (真机 `usage=denied` 而数据面 `命中 29/29` 就是这么被误读的)。
+
+### 5.4 单测与门禁
+
+- 新增 6 例: `ChannelOpenBudgetTest` 3 例 (全候选秒拒 / 有 stall 不算 / 未试满或零候选不算) +
+  `DomainStatsCsvTest` 3 例; `AppUidProbeTest` 删掉 `usageStatsGranted` 断言。
+- 单元测试 **398 → 404 例 0 失败**; `ktlintCheck` / `detekt` / `lint` / `assembleDebug` / `assembleRelease` 全绿。
+
+### 5.5 本轮明确不做
+
+- 不给假 IP 模式加 NXDOMAIN 透传 (要先真解析一次, 等于放弃假 IP 的机制收益); 只把**已发生**的秒拒归类;
+- 不动探测失败 / `隧道零回程` 那条 (v1.2.7 日志里 3 次探测失败 + `零回程 2(秒断 2)`, 形态自洽且同域名很快
+  恢复: `accounts.google.com` 16:40:44 下行 5836B、16:41:39 远端解析成功) —— 按既有判据属**瞬时抖动**,
+  同一域名反复才动 app。
 

@@ -102,6 +102,7 @@ internal object DomainStatsCsv {
 }
 ```
 列顺序 (固定, 单测锁死): `domain,real_ip,real_ip2,is_ip_literal,conn_count,failed_conn_count,up_bytes,down_bytes,first_seen_ms,last_seen_ms,last_port`
+(④ 落地后 v1.2.7 在**末尾**追加 `app_uids,app` 两列 —— 老列号 0..10 不变, 见 `2026-10-19-domain-stats-round2-todo.md` §5)
 
 ### 1.3 `domain/vpn/DnsInterceptor.kt` (新增一个函数, T-04 拥有)
 
