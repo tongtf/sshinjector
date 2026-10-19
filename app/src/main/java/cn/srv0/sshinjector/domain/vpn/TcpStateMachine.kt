@@ -234,6 +234,18 @@ class TcpStateMachine(
         @Volatile var fakeIpAcquired: Boolean = false
 
         /**
+         * ④ 这条连接归属的应用 uid (**建立时就反查**, [AppUidResolver.NO_UID] = 未拿到)。
+         *
+         * 为什么必须建立时查: `getConnectionOwnerUid` 查的是**内核里这条 socket 的归属**, 而连接
+         * 关闭那一刻应用常已把 socket 销毁 —— 真机实测"关闭时才查"的命中率只有 `7/105`, 大量
+         * `存活 0s` 的短连接 (HTTP/2 预热、探测请求) 一个都查不到。SYN 到达时这条 socket 必然存在。
+         *
+         * 放在类体内 (而非构造参数) 以免影响 data class 的 equals/hashCode/copy 语义 (池化/`indexOf`
+         * 定位靠 equals, 可变构造参数会让定位返回 -1 —— 同类历史坑见 `PooledSession.lastOpenStallAtMs`)。
+         */
+        @Volatile var appUid: Int = AppUidResolver.NO_UID
+
+        /**
          * 已发出的 SYN-ACK 序列号 (ISN)。-1 = 尚未发出。
          * SYN-ACK 重传必须复用同一个 ISN (RFC 793): 客户端因丢包重传 SYN 时, 收到不同 seq 的
          * SYN-ACK 会当作冲突包丢弃 → 双方僵持到超时, 表现为"连接挂着但永远无数据"。
@@ -1825,7 +1837,35 @@ class TcpStateMachine(
         // 长期持有 (bypass 判定 / 假 IP 查表 / 日志)。TcpConnection 内部把字节拷成自有副本。
         val conn = TcpConnection(id, parsed.srcIp, parsed.dstIp, srcPort, dstPort)
         tcpConnections[key] = conn
+        // ④ 归属反查的**唯一发起处**: 客户端 socket 此刻必然存在 (SYN 就是它发的) —— 关闭时才查会
+        // 因为应用已销毁 socket 而大面积落空 (见 TcpConnection.appUid)。入队即返回, 不阻塞本线程。
+        enqueueAppUidLookup(conn)
         return conn
+    }
+
+    /**
+     * ④ 发起一次归属反查 (每个客户端 socket 一次, 结果缓存在 [TcpConnection.appUid])。
+     *
+     * 结果通常会早于关闭到达; 但 `存活 0s` 的短连接上关闭可能**先**发生 —— 统计条目在关闭时才创建,
+     * 那时读 `conn.appUid` 必然是 [AppUidResolver.NO_UID], 所以在回调里补一次回写 (按同一口径的
+     * 统计键)。域名此时仍可反查: 假 IP 归零有 60s 摘除宽限 (`DnsInterceptor.releaseFakeIp`)。
+     */
+    private fun enqueueAppUidLookup(conn: TcpConnection) {
+        appUidResolver.lookup(conn.srcIpBytes, conn.srcPort, conn.dstIpBytes, conn.dstPort) { uid ->
+            // 契约是"只有拿到 ≥0 才回调" (ConnectivityAppUidResolver.resolveOnce 把 -1 归成 miss),
+            // 这里再挡一次: 无论如何都不能把 -1 写进统计条目
+            if (uid < 0) return@lookup
+            conn.appUid = uid
+            if (conn.state == TcpConnection.TcpState.Closed) {
+                domainStats.attachAppUid(statsKey(conn), uid)
+            }
+        }
+    }
+
+    /** 统计键 = 域名 (无映射时 `ip:port` 字面量); 与 [closeTcpConnection] 里那次反查同口径。 */
+    private fun statsKey(conn: TcpConnection): String {
+        val ip = conn.dstIp.hostAddress ?: "-"
+        return dnsInterceptor?.lookupDomain(ip) ?: "$ip:${conn.dstPort}"
     }
 
     private fun closeTcpConnection(
@@ -1890,11 +1930,11 @@ class TcpStateMachine(
             kind = kind,
             nowMs = System.currentTimeMillis(),
         )
-        // ④ 按应用归属: 异步反查发起方 uid, 拿到才回写 (**不在本线程调 binder**; 拿不到就当没有 ——
-        // uid 只影响统计展示, 不影响任何隧道行为)。地址用 conn 缓存的原始字节, 热路径零分配。
-        appUidResolver.lookup(conn.srcIpBytes, conn.srcPort, conn.dstIpBytes, conn.dstPort) { uid ->
-            domainStats.attachAppUid(domainKey, uid)
-        }
+        // ④ 按应用归属: 反查**在连接建立时就已发起** (见 createTcpConnection → enqueueAppUidLookup),
+        // 这里只回写缓存值 —— 关闭时才发起会大面积落空 (真机 7/105), 而 uid 只影响统计展示,
+        // 拿不到就当没有, 不影响任何隧道行为。晚到的回调由 enqueueAppUidLookup 里的补写路径兜住。
+        val uid = conn.appUid
+        if (uid >= 0) domainStats.attachAppUid(domainKey, uid)
         // F6: 通知浏览器使其立即 abort 而非挂死; 移除条目后同五元组新 SYN 自动重建。
         // graceful=true (远端正常 EOF) 发 FIN+ACK 而非 RST: 对端是正常收尾的应用,
         // RST 会让它看到 connection reset; 出错/拒绝/陈旧/断线清理仍走 RST 立即 abort。

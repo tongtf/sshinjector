@@ -41,4 +41,12 @@ class AppUidProbeTest {
         assertFalse(result.usageStatsGranted)
         assertFalse(result.uidLabelResolvable)
     }
+
+    @Test
+    fun `probe surfaces the data plane hit rate`() {
+        // 环回探针拿不到归属是**预期**结果 (见 OwnerUid.NO_OWNER), 真正有判定力的是数据面命中率 ——
+        // 必须原样带到结果里 (页面与日志都靠它判读 ④ 到底能不能用)。
+        val result = probe.probe(vpnActive = true, dataPlaneUidStats = "UID 归属 命中 7/105 查询")
+        assertEquals("UID 归属 命中 7/105 查询", result.dataPlane)
+    }
 }

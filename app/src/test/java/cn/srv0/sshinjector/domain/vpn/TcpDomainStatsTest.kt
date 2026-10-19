@@ -101,6 +101,37 @@ class TcpDomainStatsTest {
         )
     }
 
+    @Test
+    fun `a late uid callback arriving after close is still recorded`() {
+        val closedPort = ServerSocket(0).use { it.localPort }
+        val store = DomainStatsStore()
+        val rstLatch = CountDownLatch(1)
+        // 真实现是"单线程池里排队", 短命连接上回调往往在**关闭之后**才回来; 契约是回调里补写一次
+        // (否则 0s 短连接永远拿不到归属 —— 真机命中率只有 7/105 的根因就是这种时序)。
+        val resolver = DeferredUidResolver(uid = 10010)
+        val sm =
+            newStateMachine(FakeSocksPlugin(closedPort), store, resolver) { p ->
+                if (isRst(p)) rstLatch.countDown()
+            }
+
+        sendSyn(sm)
+
+        assertTrue("连接必须在 5s 内关闭", rstLatch.await(5, TimeUnit.SECONDS))
+        assertEquals(
+            "关闭那一刻还没拿到 uid, 条目先按无归属记账",
+            DomainStatsStore.NO_UID,
+            store.snapshot().single().appUid1,
+        )
+
+        resolver.complete()
+
+        assertEquals(
+            "晚到的回调必须补写 (短命连接全靠这条路径)",
+            10010,
+            store.snapshot().single().appUid1,
+        )
+    }
+
     private fun newStateMachine(
         plugin: TunnelPlugin,
         store: DomainStatsStore,
@@ -176,6 +207,29 @@ class TcpDomainStatsTest {
         }
 
         override fun diagnostics(): String = "fake"
+    }
+
+    /** 延迟回调替身: 模拟"单线程池排队 → 关闭之后才回来"的时序 (真实现的常见形态)。 */
+    private class DeferredUidResolver(
+        private val uid: Int,
+    ) : AppUidResolver {
+        private var callback: ((Int) -> Unit)? = null
+
+        override fun lookup(
+            srcIp: ByteArray,
+            srcPort: Int,
+            dstIp: ByteArray,
+            dstPort: Int,
+            onResolved: (Int) -> Unit,
+        ) {
+            callback = onResolved
+        }
+
+        fun complete() {
+            callback?.invoke(uid)
+        }
+
+        override fun diagnostics(): String = "deferred"
     }
 
     /** 最小 SOCKS 插件: 只需要能返回一个指向已关闭端口的 localSocksPort。 */

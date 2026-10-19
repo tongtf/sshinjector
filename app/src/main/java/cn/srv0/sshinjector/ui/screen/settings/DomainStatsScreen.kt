@@ -1,5 +1,8 @@
 package cn.srv0.sshinjector.ui.screen.settings
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -17,11 +20,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -106,19 +111,26 @@ fun DomainStatsScreen(
         viewModel.consumeMessage()
     }
 
-    // 「UID 归属探针」结果: 弹一次 (便于无 adb 时直接截图回报) 后消费, 值本身是语言无关 token
+    // 「UID 归属探针」结果: 弹一个**可复制**的弹窗 —— 无 adb 的现场, 用户要能把结论贴出来回报
+    // (原来是 Toast: 既不能选也不能复制, 且弹一次就被消费掉 —— 真机反馈"且无法复制")。
+    // 关闭弹窗时才消费, 避免每次重组重弹。
     val probeResult = state.appUidProbe
     val probeFormat = stringResource(R.string.domain_stats_app_uid_probe_result)
-    LaunchedEffect(probeResult) {
-        if (probeResult == null) return@LaunchedEffect
-        val text =
-            probeFormat.format(
-                probeResult.ownerUid.name,
-                if (probeResult.usageStatsGranted) "granted" else "denied",
-                if (probeResult.uidLabelResolvable) "ok" else "n/a",
-            )
-        Toast.makeText(context, text, Toast.LENGTH_LONG).show()
-        viewModel.consumeAppUidProbe()
+    if (probeResult != null) {
+        val probeText =
+            buildString {
+                append(
+                    probeFormat.format(
+                        probeResult.ownerUid.name,
+                        if (probeResult.usageStatsGranted) "granted" else "denied",
+                        if (probeResult.uidLabelResolvable) "ok" else "n/a",
+                    ),
+                )
+                // 成因 + 数据面命中率: 环回探针的 NO_OWNER 是预期结果, 判定 ④ 是否可用看后面这行
+                if (probeResult.detail.isNotEmpty()) append("\n").append(probeResult.detail)
+                if (probeResult.dataPlane.isNotEmpty()) append("\n").append(probeResult.dataPlane)
+            }
+        AppUidProbeDialog(text = probeText, onDismiss = { viewModel.consumeAppUidProbe() })
     }
 
     Scaffold(
@@ -515,6 +527,48 @@ private fun DetailLine(
             overflow = TextOverflow.Ellipsis,
         )
     }
+}
+
+/**
+ * 「UID 归属探针」结果弹窗: 文本**能选中也能一键复制** —— 构建机无 adb 时, 这是用户把结论带出来的
+ * 唯一途径 (原来的 Toast 既不能选也不能复制, 弹完即消失)。
+ */
+@Composable
+private fun AppUidProbeDialog(
+    text: String,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val copyLabel = stringResource(R.string.copy)
+    val closeLabel = stringResource(R.string.close)
+    val copiedLabel = stringResource(R.string.domain_stats_app_uid_probe_copied)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.domain_stats_app_uid_probe)) },
+        text = {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    // 走平台剪贴板 (与日志页/密钥页同一姿势), 不用已废弃的 LocalClipboardManager
+                    val clipboard =
+                        context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                    clipboard?.setPrimaryClip(ClipData.newPlainText(copyLabel, text))
+                    Toast.makeText(context, copiedLabel, Toast.LENGTH_SHORT).show()
+                },
+            ) {
+                Text(copyLabel)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(closeLabel) }
+        },
+    )
 }
 
 /** 无真实 IP 时的占位符。 */

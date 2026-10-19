@@ -34,8 +34,10 @@ import javax.inject.Singleton
  * 要变成证据的那一条 —— 设计纪律不变: **验证通过前不把 `appUid` 写进数据模型**。
  *
  * 探针做什么: 在自己进程内建一条**真实**的回环 TCP 连接 (双方都属于本进程), 双向各查一次归属。
- * 返回本进程 uid = "该 API 对我们真的能用" (决定性); 返回 -1 = "能调但查询无结果"; SecurityException
- * = "被拒"。全程只碰本机回环: 不进隧道、不出网、不影响数据面。
+ * 返回本进程 uid = "该 API 对我们真的能用" (决定性); 返回 -1 = "能调但这条**环回**连接没有归属"
+ * —— 环回不属于任何隧道, -1 是**预期结果**, 所以它**不是**结论 (真机实测: 探针 NO_OWNER 而数据面
+ * `UID 归属 命中 7/105` 有命中); SecurityException = "被拒"。判定 ④ 是否可用看**数据面命中率**
+ * ([Result.dataPlane])。全程只碰本机回环: 不进隧道、不出网、不影响数据面。
  */
 @Singleton
 class AppUidProbe
@@ -48,7 +50,12 @@ class AppUidProbe
             /** 调用成功且**拿到真实归属** (自测回环连接返回本进程 uid) → ④ 可行。 */
             AVAILABLE,
 
-            /** 调用成功但无归属 (-1): 连本进程自己的连接都查不到 → 对隧道连接大概率同样拿不到。 */
+            /**
+             * 调用成功但环回连接查不到归属 (-1)。**这不是"功能不可用"的结论**: `getConnectionOwnerUid`
+             * 只给"属于调用者 VpnService 隧道"的连接归属, 而探针查的是本进程自己的一条**回环**连接
+             * (不属于任何隧道) → -1 是**预期结果** (2026-10-19 真机实测 NO_OWNER, 同期数据面
+             * `UID 归属 命中 7/105` 有命中)。判定 ④ 是否可用请看 [Result.dataPlane]。
+             */
             NO_OWNER,
 
             /** 未连接 VPN: 该 API 只对**活动** VpnService 开放, 此刻调用必然被拒 → 直接不跑, 避免误判。 */
@@ -68,6 +75,13 @@ class AppUidProbe
             val ownerUid: OwnerUid,
             val usageStatsGranted: Boolean,
             val uidLabelResolvable: Boolean,
+            /**
+             * 数据面 (真实隧道连接) 的 uid 反查计数: `UID 归属 命中 H/Q 查询 · 无归属 M …`。
+             *
+             * 这是唯一有判定力的一项 —— 环回探针的 NO_OWNER 是预期结果 (见 [OwnerUid.NO_OWNER]),
+             * 而这里 H > 0 就说明平台**确实给隧道连接返回归属**。
+             */
+            val dataPlane: String,
             val detail: String,
         )
 
@@ -77,21 +91,27 @@ class AppUidProbe
          * @param vpnActive 当前是否为**已连接**的 VPN (调用方传 `VpnStatus.Connected`): 该 API 只对活动
          *   VpnService 开放, 未连接时调用必然 `SecurityException` —— 那种"被拒"不是结论, 是误判,
          *   所以直接返回 [OwnerUid.VPN_NOT_ACTIVE]。
+         * @param dataPlaneUidStats 数据面反查计数 (`VpnController.appUidDiagnostics()`), 空串 = 没取到。
          */
-        fun probe(vpnActive: Boolean): Result {
+        fun probe(
+            vpnActive: Boolean,
+            dataPlaneUidStats: String = "",
+        ): Result {
             val (ownerUid, detail) = probeOwnerUid(vpnActive)
             val result =
                 Result(
                     ownerUid = ownerUid,
                     usageStatsGranted = usageStatsGranted(),
                     uidLabelResolvable = uidLabelsResolvable(),
+                    dataPlane = dataPlaneUidStats,
                     detail = detail,
                 )
             VpnController.appLog(
                 "UID 归属探针 · getConnectionOwnerUid=${ownerUid.name}" +
                     (if (detail.isEmpty()) "" else " ($detail)") +
                     " · 用量访问=${if (result.usageStatsGranted) "已授权" else "未授权"}" +
-                    " · uid 标签=${if (result.uidLabelResolvable) "可解析" else "不可用"}",
+                    " · uid 标签=${if (result.uidLabelResolvable) "可解析" else "不可用"}" +
+                    (if (dataPlaneUidStats.isEmpty()) "" else " · 数据面 $dataPlaneUidStats"),
                 LogLevel.INFO,
             )
             return result
@@ -130,7 +150,9 @@ class AppUidProbe
                 if (forward == myUid || backward == myUid) {
                     OwnerUid.AVAILABLE to "自测回环 uid=$forward/$backward"
                 } else {
-                    OwnerUid.NO_OWNER to "自测回环 uid=$forward/$backward, 期望 $myUid"
+                    // 环回连接不属于任何隧道 → 平台给 -1 是**预期结果** (不等于隧道连接也拿不到);
+                    // 判定 ④ 是否可用看数据面命中率 (Result.dataPlane / 快照资源节)。
+                    OwnerUid.NO_OWNER to "自测回环 uid=$forward/$backward, 期望 $myUid (环回非隧道连接, 未归属属预期)"
                 }
             } catch (e: InvocationTargetException) {
                 classify(e.targetException ?: e)

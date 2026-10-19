@@ -312,24 +312,29 @@ class DomainStatsViewModel
         }
 
         /**
-         * 「按应用 uid (P2)可行性探针」: 只读诊断, 结论进 [AppUidProbe] 的应用内日志 + 页面 Toast。
+         * 「按应用 uid (P2) 可行性探针」: 只读诊断, 结论进 [AppUidProbe] 的应用内日志 + 页面弹窗
+         * (弹窗可**复制**结果文本 —— 无 adb 时用户要能把它贴出来)。
          *
-         * 动机是"先取证再设计": 连接→uid 的官方能力是 `@SystemApi`, 能不能拿到只有真机说了算,
-         * 所以在写任何 `appUid` 进数据模型之前, 把结果变成一条可回报的证据 (设计附录 A)。
+         * 动机是"先取证再设计": 连接→uid 的能力能不能用只有真机说了算, 所以在写任何 `appUid` 进
+         * 数据模型之前, 把结果变成一条可回报的证据 (设计附录 A)。
          * 纯查询 (反射 + app-op 查询), 不做 IO 也不改状态, 但仍放 Default 线程 (反射首次解析可能
          * 触发类加载)。
+         *
+         * [VpnController.appUidDiagnostics] 一起带上是**关键**: 环回探针拿不到归属是预期结果, 真正
+         * 说明 ④ 是否可用的是数据面命中率 (2026-10-19 真机: 探针 NO_OWNER 而数据面 `命中 7/105`)。
          */
         fun probeAppUid() {
             if (_state.value.appUidProbe != null) return
             viewModelScope.launch {
                 // 该 API 只对**活动** VpnService 开放: 未连接时调用必然 SecurityException, 那不是结论
                 val vpnActive = vpnController.vpnState.value.status == VpnStatus.Connected
-                val result = withContext(Dispatchers.Default) { appUidProbe.probe(vpnActive) }
+                val dataPlane = vpnController.appUidDiagnostics()
+                val result = withContext(Dispatchers.Default) { appUidProbe.probe(vpnActive, dataPlane) }
                 _state.update { it.copy(appUidProbe = result) }
             }
         }
 
-        /** 页面消费掉探针结果 (弹过一次 Toast 后清理, 避免每次重组重弹)。 */
+        /** 页面消费掉探针结果 (用户读完/复制后关掉弹窗, 避免每次重组重弹)。 */
         fun consumeAppUidProbe() {
             _state.update { it.copy(appUidProbe = null) }
         }
