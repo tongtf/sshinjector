@@ -835,8 +835,8 @@ class DnsInterceptor
                     val answers = Message(buffer.copyOfRange(0, responsePacket.length)).getSection(Section.ANSWER)
                     for (record in answers) {
                         when (record) {
-                            is ARecord -> out.add(record.address.hostAddress)
-                            is AAAARecord -> out.add(record.address.hostAddress)
+                            is ARecord -> record.address.hostAddress?.let { out.add(it) }
+                            is AAAARecord -> record.address.hostAddress?.let { out.add(it) }
                         }
                     }
                 } catch (e: Exception) {

@@ -1862,8 +1862,9 @@ class TcpStateMachine(
         // 域名**只查一次**: target(conn) 有 14 个调用点 (改动会波及其它日志), 这里保留它不动,
         // 本函数的结果同时喂下面的日志与域名统计, 不必重复反查 LRU 映射。
         // ipLiteral 抽出来一次, 日志分支与统计兜底共用 (也压住这一行的宽度)。
-        val ipLiteral = "${conn.dstIp.hostAddress}:${conn.dstPort}"
-        val srcDomain = dnsInterceptor?.lookupDomain(conn.dstIp.hostAddress)
+        val ip = conn.dstIp.hostAddress ?: "-" // hostAddress 是平台类型, 与 target(conn) 同口径
+        val ipLiteral = "$ip:${conn.dstPort}"
+        val srcDomain = dnsInterceptor?.lookupDomain(ip)
         val label = if (srcDomain != null) "$srcDomain(${conn.dstPort})" else ipLiteral
         VpnController.appLogThrottled(
             "TCP 连接结束 · $label — $why · " +
