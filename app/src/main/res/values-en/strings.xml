@@ -331,7 +331,7 @@
     <string name="domain_stats_use_remote_resolve">Resolve remotely (over SSH)</string>
     <string name="domain_stats_remote_unavailable">Local view (remote unavailable)</string>
     <string name="domain_stats_app_uid_probe">UID attribution probe (diagnostic)</string>
-    <string name="domain_stats_app_uid_probe_result">UID attribution → ownerUid=%1$s · usage=%2$s · label=%3$s</string>
+    <string name="domain_stats_app_uid_probe_result">UID attribution → ownerUid=%1$s · label=%2$s</string>
     <string name="domain_stats_app_uid_probe_copied">Probe result copied</string>
     <string name="domain_stats_count">Recorded %1$d/%2$d (trimmed %3$d)</string>
     <string name="domain_stats_label_up">Up</string>

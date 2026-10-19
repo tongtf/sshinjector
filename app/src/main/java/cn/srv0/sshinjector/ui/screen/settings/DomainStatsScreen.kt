@@ -122,7 +122,6 @@ fun DomainStatsScreen(
                 append(
                     probeFormat.format(
                         probeResult.ownerUid.name,
-                        if (probeResult.usageStatsGranted) "granted" else "denied",
                         if (probeResult.uidLabelResolvable) "ok" else "n/a",
                     ),
                 )

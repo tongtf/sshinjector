@@ -10,7 +10,7 @@ import org.mockito.Mockito
 /**
  * 「按应用 uid (P2) 可行性探针」的可单测那一半。
  *
- * 真机行为 (是否给隧道连接返回归属 / 会不会被 SecurityException 拒 / 用量访问授权状态) 只能在设备上验,
+ * 真机行为 (是否给隧道连接返回归属 / 会不会被 SecurityException 拒) 只能在设备上验,
  * 但**立论前提**可以在 JVM 上钉住: `getConnectionOwnerUid` 必须是"公开 SDK 里就有"的 API —— 它决定了
  * ④ 值不值得做 (2026-10-19 本地取证: android.jar 公开 stub + api-versions.xml `since="29"` +
  * stub javadoc 明确写给活动 VpnService)。前提变了就该重新评估设计, 而不是继续补探针。
@@ -35,10 +35,9 @@ class AppUidProbeTest {
 
     @Test
     fun `probe degrades instead of crashing without services`() {
-        // mock Context 的 getSystemService 返回 null → 必须安全降级 (ERROR), 绝不抛; 两项辅证同理为 false
+        // mock Context 的 getSystemService 返回 null → 必须安全降级 (ERROR), 绝不抛; uid 标签辅证同理为 false
         val result = probe.probe(vpnActive = true)
         assertEquals(AppUidProbe.OwnerUid.ERROR, result.ownerUid)
-        assertFalse(result.usageStatsGranted)
         assertFalse(result.uidLabelResolvable)
     }
 

@@ -1,6 +1,5 @@
 package cn.srv0.sshinjector.domain.vpn
 
-import android.app.AppOpsManager
 import android.content.Context
 import android.net.ConnectivityManager
 import android.os.Process
@@ -73,7 +72,6 @@ class AppUidProbe
 
         data class Result(
             val ownerUid: OwnerUid,
-            val usageStatsGranted: Boolean,
             val uidLabelResolvable: Boolean,
             /**
              * 数据面 (真实隧道连接) 的 uid 反查计数: `UID 归属 命中 H/Q 查询 · 无归属 M …`。
@@ -101,7 +99,6 @@ class AppUidProbe
             val result =
                 Result(
                     ownerUid = ownerUid,
-                    usageStatsGranted = usageStatsGranted(),
                     uidLabelResolvable = uidLabelsResolvable(),
                     dataPlane = dataPlaneUidStats,
                     detail = detail,
@@ -109,7 +106,6 @@ class AppUidProbe
             VpnController.appLog(
                 "UID 归属探针 · getConnectionOwnerUid=${ownerUid.name}" +
                     (if (detail.isEmpty()) "" else " ($detail)") +
-                    " · 用量访问=${if (result.usageStatsGranted) "已授权" else "未授权"}" +
                     " · uid 标签=${if (result.uidLabelResolvable) "可解析" else "不可用"}" +
                     (if (dataPlaneUidStats.isEmpty()) "" else " · 数据面 $dataPlaneUidStats"),
                 LogLevel.INFO,
@@ -193,19 +189,7 @@ class AppUidProbe
                 OwnerUid.ERROR to "${t.javaClass.simpleName}: ${t.message}"
             }
 
-        /** 用量访问 (app-op) 是否已授权; 未授权 / 服务缺失都算不可用 (绝不抛)。 */
-        @Suppress("DEPRECATION") // 公开 API 只剩已被废弃的 String-op 版本; 未废弃的 int-op 常量是 @hide
-        private fun usageStatsGranted(): Boolean =
-            runCatching {
-                val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager
-                appOps != null &&
-                    appOps.unsafeCheckOpNoThrow(
-                        AppOpsManager.OPSTR_GET_USAGE_STATS,
-                        Process.myUid(),
-                        context.packageName,
-                    ) == AppOpsManager.MODE_ALLOWED
-            }.getOrDefault(false)
-
+        /** uid → 应用名的解析是否可用 (只看本进程自身, 探测 PackageManager 通路)。 */
         private fun uidLabelsResolvable(): Boolean =
             runCatching {
                 context.packageManager.getPackagesForUid(Process.myUid())?.isNotEmpty() == true
