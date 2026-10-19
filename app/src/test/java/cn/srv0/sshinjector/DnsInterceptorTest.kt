@@ -43,6 +43,20 @@ class DnsInterceptorTest {
     }
 
     @Test
+    fun `resolveLocally builds an absolute question name`() {
+        // 2026-10-19 真机 (S14): 点「解析真实 IP」每次都只有
+        // `本地解析查询失败 · connectivitycheck.gstatic.com (type=1) — RelativeNameException:
+        //  '…' is not an absolute name`, 一个包都没发出去 —— dnsjava 的 Name 必须是**绝对名**,
+        // 而域名来自网络 (形态不可控), 构造前必须把 origin 补上。这条同时是"包能发出去"的前提。
+        val name = DnsInterceptor.absoluteName("connectivitycheck.gstatic.com")
+        assertTrue("必须是绝对名 (尾点), 否则 dnsjava 抛 RelativeNameException", name.isAbsolute)
+        assertEquals("connectivitycheck.gstatic.com.", name.toString())
+        // 已带尾点 / 前后空白都收敛到同一个名字
+        assertEquals(name, DnsInterceptor.absoluteName("connectivitycheck.gstatic.com."))
+        assertEquals(name, DnsInterceptor.absoluteName(" connectivitycheck.gstatic.com "))
+    }
+
+    @Test
     fun `test DNS cache key generation`() {
         val name = "example.com"
         val type = 1 // A record

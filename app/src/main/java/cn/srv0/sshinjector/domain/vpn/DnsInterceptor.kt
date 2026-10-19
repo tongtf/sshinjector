@@ -115,6 +115,15 @@ class DnsInterceptor
             // 本地解析要查的记录类型 (顺序即结果顺序): 先 A 后 AAAA
             private val LOCAL_RESOLVE_TYPES = intArrayOf(Type.A, Type.AAAA)
 
+            /**
+             * dnsjava 的 [Name] **必须是绝对名** (结尾带点)。域名来自网络 (DNS 应答/用户点选),
+             * 不能假定它带尾点 —— `Name.fromString(name)` 对相对名直接抛 `RelativeNameException`,
+             * 于是查询**根本发不出去** (2026-10-19 真机: 点「解析真实 IP」每次都只有
+             * `本地解析查询失败 · <域名> (type=1) — RelativeNameException: … is not an absolute name`,
+             * 0 个包发出 → "解析不到 IP")。传 `Name.root` 作 origin 把相对名补成绝对名。
+             */
+            internal fun absoluteName(host: String): Name = Name.fromString(host.trim().trimEnd('.'), Name.root)
+
             // 旁路查询自身用的 DNS 服务端口; 4096 覆盖 A/AAAA 多记录应答
             private const val DNS_QUERY_PORT = 53
 
@@ -842,7 +851,7 @@ class DnsInterceptor
                     val message = Message()
                     message.header.setID(ThreadLocalRandom.current().nextInt(1, DNS_QUERY_ID_EXCLUSIVE_BOUND))
                     message.header.setFlag(Flags.RD.toInt())
-                    message.addRecord(Record.newRecord(Name.fromString(name), type, DClass.IN), Section.QUESTION)
+                    message.addRecord(Record.newRecord(absoluteName(name), type, DClass.IN), Section.QUESTION)
 
                     val query = message.toWire()
                     socket.send(DatagramPacket(query, query.size, InetAddress.getByName(server), DNS_QUERY_PORT))
