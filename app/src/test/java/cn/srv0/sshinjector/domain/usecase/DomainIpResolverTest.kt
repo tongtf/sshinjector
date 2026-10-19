@@ -63,9 +63,9 @@ class DomainIpResolverTest {
         }
 
     @Test
-    fun `exec unavailable falls back to the local view`() =
+    fun `remote unavailable falls back to the local view`() =
         runTest {
-            val remote = FakeRemote(RemoteResolveOutcome.Unavailable)
+            val remote = FakeRemote(RemoteResolveOutcome.Unavailable("通道打不开 (1.1.1.1 · 12ms)"))
             val result = resolver(remote).resolve("example.com", useRemote = true)
             assertEquals(ResolvePath.LOCAL_FALLBACK, result.path)
             assertEquals(1, remote.calls)
@@ -74,7 +74,7 @@ class DomainIpResolverTest {
     @Test
     fun `black hole falls back to the local view`() =
         runTest {
-            val remote = FakeRemote(RemoteResolveOutcome.Failed)
+            val remote = FakeRemote(RemoteResolveOutcome.Failed("查询无响应 (8.8.8.8 撑满 1500ms)"))
             assertEquals(
                 ResolvePath.LOCAL_FALLBACK,
                 resolver(remote).resolve("example.com", useRemote = true).path,

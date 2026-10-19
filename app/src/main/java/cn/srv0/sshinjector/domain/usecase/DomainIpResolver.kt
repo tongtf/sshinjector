@@ -32,11 +32,12 @@ data class DomainResolveResult(
  *
  * 两条腿:
  * - **本地视角 (默认)**: `DnsInterceptor.resolveLocally` (受保护 socket 直查, 零 SSH 依赖);
- * - **远端视角 (开关打开时)**: 池内会话 exec `getent ahosts` → VPS 出口实际会连的 IP。
+ * - **远端视角 (开关打开时)**: `RemoteDomainResolver` 在池内会话上开 `direct-tcpip` 到公共 DNS
+ *   (53/TCP) 自己问 → VPS 出口实际会连的 IP (机制与"为什么不是 exec"见该接口的类注释)。
  *
  * 纪律 (违反即回归):
- * ① 远端不可用 (Unavailable/Failed/池饱和/无记录) **绝不报错**, 一律静默回退本地视角 ——
- *    残留 WARNING 会让「故障归因」凭空多一类, 而用户点一次解析不该产生故障记录;
+ * ① 远端不可用 (Unavailable/Failed/池饱和/无记录) **绝不报错**, 一律静默回退本地视角 (成因进
+ *    INFO 文案) —— 残留 WARNING 会让「故障归因」凭空多一类, 而用户点一次解析不该产生故障记录;
  * ② 挂起前先做 `isSaturated()` 预检: 数据面吃紧时让位, 不为一次展示动作再去挤 SSH 会话;
  * ③ **单飞**由调用方 (ViewModel) 保证 —— 这里不做排队, 也不做后台批量解析;
  * ④ 本地腿是阻塞调用, 必须离开调用线程 (`Dispatchers.IO`)。
@@ -76,20 +77,20 @@ class DomainIpResolver
                         logFallback(domain, "远端无记录")
                         null
                     } else {
-                        // 自证点 (设计 §11): 远端解析耗时/条数/会话 —— 无 adb 时判读"远端腿到底走没走"。
+                        // 自证点 (设计 §11): 远端解析耗时/条数/会话/DNS —— 无 adb 时判读"远端腿到底走没走"。
                         VpnController.appLog(
                             "远端解析 · $domain — ${outcome.elapsedMs}ms · ${outcome.ips.size} 个 IP" +
-                                " (${outcome.sessionId})",
+                                " (${outcome.sessionId} · ${outcome.dnsServer})",
                             LogLevel.INFO,
                         )
                         outcome.ips
                     }
-                RemoteResolveOutcome.Unavailable -> {
-                    logFallback(domain, "exec 不可用或会话池无活口")
+                is RemoteResolveOutcome.Unavailable -> {
+                    logFallback(domain, outcome.detail)
                     null
                 }
-                RemoteResolveOutcome.Failed -> {
-                    logFallback(domain, "远端无响应")
+                is RemoteResolveOutcome.Failed -> {
+                    logFallback(domain, outcome.detail)
                     null
                 }
             }
