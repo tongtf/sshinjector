@@ -6,13 +6,16 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
 import cn.srv0.sshinjector.domain.usecase.VpnController
+import cn.srv0.sshinjector.domain.vpn.DomainStatsStore
 import cn.srv0.sshinjector.domain.vpn.StatsSuggestionStore
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
 import cn.srv0.sshinjector.vpn.SshVpnService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -25,6 +28,7 @@ class SettingsViewModel
         @ApplicationContext private val context: Context,
         private val settingsDataStore: SettingsDataStore,
         private val suggestionStore: StatsSuggestionStore,
+        private val domainStatsStore: DomainStatsStore,
     ) : ViewModel() {
         val autoConnect: StateFlow<Boolean> =
             settingsDataStore.autoConnect
@@ -65,6 +69,25 @@ class SettingsViewModel
             suggestionStore.state
                 .map { it.size }
                 .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
+        /**
+         * 已采集域名数 —— 设置页入口 subtitle (设计 §9.1 `已记录 N 个域名`)。
+         *
+         * 刻意**不**让 `DomainStatsStore` 推流: 采集发生在 `closeTcpConnection` 里, 从数据面通知 UI 是
+         * 仓库明令禁止的反模式 (每连接一次全量拷贝 + 全量 recompose)。这里只在页面可见时每
+         * 30s 拉一次 `size()` (O(1)), 与 store 自身的淘汰巡检 [DomainStatsStore.TRIM_INTERVAL_MS] 同频。
+         */
+        val domainStatsCount: StateFlow<Int> =
+            flow {
+                while (true) {
+                    emit(domainStatsStore.size())
+                    delay(DOMAIN_STATS_POLL_MS)
+                }
+            }.stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(SUBSCRIPTION_TIMEOUT_MS),
+                domainStatsStore.size(),
+            )
 
         fun setAutoConnect(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setAutoConnect(enabled) }
 
@@ -108,4 +131,12 @@ class SettingsViewModel
         fun setAdBlockEnabled(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setAdBlockEnabled(enabled) }
 
         fun setLanguage(code: String) = viewModelScope.launch { settingsDataStore.setLanguage(code) }
+
+        private companion object {
+            /** 采集量轮询间隔 (与 [DomainStatsStore.TRIM_INTERVAL_MS] 同频)。 */
+            const val DOMAIN_STATS_POLL_MS = 30_000L
+
+            /** 页面不可见后多久停止轮询 (旋转/短暂切后台不重启)。 */
+            const val SUBSCRIPTION_TIMEOUT_MS = 5_000L
+        }
     }

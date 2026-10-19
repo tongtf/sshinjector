@@ -307,6 +307,7 @@
     <!-- Domain access stats (DomainStatsScreen) -->
     <string name="settings_domain_stats">Domain access stats</string>
     <string name="settings_domain_stats_desc">View domains visited this session and their traffic</string>
+    <string name="settings_domain_stats_count">%1$d domains recorded</string>
     <string name="domain_stats_title">Domain access stats</string>
     <string name="domain_stats_empty">No data yet — start browsing to collect</string>
     <string name="domain_stats_search_hint">Search domain / IP</string>

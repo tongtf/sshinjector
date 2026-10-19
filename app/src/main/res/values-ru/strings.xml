@@ -307,6 +307,7 @@
     <!-- Статистика доменов (DomainStatsScreen) -->
     <string name="settings_domain_stats">Статистика доменов</string>
     <string name="settings_domain_stats_desc">Просмотр посещённых доменов и трафика за сессию</string>
+    <string name="settings_domain_stats_count">Записано доменов: %1$d</string>
     <string name="domain_stats_title">Статистика доменов</string>
     <string name="domain_stats_empty">Пока нет данных — начните просмотр сайтов</string>
     <string name="domain_stats_search_hint">Поиск домена / IP</string>

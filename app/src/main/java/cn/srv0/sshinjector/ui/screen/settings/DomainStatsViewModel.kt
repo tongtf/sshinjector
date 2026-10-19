@@ -105,11 +105,14 @@ class DomainStatsViewModel
         private val _state = MutableStateFlow(DomainStatsUiState())
         val state: StateFlow<DomainStatsUiState> = _state.asStateFlow()
 
-        /** 最近一次抓取的全量快照 (未排序/未筛选); 只在 Default 线程读写。 */
-        private var allRows: List<DomainStatSnapshot> = emptyList()
+        /** 最近一次抓取的全量快照 (未排序/未筛选); 只在 Default 线程写, 主线程也读 → @Volatile。 */
+        @Volatile private var allRows: List<DomainStatSnapshot> = emptyList()
 
-        /** 已解析出的名单成员关系 (不含待确认); 键 = 规范化域名。 */
-        private var membership: Map<String, RowListMarks> = emptyMap()
+        /** 已解析出的名单成员关系 (不含待确认); 键 = 规范化域名。跨 Dispatchers 读写 → @Volatile。 */
+        @Volatile private var membership: Map<String, RowListMarks> = emptyMap()
+
+        /** [membership] 的读-改-写闸 (chip 按需解析 vs 叠加层整块重算)。锁内**不得**挂起。 */
+        private val membershipLock = Any()
 
         /** 搜索 debounce 任务。 */
         private var queryJob: Job? = null
@@ -124,10 +127,9 @@ class DomainStatsViewModel
             viewModelScope.launch {
                 domainListManager.overlayVersion.collect {
                     if (allRows.isNotEmpty()) {
-                        withContext(Dispatchers.Default) {
-                            membership = computeMembership(allRows)
-                            publishMarks()
-                        }
+                        val computed = withContext(Dispatchers.Default) { computeMembership(allRows) }
+                        synchronized(membershipLock) { membership = computed }
+                        publishMarks()
                     }
                 }
             }
@@ -138,8 +140,10 @@ class DomainStatsViewModel
             viewModelScope.launch {
                 _state.update { it.copy(loading = true) }
                 withContext(Dispatchers.Default) {
-                    allRows = store.snapshot()
-                    membership = computeMembership(allRows)
+                    val rows = store.snapshot()
+                    allRows = rows
+                    val computed = computeMembership(rows)
+                    synchronized(membershipLock) { membership = computed }
                     publishRows(
                         total = store.size(),
                         trimmed = store.trimmedTotal(),
@@ -190,15 +194,19 @@ class DomainStatsViewModel
                         SuggestionTarget.DOMAIN_LIST -> cur.inDomainList
                     }
                 val inList = known ?: withContext(Dispatchers.Default) { resolveMembership(key, target) }
-                membership =
-                    membership +
-                    (
-                        key to
-                            when (target) {
-                                SuggestionTarget.AD_BLOCK -> cur.copy(inAdBlock = inList)
-                                SuggestionTarget.DOMAIN_LIST -> cur.copy(inDomainList = inList)
-                            }
-                    )
+                // 解析在锁外 (内部会挂起), 回写必须与叠加层重算互斥 —— 否则两边各写各的 map, 后写者把前者的结果抹掉 (chip 退回 ?)
+                synchronized(membershipLock) {
+                    val base = membership[key] ?: RowListMarks()
+                    membership =
+                        membership +
+                        (
+                            key to
+                                when (target) {
+                                    SuggestionTarget.AD_BLOCK -> base.copy(inAdBlock = inList)
+                                    SuggestionTarget.DOMAIN_LIST -> base.copy(inDomainList = inList)
+                                }
+                        )
+                }
                 suggestionStore.toggle(key, target, currentlyInList = inList, note = noteFor(key))
                 publishMarks()
             }

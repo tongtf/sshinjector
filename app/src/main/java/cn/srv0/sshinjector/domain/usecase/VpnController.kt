@@ -45,6 +45,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.FileDescriptor
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -151,15 +152,19 @@ class VpnController
          * 3) 统计生成规则 (`ad_block_rules_from_stats`, P1 建议→应用) —— **独立键**,
          *    这样"移出"永远是精确删行, 绝不会误删用户手写规则 (设计 §8.0 纪律 ①)。
          * 连接时与"应用/撤销"时调用; 任一来源读取失败都不影响其它来源, 仅降级。
+         *
+         * 挂在 [Dispatchers.Default] 上执行: 解析可能上千行 + 读 assets, 而调用点之一是
+         * "应用建议"的 UI 路径 (`StatsListApplier`), 放主线程会卡顿。
          */
-        private suspend fun loadAdBlockRules(): GfwListMatcher {
-            val localEdit = readRules { settingsDataStore.adBlockRules.first() }
-            val fromStats = readRules { settingsDataStore.adBlockRulesFromStats.first() }
-            // 基础规则: 优先用缓存内的远程清单(已内含内置), 否则回退内置 assets/adblock.txt。
-            val base = remoteOrBuiltIn()
-            val overlays = listOfNotNull(localEdit, fromStats).filter { it.isNotBlank() }
-            return GfwListMatcher.parse(if (overlays.isEmpty()) base else base + "\n" + overlays.joinToString("\n"))
-        }
+        private suspend fun loadAdBlockRules(): GfwListMatcher =
+            withContext(Dispatchers.Default) {
+                val localEdit = readRules { settingsDataStore.adBlockRules.first() }
+                val fromStats = readRules { settingsDataStore.adBlockRulesFromStats.first() }
+                // 基础规则: 优先用缓存内的远程清单(已内含内置), 否则回退内置 assets/adblock.txt。
+                val base = remoteOrBuiltIn()
+                val overlays = listOfNotNull(localEdit, fromStats).filter { it.isNotBlank() }
+                GfwListMatcher.parse(if (overlays.isEmpty()) base else base + "\n" + overlays.joinToString("\n"))
+            }
 
         /** 读一条规则来源; 异常/空白 → null (不影响其它来源)。 */
         private suspend fun readRules(reader: suspend () -> String): String? =

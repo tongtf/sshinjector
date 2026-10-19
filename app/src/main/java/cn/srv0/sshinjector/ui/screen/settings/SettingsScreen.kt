@@ -82,6 +82,7 @@ fun SettingsScreen(
     val adBlockEnabled by viewModel.adBlockEnabled.collectAsState()
     val language by viewModel.language.collectAsState()
     val statsPending by viewModel.statsSuggestionCount.collectAsState()
+    val statsCount by viewModel.domainStatsCount.collectAsState()
     var showDnsDialog by remember { mutableStateOf(false) }
     var showBiometricDialog by remember { mutableStateOf(false) }
     var showLangDialog by remember { mutableStateOf(false) }
@@ -308,7 +309,12 @@ fun SettingsScreen(
 
                 SettingsRow(
                     title = stringResource(R.string.settings_domain_stats),
-                    subtitle = stringResource(R.string.settings_domain_stats_desc),
+                    subtitle =
+                        if (statsCount > 0) {
+                            stringResource(R.string.settings_domain_stats_count, statsCount)
+                        } else {
+                            stringResource(R.string.settings_domain_stats_desc)
+                        },
                     trailing = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             if (statsPending > 0) {
