@@ -11,8 +11,8 @@ plugins {
 
 // 版本号单源: 产出文件名 (archivesName → sshinjector-<ver>-<abi>-<variant>.apk / -<ver>-release.aab)
 // 与 defaultConfig 共用, 升版本只改这两行
-val appVersionCode = 16
-val appVersionName = "1.2.3"
+val appVersionCode = 17
+val appVersionName = "1.2.4"
 
 base {
     archivesName.set("sshinjector-$appVersionName")
