@@ -145,23 +145,53 @@ class VpnController
 
         /**
          * 编译广告过滤规则, 优先级从高到低:
-         * 1) 运行时编辑器保存的规则 —— 仅用于查漏补缺(增/减), 叠加在下面的基础规则之上, 不整体替换;
-         * 2) 基础规则取 [AdBlockManager] 缓存内的远程清单(已内含内置规则)优先, 未配置远程 URL /
-         *    缓存过期(≥3 天未更新) / 首次启动时回退内置 assets/adblock.txt。
-         * 连接时调用; 读取失败不影响连接, 仅降级为可用内容。
+         * 1) 基础规则取 [AdBlockManager] 缓存内的远程清单(已内含内置规则)优先, 未配置远程 URL /
+         *    缓存过期(≥3 天未更新) / 首次启动时回退内置 assets/adblock.txt;
+         * 2) 用户手写规则 (设置页可编辑) —— 仅用于查漏补缺(增/减), 叠加其上, 不整体替换;
+         * 3) 统计生成规则 (`ad_block_rules_from_stats`, P1 建议→应用) —— **独立键**,
+         *    这样"移出"永远是精确删行, 绝不会误删用户手写规则 (设计 §8.0 纪律 ①)。
+         * 连接时与"应用/撤销"时调用; 任一来源读取失败都不影响其它来源, 仅降级。
          */
         private suspend fun loadAdBlockRules(): GfwListMatcher {
-            // 运行时编辑器保存的规则仅用于查漏补缺(增/减), 叠加在下面的基础规则之上, 不整体替换。
-            val localEdit =
-                try {
-                    settingsDataStore.adBlockRules.first().takeIf { it.isNotBlank() }
-                } catch (e: Exception) {
-                    Log.w("VpnController", "read ad block rules failed: ${e.message}")
-                    null
-                }
+            val localEdit = readRules { settingsDataStore.adBlockRules.first() }
+            val fromStats = readRules { settingsDataStore.adBlockRulesFromStats.first() }
             // 基础规则: 优先用缓存内的远程清单(已内含内置), 否则回退内置 assets/adblock.txt。
             val base = remoteOrBuiltIn()
-            return GfwListMatcher.parse(if (localEdit.isNullOrBlank()) base else "$base\n$localEdit")
+            val overlays = listOfNotNull(localEdit, fromStats).filter { it.isNotBlank() }
+            return GfwListMatcher.parse(if (overlays.isEmpty()) base else base + "\n" + overlays.joinToString("\n"))
+        }
+
+        /** 读一条规则来源; 异常/空白 → null (不影响其它来源)。 */
+        private suspend fun readRules(reader: suspend () -> String): String? =
+            try {
+                reader().takeIf { it.isNotBlank() }
+            } catch (e: Exception) {
+                Log.w("VpnController", "读取广告规则失败: ${e.message}")
+                null
+            }
+
+        /**
+         * 按当前三源编译一份广告规则匹配器 (P1 UI 查询"某域名是否在名单里")。
+         * 只读: 不动运行中的 [adBlocker] matcher, 也不看总开关 (名单成员 ≠ 是否正在拦截)。
+         */
+        suspend fun adBlockMatcherSnapshot(): GfwListMatcher = loadAdBlockRules()
+
+        /**
+         * 名单改变后重编译广告 matcher, 让规则**无需重连**即时生效 (设计 §8.2)。
+         *
+         * 未连接时只落库 (DataStore 已写) 并记 INFO —— 不是错误: 下次连接 [loadAdBlockRules] 自然带上。
+         */
+        suspend fun reloadAdBlockRules() {
+            if (!isRunning) {
+                addLog("广告名单已保存 · 未连接 — 下次连接生效", LogLevel.INFO)
+                return
+            }
+            try {
+                adBlocker.setMatcher(loadAdBlockRules())
+                addLog("广告名单已重载 — 命中规则即时生效 (无需重连)", LogLevel.INFO)
+            } catch (e: Exception) {
+                addLog("广告名单重载失败 — ${e.message}", LogLevel.WARNING)
+            }
         }
 
         /** 基础规则源: 缓存内的远程清单(已内含内置规则)优先, 未配置/首次则回退内置清单。 */

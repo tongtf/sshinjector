@@ -16,6 +16,7 @@ import cn.srv0.sshinjector.ui.screen.settings.DomainListSettingsScreen
 import cn.srv0.sshinjector.ui.screen.settings.DomainStatsScreen
 import cn.srv0.sshinjector.ui.screen.settings.LogScreen
 import cn.srv0.sshinjector.ui.screen.settings.SettingsScreen
+import cn.srv0.sshinjector.ui.screen.settings.SuggestionReviewScreen
 import cn.srv0.sshinjector.ui.screen.whitelist.WhitelistScreen
 
 @Composable
@@ -73,7 +74,13 @@ fun AppNavGraph(
             )
         }
         composable("domain_stats") {
-            DomainStatsScreen(onBack = { navController.popBackStack() })
+            DomainStatsScreen(
+                onBack = { navController.popBackStack() },
+                onOpenSuggestions = { navController.navigate("domain_stats_suggestions") },
+            )
+        }
+        composable("domain_stats_suggestions") {
+            SuggestionReviewScreen(onBack = { navController.popBackStack() })
         }
         composable("domain_list_settings") {
             DomainListSettingsScreen(onNavigateBack = { navController.popBackStack() })

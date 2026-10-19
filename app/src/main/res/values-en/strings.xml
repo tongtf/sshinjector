@@ -334,6 +334,30 @@
     <string name="domain_stats_label_first">First seen</string>
     <string name="domain_stats_label_last">Last seen</string>
 
+    <!-- P1 list suggestions (stats chips → review → apply/undo) -->
+    <string name="domain_stats_pending_badge">%1$d pending</string>
+    <string name="domain_stats_chip_adblock">Ads</string>
+    <string name="domain_stats_chip_domainlist">Proxy</string>
+    <string name="domain_stats_pending_bar">%1$d pending</string>
+    <string name="domain_stats_view_pending">Review</string>
+    <string name="domain_stats_suggestion_title">Pending suggestions</string>
+    <string name="domain_stats_suggestion_hint">Nothing is written to the lists until you apply</string>
+    <string name="domain_stats_suggestion_empty">No pending suggestions</string>
+    <string name="domain_stats_suggestion_selected">Selected %1$d/%2$d</string>
+    <string name="domain_stats_suggestion_apply">Apply %1$d</string>
+    <string name="domain_stats_suggestion_applied">Applied %1$d</string>
+    <string name="domain_stats_suggestion_undo">Undo</string>
+    <string name="domain_stats_suggestion_undone">Undone</string>
+    <string name="domain_stats_suggestion_apply_failed">Apply failed, try again</string>
+    <string name="domain_stats_suggestion_discard">Remove</string>
+    <string name="domain_stats_suggestion_discard_all">Discard all</string>
+    <string name="domain_stats_suggestion_direction_add">Add</string>
+    <string name="domain_stats_suggestion_direction_remove">Remove</string>
+    <string name="domain_stats_suggestion_target_adblock">Ad filter</string>
+    <string name="domain_stats_suggestion_target_domainlist">Proxy list</string>
+    <string name="domain_stats_suggestion_note">%1$d connections · down %2$s</string>
+    <string name="domain_stats_suggestion_note_failed"> · %1$d failed</string>
+
     <!-- Status display (shared by status card + notification) -->
     <string name="status_connected">Connected</string>
     <string name="status_verifying">Verifying network</string>

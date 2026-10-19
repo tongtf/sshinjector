@@ -334,6 +334,30 @@
     <string name="domain_stats_label_first">Первый раз</string>
     <string name="domain_stats_label_last">Последний раз</string>
 
+    <!-- P1 предложения по спискам (чипы статистики → проверка → применение/отмена) -->
+    <string name="domain_stats_pending_badge">Ожидает %1$d</string>
+    <string name="domain_stats_chip_adblock">Реклама</string>
+    <string name="domain_stats_chip_domainlist">Прокси</string>
+    <string name="domain_stats_pending_bar">Ожидает %1$d</string>
+    <string name="domain_stats_view_pending">Проверить</string>
+    <string name="domain_stats_suggestion_title">Ожидающие предложения</string>
+    <string name="domain_stats_suggestion_hint">В списки ничего не попадёт до подтверждения</string>
+    <string name="domain_stats_suggestion_empty">Нет ожидающих предложений</string>
+    <string name="domain_stats_suggestion_selected">Выбрано %1$d/%2$d</string>
+    <string name="domain_stats_suggestion_apply">Применить %1$d</string>
+    <string name="domain_stats_suggestion_applied">Применено %1$d</string>
+    <string name="domain_stats_suggestion_undo">Отменить</string>
+    <string name="domain_stats_suggestion_undone">Отменено</string>
+    <string name="domain_stats_suggestion_apply_failed">Не удалось применить, повторите</string>
+    <string name="domain_stats_suggestion_discard">Убрать</string>
+    <string name="domain_stats_suggestion_discard_all">Отбросить все</string>
+    <string name="domain_stats_suggestion_direction_add">Добавить</string>
+    <string name="domain_stats_suggestion_direction_remove">Убрать</string>
+    <string name="domain_stats_suggestion_target_adblock">Фильтр рекламы</string>
+    <string name="domain_stats_suggestion_target_domainlist">Список прокси</string>
+    <string name="domain_stats_suggestion_note">%1$d соединений · вниз %2$s</string>
+    <string name="domain_stats_suggestion_note_failed"> · ошибок %1$d</string>
+
     <!-- Отображение статуса (карточка + уведомление) -->
     <string name="status_connected">Подключено</string>
     <string name="status_verifying">Проверка сети</string>

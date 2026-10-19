@@ -81,6 +81,7 @@ fun SettingsScreen(
     val dnsMode by viewModel.dnsMode.collectAsState()
     val adBlockEnabled by viewModel.adBlockEnabled.collectAsState()
     val language by viewModel.language.collectAsState()
+    val statsPending by viewModel.statsSuggestionCount.collectAsState()
     var showDnsDialog by remember { mutableStateOf(false) }
     var showBiometricDialog by remember { mutableStateOf(false) }
     var showLangDialog by remember { mutableStateOf(false) }
@@ -309,11 +310,25 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_domain_stats),
                     subtitle = stringResource(R.string.settings_domain_stats_desc),
                     trailing = {
-                        Icon(
-                            Icons.Default.Settings,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (statsPending > 0) {
+                                Text(
+                                    text =
+                                        stringResource(
+                                            R.string.domain_stats_pending_badge,
+                                            statsPending,
+                                        ),
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            Icon(
+                                Icons.Default.Settings,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
                     },
                     onClick = onNavigateToDomainStats,
                 )

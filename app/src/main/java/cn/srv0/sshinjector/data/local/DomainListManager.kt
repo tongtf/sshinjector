@@ -2,6 +2,7 @@ package cn.srv0.sshinjector.data.local
 
 import android.content.Context
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
+import cn.srv0.sshinjector.domain.vpn.DomainSuffixSet
 import cn.srv0.sshinjector.domain.vpn.GfwListMatcher
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -52,16 +53,70 @@ class DomainListManager
         private val _state = MutableStateFlow<DomainListState>(DomainListState.Idle)
         val state: StateFlow<DomainListState> = _state.asStateFlow()
 
+        private val _overlayVersion = MutableStateFlow(0L)
+
+        /** 叠加层版本号: 应用/撤销后自增, 供 UI 徽标即时刷新 (设计 §8.3)。 */
+        val overlayVersion: StateFlow<Long> = _overlayVersion.asStateFlow()
+
+        /** 统计生成的叠加层内存镜像 (真相在 DataStore 两键); 集合元素已 normalize。 */
+        @Volatile private var overlayAdded: Set<String> = emptySet()
+
+        @Volatile private var overlayRemoved: Set<String> = emptySet()
+
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
         init {
-            scope.launch { loadFromDisk() }
+            scope.launch {
+                loadFromDisk()
+                reloadOverlay()
+            }
         }
 
         val matcher: GfwListMatcher?
             get() = (_state.value as? DomainListState.Ready)?.matcher
 
-        fun matches(host: String): Boolean = matcher?.matches(host) == true
+        /**
+         * 名单匹配 = **叠加层优先** + 既有 gfwlist 语义:
+         * 强制直连 → false; 强制走隧道 → true; 否则回退基础清单 (含 `@@` 例外)。
+         * 叠加层是内存字段, 所以应用后**本次查询立即生效** (DOMAIN_SPLIT 每次查询都读它), 不需要重连。
+         */
+        fun matches(host: String): Boolean {
+            val h = DomainSuffixSet.normalize(host)
+            if (h.isEmpty()) return false
+            if (DomainSuffixSet.matches(overlayRemoved, h)) return false
+            if (DomainSuffixSet.matches(overlayAdded, h)) return true
+            return matcher?.matches(h) == true
+        }
+
+        /** 应用统计叠加层 (入参会被 normalize; 空串元素丢弃)。 */
+        fun applyOverlay(
+            added: Set<String>,
+            removed: Set<String>,
+        ) {
+            overlayAdded = normalizeSet(added)
+            overlayRemoved = normalizeSet(removed)
+            _overlayVersion.value = _overlayVersion.value + 1
+        }
+
+        /**
+         * 从 DataStore 读回叠加层 (启动 / 应用 / 撤销后调用)。
+         *
+         * **硬纪律**: [update] 拉取远端清单时**不许** touch 这两个键 —— 用户数据不被远端覆盖。
+         */
+        suspend fun reloadOverlay() {
+            val added = runCatching { settings.domainListAddedFromStats.first() }.getOrElse { emptySet() }
+            val removed = runCatching { settings.domainListRemovedFromStats.first() }.getOrElse { emptySet() }
+            applyOverlay(added, removed)
+        }
+
+        private fun normalizeSet(domains: Set<String>): Set<String> {
+            val out = HashSet<String>(domains.size)
+            for (d in domains) {
+                val n = DomainSuffixSet.normalize(d)
+                if (n.isNotEmpty()) out.add(n)
+            }
+            return out
+        }
 
         /**
          * 从磁盘加载上次持久化的列表, 无缓存则使用内置默认列表。

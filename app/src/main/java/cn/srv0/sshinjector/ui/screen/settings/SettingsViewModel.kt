@@ -6,12 +6,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
 import cn.srv0.sshinjector.domain.usecase.VpnController
+import cn.srv0.sshinjector.domain.vpn.StatsSuggestionStore
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
 import cn.srv0.sshinjector.vpn.SshVpnService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -22,6 +24,7 @@ class SettingsViewModel
     constructor(
         @ApplicationContext private val context: Context,
         private val settingsDataStore: SettingsDataStore,
+        private val suggestionStore: StatsSuggestionStore,
     ) : ViewModel() {
         val autoConnect: StateFlow<Boolean> =
             settingsDataStore.autoConnect
@@ -56,6 +59,12 @@ class SettingsViewModel
         val probeUrl: StateFlow<String?> =
             settingsDataStore.probeUrl
                 .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+        /** 域名统计页的「待确认建议」条数 —— 设置页入口徽标 (0 时不显示)。 */
+        val statsSuggestionCount: StateFlow<Int> =
+            suggestionStore.state
+                .map { it.size }
+                .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
 
         fun setAutoConnect(enabled: Boolean) = viewModelScope.launch { settingsDataStore.setAutoConnect(enabled) }
 

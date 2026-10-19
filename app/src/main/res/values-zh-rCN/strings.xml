@@ -334,6 +334,30 @@
     <string name="domain_stats_label_first">首次</string>
     <string name="domain_stats_label_last">最近</string>
 
+    <!-- P1 名单建议 (统计页 chip → 复核页 → 应用/撤销) -->
+    <string name="domain_stats_pending_badge">待确认 %1$d</string>
+    <string name="domain_stats_chip_adblock">广告</string>
+    <string name="domain_stats_chip_domainlist">代理</string>
+    <string name="domain_stats_pending_bar">待确认 %1$d 条</string>
+    <string name="domain_stats_view_pending">查看</string>
+    <string name="domain_stats_suggestion_title">待确认建议</string>
+    <string name="domain_stats_suggestion_hint">勾选后才会写入名单，应用后可撤销</string>
+    <string name="domain_stats_suggestion_empty">暂无待确认建议</string>
+    <string name="domain_stats_suggestion_selected">已选 %1$d/%2$d</string>
+    <string name="domain_stats_suggestion_apply">应用 %1$d 条</string>
+    <string name="domain_stats_suggestion_applied">已应用 %1$d 条</string>
+    <string name="domain_stats_suggestion_undo">撤销</string>
+    <string name="domain_stats_suggestion_undone">已撤销</string>
+    <string name="domain_stats_suggestion_apply_failed">应用失败，请重试</string>
+    <string name="domain_stats_suggestion_discard">移除</string>
+    <string name="domain_stats_suggestion_discard_all">全部丢弃</string>
+    <string name="domain_stats_suggestion_direction_add">加入</string>
+    <string name="domain_stats_suggestion_direction_remove">移出</string>
+    <string name="domain_stats_suggestion_target_adblock">广告过滤</string>
+    <string name="domain_stats_suggestion_target_domainlist">代理名单</string>
+    <string name="domain_stats_suggestion_note">%1$d 次连接 · 下行 %2$s</string>
+    <string name="domain_stats_suggestion_note_failed"> · 失败 %1$d</string>
+
     <!-- 状态展示 (StatusDisplay: 状态卡 + 通知栏共用) -->
     <string name="status_connected">已连接</string>
     <string name="status_verifying">网络验证中</string>

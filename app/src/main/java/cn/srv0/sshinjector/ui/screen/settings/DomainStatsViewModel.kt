@@ -6,10 +6,18 @@ import android.os.Environment
 import android.provider.MediaStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import cn.srv0.sshinjector.data.local.DomainListManager
+import cn.srv0.sshinjector.domain.usecase.VpnController
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
 import cn.srv0.sshinjector.domain.vpn.DomainStatSnapshot
 import cn.srv0.sshinjector.domain.vpn.DomainStatsCsv
 import cn.srv0.sshinjector.domain.vpn.DomainStatsStore
+import cn.srv0.sshinjector.domain.vpn.DomainSuffixSet
+import cn.srv0.sshinjector.domain.vpn.StatsSuggestionStore
+import cn.srv0.sshinjector.domain.vpn.Suggestion
+import cn.srv0.sshinjector.domain.vpn.SuggestionDirection
+import cn.srv0.sshinjector.domain.vpn.SuggestionNote
+import cn.srv0.sshinjector.domain.vpn.SuggestionTarget
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -38,6 +46,21 @@ enum class DomainStatsFilter {
     FAILED,
 }
 
+/**
+ * 单行的名单状态 (P1)。
+ *
+ * @param inAdBlock 是否已被广告规则命中; `null` = 未知 (超预算 / 该行从未问过)。
+ * @param inDomainList 是否已在代理名单 (含叠加层); `null` = 未知。
+ * @param adPending 广告侧的待确认方向; `null` = 无待确认。
+ * @param listPending 代理名单侧的待确认方向。
+ */
+data class RowListMarks(
+    val inAdBlock: Boolean? = null,
+    val inDomainList: Boolean? = null,
+    val adPending: SuggestionDirection? = null,
+    val listPending: SuggestionDirection? = null,
+)
+
 /** 页面状态: `rows` 是已排序/筛选后的展示行, 其余是统计口径与一次性交互状态。 */
 data class DomainStatsUiState(
     val rows: List<DomainStatSnapshot> = emptyList(),
@@ -50,13 +73,21 @@ data class DomainStatsUiState(
     val loading: Boolean = false,
     val resolving: String? = null,
     val message: String? = null,
+    /** 域名 (已规范化) → 名单状态。只收录**非 IP 字面量**行。 */
+    val marks: Map<String, RowListMarks> = emptyMap(),
+    /** 待确认建议条数 (底部条 / 设置页徽标)。 */
+    val pendingCount: Int = 0,
 )
 
 /**
- * 域名访问统计页面 (P0 只读展示)。
+ * 域名访问统计页面 (P0 只读展示 + P1 chip 进/出待确认建议)。
  *
  * 性能纪律 (设计 §9.4): **绝不**订阅数据面 —— 快照只在开屏 / 手动刷新时抓一次; 排序/筛选/搜索
  * 全在 [Dispatchers.Default]; 搜索 300ms debounce; 搜索/排序/筛选都不在 `@Composable` 里做。
+ *
+ * 名单成员判定同样不进热路径: 只在 `refresh()` 时算一次, 且带 [MEMBERSHIP_BUDGET_MS] 预算
+ * (用户自配的远端广告清单可能含上千条 `*` 正则, 20000 行逐个匹配会秒级卡住) —— 超预算的行
+ * `inAdBlock` 留 `null` (chip 显示未知), 用户点 chip 时再单独问一次。
  *
  * `message` 是一次性交互结果 (清空 / 导出 / 解析), 值为 **语言无关的哨兵常量**, 由页面映射成
  * `stringResource` 再 Toast —— ViewModel 拿不到 `Context`, 不能在这里解析资源 (i18n 硬要求)。
@@ -67,6 +98,9 @@ class DomainStatsViewModel
     constructor(
         private val store: DomainStatsStore,
         private val dnsInterceptor: DnsInterceptor,
+        private val suggestionStore: StatsSuggestionStore,
+        private val domainListManager: DomainListManager,
+        private val vpnController: VpnController,
     ) : ViewModel() {
         private val _state = MutableStateFlow(DomainStatsUiState())
         val state: StateFlow<DomainStatsUiState> = _state.asStateFlow()
@@ -74,11 +108,29 @@ class DomainStatsViewModel
         /** 最近一次抓取的全量快照 (未排序/未筛选); 只在 Default 线程读写。 */
         private var allRows: List<DomainStatSnapshot> = emptyList()
 
+        /** 已解析出的名单成员关系 (不含待确认); 键 = 规范化域名。 */
+        private var membership: Map<String, RowListMarks> = emptyMap()
+
         /** 搜索 debounce 任务。 */
         private var queryJob: Job? = null
 
         init {
             refresh()
+            // 待确认集合变化 (本页 chip / 复核页应用与撤销) → 只重算 chip 的 pending 部分, 不重算成员关系
+            viewModelScope.launch {
+                suggestionStore.state.collect { publishMarks() }
+            }
+            // 叠加层被应用/撤销 → 代理名单成员关系失效, 整块重算 (低频: 只发生在用户点"应用")
+            viewModelScope.launch {
+                domainListManager.overlayVersion.collect {
+                    if (allRows.isNotEmpty()) {
+                        withContext(Dispatchers.Default) {
+                            membership = computeMembership(allRows)
+                            publishMarks()
+                        }
+                    }
+                }
+            }
         }
 
         /** 抓一次快照并重建展示行。开屏与手动刷新调用; 数据面不触发它。 */
@@ -87,6 +139,7 @@ class DomainStatsViewModel
                 _state.update { it.copy(loading = true) }
                 withContext(Dispatchers.Default) {
                     allRows = store.snapshot()
+                    membership = computeMembership(allRows)
                     publishRows(
                         total = store.size(),
                         trimmed = store.trimmedTotal(),
@@ -115,6 +168,40 @@ class DomainStatsViewModel
         fun setFilter(f: DomainStatsFilter) {
             _state.update { it.copy(filter = f) }
             viewModelScope.launch { withContext(Dispatchers.Default) { publishRows() } }
+        }
+
+        /**
+         * 点 chip: 进 / 出「待确认建议」(**不直接改名单**)。
+         *
+         * 方向 = 与**当前生效状态**相反: 已在名单 → `REMOVE`, 不在 → `ADD`。当前状态未知时按需解析
+         * 单个域名 (代理侧是纯内存查表; 广告侧需编译一次规则, 都在 Default 上做)。
+         */
+        fun toggleSuggestion(
+            domain: String,
+            target: SuggestionTarget,
+        ) {
+            val key = DomainSuffixSet.normalize(domain)
+            if (key.isEmpty()) return
+            viewModelScope.launch {
+                val cur = membership[key] ?: RowListMarks()
+                val known =
+                    when (target) {
+                        SuggestionTarget.AD_BLOCK -> cur.inAdBlock
+                        SuggestionTarget.DOMAIN_LIST -> cur.inDomainList
+                    }
+                val inList = known ?: withContext(Dispatchers.Default) { resolveMembership(key, target) }
+                membership =
+                    membership +
+                    (
+                        key to
+                            when (target) {
+                                SuggestionTarget.AD_BLOCK -> cur.copy(inAdBlock = inList)
+                                SuggestionTarget.DOMAIN_LIST -> cur.copy(inDomainList = inList)
+                            }
+                    )
+                suggestionStore.toggle(key, target, currentlyInList = inList, note = noteFor(key))
+                publishMarks()
+            }
         }
 
         /** 清空内存统计 (含淘汰计数)。 */
@@ -215,6 +302,80 @@ class DomainStatsViewModel
                     loading = loading,
                 )
             }
+            publishMarks()
+        }
+
+        /** 把「已解析的成员关系」与「待确认建议」合成 chip 状态。 */
+        private fun publishMarks() {
+            val suggestions = suggestionStore.state.value
+            val marks = if (suggestions.isEmpty()) membership else mergePending(membership, suggestions)
+            _state.update { it.copy(marks = marks, pendingCount = suggestions.size) }
+        }
+
+        private fun mergePending(
+            membership: Map<String, RowListMarks>,
+            suggestions: List<Suggestion>,
+        ): Map<String, RowListMarks> {
+            val out = HashMap(membership)
+            for (s in suggestions) {
+                val cur = out[s.domain] ?: RowListMarks()
+                out[s.domain] =
+                    when (s.target) {
+                        SuggestionTarget.AD_BLOCK -> cur.copy(adPending = s.direction)
+                        SuggestionTarget.DOMAIN_LIST -> cur.copy(listPending = s.direction)
+                    }
+            }
+            return out
+        }
+
+        private suspend fun resolveMembership(
+            domain: String,
+            target: SuggestionTarget,
+        ): Boolean =
+            when (target) {
+                SuggestionTarget.DOMAIN_LIST -> domainListManager.matches(domain)
+                SuggestionTarget.AD_BLOCK -> {
+                    val matcher = runCatching { vpnController.adBlockMatcherSnapshot() }.getOrNull()
+                    matcher?.matches(domain) == true
+                }
+            }
+
+        /**
+         * 计算"域名是否已在名单" (只对可匹配的域名行)。
+         *
+         * 预算纪律: 超 [MEMBERSHIP_BUDGET_MS] 就停止算广告侧 (`inAdBlock` 留 null = 未知),
+         * 代理名单侧是纯内存后缀查表, 一直算完。绝不能让 20000 行 × 上千条正则卡住 refresh。
+         */
+        private suspend fun computeMembership(rows: List<DomainStatSnapshot>): Map<String, RowListMarks> {
+            val adMatcher = runCatching { vpnController.adBlockMatcherSnapshot() }.getOrNull()
+            val deadline = System.nanoTime() + MEMBERSHIP_BUDGET_MS * NANOS_PER_MS
+            val out = HashMap<String, RowListMarks>()
+            for (row in rows.filter { isMatchableDomain(it) }) {
+                val key = DomainSuffixSet.normalize(row.domain)
+                if (key.isEmpty()) continue
+                val inDomainList = domainListManager.matches(key)
+                val inAdBlock =
+                    if (adMatcher != null && System.nanoTime() < deadline) {
+                        adMatcher.matches(key)
+                    } else {
+                        null
+                    }
+                out[key] = RowListMarks(inAdBlock = inAdBlock, inDomainList = inDomainList)
+            }
+            return out
+        }
+
+        /** IP 字面量与反向解析不参与名单判定 (与 `AdBlocker.isBlocked` 同口径)。 */
+        private fun isMatchableDomain(row: DomainStatSnapshot): Boolean =
+            !row.isIpLiteral && !row.domain.endsWith(ARPA_SUFFIX, ignoreCase = true)
+
+        private fun noteFor(domain: String): SuggestionNote {
+            val row = allRows.firstOrNull { DomainSuffixSet.normalize(it.domain) == domain }
+            return SuggestionNote(
+                connCount = row?.connCount ?: 0,
+                downBytes = row?.downBytes ?: 0L,
+                failedConnCount = row?.failedConnCount ?: 0,
+            )
         }
 
         private fun exportFailure(): Result<String> {
@@ -256,6 +417,11 @@ class DomainStatsViewModel
         companion object {
             /** 搜索 debounce 窗口 (设计 §9.4)。 */
             private const val QUERY_DEBOUNCE_MS = 300L
+
+            /** 名单成员判定的时间预算 (超预算的行 chip 显示"未知", 点开再问)。 */
+            private const val MEMBERSHIP_BUDGET_MS = 60L
+            private const val NANOS_PER_MS = 1_000_000L
+            private const val ARPA_SUFFIX = ".arpa"
 
             /** 一次性消息哨兵: 页面按它映射成 i18n 文案 (ViewModel 不能解析资源)。 */
             const val MSG_CLEARED = "cleared"

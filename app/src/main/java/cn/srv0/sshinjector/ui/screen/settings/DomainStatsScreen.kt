@@ -51,22 +51,28 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.domain.vpn.DomainStatSnapshot
+import cn.srv0.sshinjector.domain.vpn.DomainSuffixSet
+import cn.srv0.sshinjector.domain.vpn.SuggestionDirection
+import cn.srv0.sshinjector.domain.vpn.SuggestionTarget
 import cn.srv0.sshinjector.ui.component.BackNavIcon
 import cn.srv0.sshinjector.ui.component.formatTime
 import cn.srv0.sshinjector.ui.viewmodel.MainViewModel
 import kotlinx.coroutines.launch
 
 /**
- * 域名访问统计 (P0 只读展示): 本会话访问过的域名 / 真实 IP / 连接数 / 上下行 / 最近访问 / 端口,
- * 支持搜索 (300ms debounce)、排序、筛选、单域名手动解析真实 IP、导出 CSV、清空。
+ * 域名访问统计 (P0 只读展示 + P1 名单动作入口): 本会话访问过的域名 / 真实 IP / 连接数 / 上下行 /
+ * 最近访问 / 端口, 支持搜索 (300ms debounce)、排序、筛选、单域名手动解析真实 IP、导出 CSV、清空。
  *
- * 排序/筛选/快照全在 ViewModel 的 `Dispatchers.Default` 里做; 本文件只做展示与交互分发。
- * 不涉及 P1 的「广告」「代理」chip 与待确认建议列表 —— 不做任何名单写入。
+ * P1: 每个**域名**行右侧两个 chip「广告」「代理」——点击只是**进 / 出待确认建议列表**,
+ * 不直接改任何名单; 复核页 (onOpenSuggestions) 里勾选后统一应用并可撤销。
+ *
+ * 排序/筛选/快照/名单成员判定全在 ViewModel 的 `Dispatchers.Default` 里做; 本文件只做展示与交互分发。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DomainStatsScreen(
     onBack: () -> Unit = {},
+    onOpenSuggestions: () -> Unit = {},
     viewModel: DomainStatsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsState()
@@ -132,6 +138,26 @@ fun DomainStatsScreen(
                     ),
             )
         },
+        bottomBar = {
+            if (state.pendingCount > 0) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.domain_stats_pending_bar, state.pendingCount),
+                        fontSize = 13.sp,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = onOpenSuggestions) {
+                        Text(stringResource(R.string.domain_stats_view_pending), fontSize = 13.sp)
+                    }
+                }
+            }
+        },
     ) { innerPadding ->
         Column(
             modifier =
@@ -196,12 +222,14 @@ fun DomainStatsScreen(
                     items(state.rows, key = { it.domain }) { row ->
                         DomainStatCard(
                             row = row,
+                            marks = state.marks[DomainSuffixSet.normalize(row.domain)],
                             expanded = expanded == row.domain,
                             resolving = state.resolving == row.domain,
                             onToggle = {
                                 expanded = if (expanded == row.domain) null else row.domain
                             },
                             onResolve = { viewModel.resolveRealIp(row.domain) },
+                            onToggleChip = { target -> viewModel.toggleSuggestion(row.domain, target) },
                         )
                     }
                 }
@@ -245,10 +273,12 @@ private fun filterLabel(filter: DomainStatsFilter): String =
 @Composable
 private fun DomainStatCard(
     row: DomainStatSnapshot,
+    marks: RowListMarks?,
     expanded: Boolean,
     resolving: Boolean,
     onToggle: () -> Unit,
     onResolve: () -> Unit,
+    onToggleChip: (SuggestionTarget) -> Unit,
 ) {
     Column(
         modifier =
@@ -275,6 +305,24 @@ private fun DomainStatCard(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        // IP 字面量条目没有域名语义 (key 就是 "ip:port"), 不给名单 chip
+        if (!row.isIpLiteral) {
+            Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                ListChip(
+                    label = stringResource(R.string.domain_stats_chip_adblock),
+                    inList = marks?.inAdBlock,
+                    pending = marks?.adPending,
+                    onClick = { onToggleChip(SuggestionTarget.AD_BLOCK) },
+                )
+                ListChip(
+                    label = stringResource(R.string.domain_stats_chip_domainlist),
+                    inList = marks?.inDomainList,
+                    pending = marks?.listPending,
+                    onClick = { onToggleChip(SuggestionTarget.DOMAIN_LIST) },
+                )
+            }
+        }
         Spacer(Modifier.height(2.dp))
         Text(
             text = summaryText(row),
@@ -286,6 +334,33 @@ private fun DomainStatCard(
             DetailContent(row = row, resolving = resolving, onResolve = onResolve)
         }
     }
+}
+
+/**
+ * 名单 chip: 点一下进 / 出「待确认建议」。
+ *
+ * 视觉语言: 实心 = 已在名单或已挂待确认; 标签后缀 `+` / `−` = 待确认方向 (加入 / 移出),
+ * `?` = 成员关系未知 (超预算 / 该行还没问过)。
+ */
+@Composable
+private fun ListChip(
+    label: String,
+    inList: Boolean?,
+    pending: SuggestionDirection?,
+    onClick: () -> Unit,
+) {
+    val suffix =
+        when {
+            pending == SuggestionDirection.ADD -> " +"
+            pending == SuggestionDirection.REMOVE -> " −"
+            inList == null -> " ?"
+            else -> ""
+        }
+    FilterChip(
+        selected = pending != null || inList == true,
+        onClick = onClick,
+        label = { Text(label + suffix, fontSize = 11.sp) },
+    )
 }
 
 /** 摘要行: `连接数 N · 上行 x · 下行 y · :port · 最近 <time>`。 */

@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import cn.srv0.sshinjector.domain.vpn.DNS_MODE_REMOTE
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -42,6 +43,14 @@ class SettingsDataStore
             private val KEY_DOMAIN_LIST_URL = stringPreferencesKey("domain_list_url")
             private val KEY_DOMAIN_LIST_LAST_UPDATE = longPreferencesKey("domain_list_last_update")
             private val KEY_LANGUAGE = stringPreferencesKey("language")
+
+            // 以下三键是"统计生成"的名单 (P1), 与用户手写规则**分键存放**:
+            // 这样"移出"永远是精确删行/删元素, 绝不会误删用户手写规则 (设计 §8.0 纪律 ①)。
+            private val KEY_ADBLOCK_RULES_FROM_STATS = stringPreferencesKey("ad_block_rules_from_stats")
+            private val KEY_DOMAIN_LIST_ADDED_FROM_STATS =
+                stringSetPreferencesKey("domain_list_added_from_stats")
+            private val KEY_DOMAIN_LIST_REMOVED_FROM_STATS =
+                stringSetPreferencesKey("domain_list_removed_from_stats")
 
             const val DEFAULT_DOMAIN_LIST_URL = "https://gitlab.com/gfwlist/gfwlist/raw/master/gfwlist.txt"
 
@@ -127,6 +136,21 @@ class SettingsDataStore
         val domainListLastUpdate: Flow<Long?> =
             context.dataStore.data
                 .map { it[KEY_DOMAIN_LIST_LAST_UPDATE] }
+
+        /** 统计生成的广告规则行 (`||d^` / `@@||d^`); 空串 = 无。 */
+        val adBlockRulesFromStats: Flow<String> =
+            context.dataStore.data
+                .map { it[KEY_ADBLOCK_RULES_FROM_STATS].orEmpty() }
+
+        /** 统计生成的"强制走隧道"域名集合 (代理名单叠加, 优先级低于"强制直连")。 */
+        val domainListAddedFromStats: Flow<Set<String>> =
+            context.dataStore.data
+                .map { it[KEY_DOMAIN_LIST_ADDED_FROM_STATS] ?: emptySet() }
+
+        /** 统计生成的"强制直连"域名集合 (优先级最高)。 */
+        val domainListRemovedFromStats: Flow<Set<String>> =
+            context.dataStore.data
+                .map { it[KEY_DOMAIN_LIST_REMOVED_FROM_STATS] ?: emptySet() }
 
         suspend fun setAutoConnect(enabled: Boolean) {
             context.dataStore.edit { it[KEY_AUTO_CONNECT] = enabled }
@@ -219,6 +243,57 @@ class SettingsDataStore
             context.dataStore.data
                 .map { it[KEY_DOMAIN_LIST_LAST_UPDATE] }
                 .first()
+
+        // ---- 统计生成名单 (P1): 读-改-写由 StatsListApplier 的互斥锁串行, 见其 KDoc ----
+
+        /** 读当前统计广告规则 (读-改-写用); null = 无该键。 */
+        suspend fun getAdBlockRulesFromStats(): String? =
+            context.dataStore.data
+                .map { it[KEY_ADBLOCK_RULES_FROM_STATS] }
+                .first()
+
+        suspend fun getDomainListAddedFromStats(): Set<String> =
+            context.dataStore.data
+                .map { it[KEY_DOMAIN_LIST_ADDED_FROM_STATS] ?: emptySet() }
+                .first()
+
+        suspend fun getDomainListRemovedFromStats(): Set<String> =
+            context.dataStore.data
+                .map { it[KEY_DOMAIN_LIST_REMOVED_FROM_STATS] ?: emptySet() }
+                .first()
+
+        /** null/空白 = 移除该键 (统计不再贡献广告规则)。 */
+        suspend fun setAdBlockRulesFromStats(rules: String?) {
+            context.dataStore.edit {
+                if (rules.isNullOrBlank()) {
+                    it.remove(KEY_ADBLOCK_RULES_FROM_STATS)
+                } else {
+                    it[KEY_ADBLOCK_RULES_FROM_STATS] = rules
+                }
+            }
+        }
+
+        /** 空集 = 移除该键。 */
+        suspend fun setDomainListAddedFromStats(domains: Set<String>) {
+            context.dataStore.edit {
+                if (domains.isEmpty()) {
+                    it.remove(KEY_DOMAIN_LIST_ADDED_FROM_STATS)
+                } else {
+                    it[KEY_DOMAIN_LIST_ADDED_FROM_STATS] = domains
+                }
+            }
+        }
+
+        /** 空集 = 移除该键。 */
+        suspend fun setDomainListRemovedFromStats(domains: Set<String>) {
+            context.dataStore.edit {
+                if (domains.isEmpty()) {
+                    it.remove(KEY_DOMAIN_LIST_REMOVED_FROM_STATS)
+                } else {
+                    it[KEY_DOMAIN_LIST_REMOVED_FROM_STATS] = domains
+                }
+            }
+        }
 
         val language: Flow<String> =
             context.dataStore.data
