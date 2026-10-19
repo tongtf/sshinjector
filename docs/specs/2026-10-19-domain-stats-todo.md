@@ -321,6 +321,34 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@17 ./gradlew assembleDebug --offline
 
 ---
 
+## 7. 真机反馈修复 (2026-10-19, v1.2.3)
+
+用户装 v1.2.2 后手测, **采集侧正常** (数据面快照 `域名统计 4/20000 → 13 → 16(淘汰 0)`, 全部丢弃计数与
+v1.2.1 基线一致), 但暴露两点:
+
+1. **「解析真实 IP」每次都"解析不到 IP"** — 真 bug, 已修。根因 (两层):
+   - 白名单模式 (dnsMode=2) 下 App 自己的流量也进隧道 (不做 `addDisallowedApplication`),
+     `ConnectivityManager.activeNetwork` **就是本 VPN**, 而它的 DNS 恒为 `VpnNetwork.TUN_IP`
+     (`SshVpnService.buildVpnBuilder` 的 `addDnsServer(10.0.0.2)`) → `systemDnsServers = ["10.0.0.2"]`;
+     受保护 socket 把查询发到**物理链路**上的 10.0.0.2 = 本机 TUN 地址, 物理网上无人应答 → 3s×2 静默超时。
+   - 诊断盲: 失败只 `Log.d` (不进应用内日志) → 用户只看到"解析不到", 现场零线索。
+   修法: `getSystemDnsServers()` 遍历 `cm.allNetworks` 并排除 `hasTransport(TRANSPORT_VPN)` (App 实际会用的
+   那条物理网络优先, 其余按 `NET_CAPABILITY_VALIDATED` 排前, v4 先于 v6 去重); `resolveLocally` 再滤一次
+   `VpnNetwork.TUN_IP` 兜底 (上游只剩它就**直接返回空、一个 socket 都不建**, 单测
+   `DnsInterceptorTest.resolveLocally never queries the vpn tun ip as upstream` 用 `protectSocket = fail` 钉住);
+   IP 字面量条目 (`isIpLiteral`) 不再给解析按钮 (解析的是域名, 那种行点了必然空等超时)。
+   诊断补强: 失败/不可用打 **INFO** (`本地解析无结果/不可用 · 域名 — 上游 …`), 成功打 DEBUG —— `故障归因`
+   只数 WARNING/ERROR, 用户点一次解析不会凭空多一类故障。
+   **顺带修好一条既有哑路**: 同一个 `systemDnsServers` 还喂"非 A/AAAA (MX/TXT) 的受保护直查", 那条路径在
+   白名单模式下本来就是黑的。
+2. **列表里没有"加入广告过滤 / 域名白名单"的操作入口** — **设计如此, 不是遗漏**: P0 只读采集,
+   「先收集为待确认建议列表, 复核后批量应用」(用户决策 ③) 属于 P1 (设计稿 §8), 本轮未做。
+
+门禁: ktlint / detekt / test (323 例, +1) / lint / assembleDebug 全绿。
+
+
+---
+
 ## 6. 实施结果 (2026-10-19)
 
 **三波并发 + 四次集中验证**, 五道门全绿 (`ktlintCheck` / `detekt` / `testDebugUnitTest` (**322 例, 新增 21**) /
