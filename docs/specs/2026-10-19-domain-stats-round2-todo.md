@@ -51,16 +51,55 @@
 
 ---
 
-## 2. ④ 按应用 uid (本轮只出**可行性探针**)
+## 2. ④ 按应用 uid (本轮只出**可行性探针** —— 附前提更正)
 
-设计附录 A 的结论: `ConnectivityManager.getConnectionOwnerUid()` 是 `@SystemApi`
-(`NETWORK_STACK` 权限), 普通应用调不到; `NetworkStatsManager.queryDetailsForUid` 只能给
-"每应用总流量" (还要 `PACKAGE_USAGE_STATS` 特殊权限); `/proc/net/*` 需要 root/Shizuku。
+### 2.1 前提更正 (2026-10-19 本地 SDK 取证, 推翻设计附录 A 的初判)
 
-**所以本轮不写任何 `appUid` 进数据模型**, 只落一个探针:
-`①` 反射调 `getConnectionOwnerUid` 看是否可调用 (`NoSuchMethodException` / `SecurityException`);
-`②` 查 `PACKAGE_USAGE_STATS` 的 app-op 授权状态; `③` 结果进应用内日志 (INFO)。
-真机回报后**再决定**数据模型与 UI (能到 uid 才做"应用 × 域名", 只能到总流量就必须另起一个正交页面)。
+设计附录 A 写的是: `ConnectivityManager.getConnectionOwnerUid()` 是 `@SystemApi`
+(`NETWORK_STACK`), 普通应用调不到。**这是错的**, 三条证据 (都可在构建机上复现):
+
+1. 它出现在公开 stub 里: `javap -classpath platforms/android-37.0/android.jar android.net.ConnectivityManager`
+   → `public int getConnectionOwnerUid(int, java.net.InetSocketAddress, java.net.InetSocketAddress)`;
+   同 SDK 里 `@SystemApi` 的 `startTethering` / `getTetheringSupported` **不在** stub 中
+   (`android.os.ServiceManager` 这类 @hide 类同样查不到) → 该 jar 是严格的公开 API 面。
+2. `platforms/android-37.0/data/api-versions.xml` 记 `getConnectionOwnerUid(...)` **`since="29"`**
+   —— 自 Android 10 起就是公开 API。
+3. stub javadoc 明确写给 **VPN 应用**: "return uid if the connection is found and the app has
+   permission to observe it (**e.g., if it is associated with the calling VPN app's VpnService
+   tunnel**) or `Process.INVALID_UID` if the connection is not found. @throws SecurityException if
+   the caller is **not the active VpnService** for the current user";
+   `annotations.zip` 里该方法**没有** `@RequiresPermission` → 不需要清单权限。
+
+**含义**: ④ 的可达上限比原判断高得多 —— 不需要 `PACKAGE_USAGE_STATS`, 不需要 root/Shizuku,
+本应用作为**活动 VpnService** 就是该 API 的目标调用者。剩下的未知只有**设备侧行为**
+(真机是否真的给隧道连接返回归属、平台实现差异), 所以本轮仍然**不写 `appUid` 进数据模型**,
+只把这条未知变成一条可回报的证据 (纪律: 验证通过前不动数据模型)。
+
+### 2.2 探针 (只读诊断, 用户点一下)
+
+位置: 设置 → 域名访问统计 → 顶栏 `i`。实现 `domain/vpn/AppUidProbe.kt`。
+
+- **未连接 VPN 直接不跑** → `VPN_NOT_ACTIVE` (该 API 只对活动 VpnService 开放, 此刻调用只会得到
+  `SecurityException`; 把那种"被拒"当结论就是误判);
+- **真查一次**: 在自己进程内建一条**真实回环 TCP 连接** (双方都属于本进程), 双向各查一次归属 ——
+  返回本进程 uid = `AVAILABLE` (该 API 对我们真的能用); 返回 -1 = `NO_OWNER` (能调但查不到);
+  `SecurityException` = `DENIED`; 其它 = `ERROR` (+`detail`);
+- **只碰本机回环**: 不进隧道、不出网 (不产生统计行、不占数据面连接)、不改任何状态;
+- 辅证 (供判读 P2 的退路): `PACKAGE_USAGE_STATS` app-op 授权状态 + `getPackagesForUid` 可解析;
+- 结论同时进**应用内日志** (INFO) 与 Toast → 真机回报只需一行。
+
+### 2.3 真机回报后怎么走
+
+| 探针结论 | ④ 的下一步 |
+|---|---|
+| `AVAILABLE` | 直接做: `TcpConnection` 已有 `srcIp/port`+`dstIp/port` (回程组包缓存), 在
+`closeTcpConnection` 取五元组 → **异步**查 uid (单线程 + 有界队列, 绝不进 packetLoop) → `DomainStatsStore.attachAppUid(domain, uid)` → UI 显示"应用 N 个" |
+| `NO_OWNER` | 改用**隧道侧真实五元组**再验一次 (最可能是"非隧道连接不给归属"; 那就是探针的假阴性, 不是 API 不可用) |
+| `DENIED` | 该路径不可达 → 退到 `NetworkStatsManager` 的按 uid **总流量** (要 `PACKAGE_USAGE_STATS`), 它能给"哪个应用用了多少"但**给不出域名**, 必须另起一个正交页面而不是塞进本页 |
+| `NO_METHOD` / `ERROR` | 把 `detail` 回报, 再定 |
+
+**已定 (不随探针结果变)**: uid 查询一律**异步 + 有界 + 失败静默**; 绝不在 `closeTcpConnection`
+(数据面热路径) 里做 binder 调用; `appUid` 只进统计展示, 不参与任何隧道决策 (与 P0/P1 的纪律一致)。
 
 ---
 
@@ -73,3 +112,7 @@
   日志 `远端解析 · <域名> — Nms · N 个 IP`, 行内显示服务器侧 IP; exec 不可用的服务器 (OpenWrt/dropbear)
   → `远端解析不可用 · <域名> — 已回退本地视角`, 页面出现 `本地视角 (远端不可用)`, **不产生 WARNING**;
   未连接时打开开关 → 解析仍走本地 (无 `远端解析` 行)。
+- 单测: `AppUidProbeTest` (3 例: 公开 SDK 前提锁 / 未连接时不跑 / 无服务时安全降级)。
+- 真机 (清单 S15): **先连上 VPN** → 统计页顶栏 `i` → 日志与 Toast 各一行
+  `UID 归属探针 · getConnectionOwnerUid=<token> · …`; 按 §2.3 的表决定 ④ 的下一步。
+

@@ -330,6 +330,8 @@
     <string name="domain_stats_ip_unavailable">Реальный IP не определён</string>
     <string name="domain_stats_use_remote_resolve">Определять удалённо (через SSH)</string>
     <string name="domain_stats_remote_unavailable">Локальный вид (удалённо недоступно)</string>
+    <string name="domain_stats_app_uid_probe">Проба привязки UID (диагностика)</string>
+    <string name="domain_stats_app_uid_probe_result">Привязка UID → ownerUid=%1$s · usage=%2$s · label=%3$s</string>
     <string name="domain_stats_count">Записано %1$d/%2$d (удалено %3$d)</string>
     <string name="domain_stats_label_up">Исх.</string>
     <string name="domain_stats_label_down">Вх.</string>

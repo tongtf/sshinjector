@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -105,6 +106,21 @@ fun DomainStatsScreen(
         viewModel.consumeMessage()
     }
 
+    // 「UID 归属探针」结果: 弹一次 (便于无 adb 时直接截图回报) 后消费, 值本身是语言无关 token
+    val probeResult = state.appUidProbe
+    val probeFormat = stringResource(R.string.domain_stats_app_uid_probe_result)
+    LaunchedEffect(probeResult) {
+        if (probeResult == null) return@LaunchedEffect
+        val text =
+            probeFormat.format(
+                probeResult.ownerUid.name,
+                if (probeResult.usageStatsGranted) "granted" else "denied",
+                if (probeResult.uidLabelResolvable) "ok" else "n/a",
+            )
+        Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+        viewModel.consumeAppUidProbe()
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -121,6 +137,12 @@ fun DomainStatsScreen(
                         Icon(
                             Icons.Default.Share,
                             contentDescription = stringResource(R.string.domain_stats_export),
+                        )
+                    }
+                    IconButton(onClick = { viewModel.probeAppUid() }) {
+                        Icon(
+                            Icons.Default.Info,
+                            contentDescription = stringResource(R.string.domain_stats_app_uid_probe),
                         )
                     }
                     IconButton(

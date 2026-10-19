@@ -8,9 +8,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cn.srv0.sshinjector.data.local.DomainListManager
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
+import cn.srv0.sshinjector.domain.model.VpnState.VpnStatus
 import cn.srv0.sshinjector.domain.usecase.DomainIpResolver
 import cn.srv0.sshinjector.domain.usecase.ResolvePath
 import cn.srv0.sshinjector.domain.usecase.VpnController
+import cn.srv0.sshinjector.domain.vpn.AppUidProbe
 import cn.srv0.sshinjector.domain.vpn.DomainStatSnapshot
 import cn.srv0.sshinjector.domain.vpn.DomainStatsCsv
 import cn.srv0.sshinjector.domain.vpn.DomainStatsStore
@@ -79,6 +81,11 @@ data class DomainStatsUiState(
     val useRemoteResolve: Boolean = false,
     /** 开关打开但远端不可用 → 页面标注 `本地视角 (远端不可用)` (设计 §7.2)。 */
     val remoteUnavailable: Boolean = false,
+    /**
+     * 一次性「按应用 uid (P2) 可行性探针」结果; 页面弹一次 Toast 后调
+     * [DomainStatsViewModel.consumeAppUidProbe] 消费掉 (避免重组时反复弹)。
+     */
+    val appUidProbe: AppUidProbe.Result? = null,
     /** 域名 (已规范化) → 名单状态。只收录**非 IP 字面量**行。 */
     val marks: Map<String, RowListMarks> = emptyMap(),
     /** 待确认建议条数 (底部条 / 设置页徽标)。 */
@@ -108,6 +115,7 @@ class DomainStatsViewModel
         private val vpnController: VpnController,
         private val domainIpResolver: DomainIpResolver,
         private val settingsDataStore: SettingsDataStore,
+        private val appUidProbe: AppUidProbe,
     ) : ViewModel() {
         private val _state = MutableStateFlow(DomainStatsUiState())
         val state: StateFlow<DomainStatsUiState> = _state.asStateFlow()
@@ -295,6 +303,29 @@ class DomainStatsViewModel
         fun setUseRemoteResolve(enabled: Boolean) {
             _state.update { it.copy(remoteUnavailable = false) }
             viewModelScope.launch { settingsDataStore.setUseRemoteResolve(enabled) }
+        }
+
+        /**
+         * 「按应用 uid (P2)可行性探针」: 只读诊断, 结论进 [AppUidProbe] 的应用内日志 + 页面 Toast。
+         *
+         * 动机是"先取证再设计": 连接→uid 的官方能力是 `@SystemApi`, 能不能拿到只有真机说了算,
+         * 所以在写任何 `appUid` 进数据模型之前, 把结果变成一条可回报的证据 (设计附录 A)。
+         * 纯查询 (反射 + app-op 查询), 不做 IO 也不改状态, 但仍放 Default 线程 (反射首次解析可能
+         * 触发类加载)。
+         */
+        fun probeAppUid() {
+            if (_state.value.appUidProbe != null) return
+            viewModelScope.launch {
+                // 该 API 只对**活动** VpnService 开放: 未连接时调用必然 SecurityException, 那不是结论
+                val vpnActive = vpnController.vpnState.value.status == VpnStatus.Connected
+                val result = withContext(Dispatchers.Default) { appUidProbe.probe(vpnActive) }
+                _state.update { it.copy(appUidProbe = result) }
+            }
+        }
+
+        /** 页面消费掉探针结果 (弹过一次 Toast 后清理, 避免每次重组重弹)。 */
+        fun consumeAppUidProbe() {
+            _state.update { it.copy(appUidProbe = null) }
         }
 
         /**
