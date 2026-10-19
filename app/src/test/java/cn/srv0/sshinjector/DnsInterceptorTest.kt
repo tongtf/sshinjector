@@ -1,12 +1,14 @@
 package cn.srv0.sshinjector
 
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
+import cn.srv0.sshinjector.domain.vpn.VpnNetwork
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import org.xbill.DNS.DClass
 import org.xbill.DNS.Flags
@@ -22,6 +24,24 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class DnsInterceptorTest {
+    /**
+     * 2026-10-19 真机: 白名单模式 (dnsMode=2) 下 `activeNetwork` 就是本 VPN, 它的 DNS 恒为
+     * [VpnNetwork.TUN_IP] (`addDnsServer(10.0.0.2)`); 拿它当上游时, 受保护 socket 会把查询发到
+     * **物理链路**上的 10.0.0.2 —— 无人应答, 现象是统计页「解析真实 IP」永远"解析不到"。
+     * 这里钉住: 上游只剩 TUN IP 时**直接返回空且不发起任何 socket 查询** (`protectSocket` 设为
+     * `fail` 来证明"一个查询都没发")。
+     */
+    @Test
+    fun `resolveLocally never queries the vpn tun ip as upstream`() {
+        val dns = DnsInterceptor()
+        dns.setProtectFunction {
+            fail("上游只有 TUN IP 时不得发起任何查询")
+            false
+        }
+        dns.setSystemDnsServers(listOf(VpnNetwork.TUN_IP))
+        assertTrue(dns.resolveLocally("example.com", timeoutMs = 50).isEmpty())
+    }
+
     @Test
     fun `test DNS cache key generation`() {
         val name = "example.com"

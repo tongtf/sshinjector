@@ -798,8 +798,9 @@ class DnsInterceptor
          * 返回 A/AAAA 记录的字面量 (去重、保序); 失败 / 未连接返回空表。
          *
          * 纯旁路查询: 不写 [onDnsResponse]、不进 `dnsCache`、不动 `realIpToDomain`、不改 `transportMode`,
-         * 因此对隧道数据面没有任何副作用; 未连接 (`protectSocket == null`) 时静默空返回 —— 这里若打
-         * WARNING 会污染"故障归因"(用户在设置页点一次解析就会凭空多一类故障)。
+         * 因此对隧道数据面没有任何副作用。失败/不可用时返回空表, 并以 **INFO** 落一条应用内日志
+         * (上游 + 失败原因) —— 无 adb 时这是唯一能看清"为什么解析不到"的通道; 用 INFO 而非 WARNING
+         * 是因为"故障归因"只数 WARNING/ERROR, 用户在设置页点一次解析不该凭空多一类故障。
          */
         fun resolveLocally(
             host: String,
@@ -807,8 +808,26 @@ class DnsInterceptor
         ): List<String> {
             val name = host.trim().trimEnd('.')
             if (name.isEmpty()) return emptyList()
-            // 未设置 = 未连接 (protectSocket 由 VpnService 连接时注入), 静默空返回
-            if (protectSocket == null) return emptyList()
+            // 未设置 = 未连接 (protectSocket 由 VpnService 连接时注入)
+            if (protectSocket == null) {
+                VpnController.appLog(
+                    "本地解析不可用 · $name — 未连接 (protectSocket 未注入)",
+                    level = LogLevel.INFO,
+                )
+                return emptyList()
+            }
+            // 上游必须**排除 VPN 自己的 DNS** (`VpnNetwork.TUN_IP`): 白名单模式下 App 自己也在隧道里,
+            // `activeNetwork` 就是本 VPN, 它的 DNS 恒为 10.0.0.2 (`addDnsServer`); 受保护 socket 会把
+            // 查询发到**物理链路**上的 10.0.0.2 —— 无人应答 → 静默超时 (2026-10-19 真机"解析不到 IP"
+            // 的根因)。VpnController.getSystemDnsServers() 已按网络过滤过, 这里是第二道闸。
+            val server = systemDnsServers.firstOrNull { it != VpnNetwork.TUN_IP }
+            if (server == null) {
+                VpnController.appLog(
+                    "本地解析不可用 · $name — 无可用上游 DNS (当前 $systemDnsServers)",
+                    level = LogLevel.INFO,
+                )
+                return emptyList()
+            }
 
             // 每个类型一个独立 socket: 任一失败不影响另一个, 部分结果照常返回;
             // LinkedHashSet 去重保序 (A 在前)。姿势照抄 sendDnsOverProtectedSocket。
@@ -819,7 +838,6 @@ class DnsInterceptor
                     socket.soTimeout = timeoutMs
                     protectSocket?.invoke(socket)
 
-                    val server = systemDnsServers.firstOrNull() ?: "8.8.8.8"
                     // Message() + 随机 id + RD (递归请求) —— 与既有查询组包方式一致
                     val message = Message()
                     message.header.setID(ThreadLocalRandom.current().nextInt(1, DNS_QUERY_ID_EXCLUSIVE_BOUND))
@@ -840,11 +858,25 @@ class DnsInterceptor
                         }
                     }
                 } catch (e: Exception) {
-                    // 只 Log.d: 打 appLog 会让用户点一次"解析"就凭空多一类"故障归因"
+                    // INFO 级 (不是 WARNING/ERROR): 用户按需触发的一次失败, 必须能出现在默认导出的日志里
+                    // (无 adb), 但绝不能进"故障归因" —— 那条口径只数 WARNING/ERROR。
+                    VpnController.appLog(
+                        "本地解析查询失败 · $name (type=$type) — " +
+                            "${e.javaClass.simpleName}: ${e.message} · 上游 $server:$DNS_QUERY_PORT",
+                        level = LogLevel.INFO,
+                    )
                     Log.d(TAG, "本地解析失败 · $name (type=$type) — ${e.message}")
                 } finally {
                     socket.close()
                 }
+            }
+            if (out.isEmpty()) {
+                VpnController.appLog(
+                    "本地解析无结果 · $name — 上游 $server 无应答 (超时 ${timeoutMs}ms × ${LOCAL_RESOLVE_TYPES.size})",
+                    level = LogLevel.INFO,
+                )
+            } else {
+                VpnController.appLog("本地解析完成 · $name — ${out.joinToString()}", level = LogLevel.DEBUG)
             }
             return out.toList()
         }

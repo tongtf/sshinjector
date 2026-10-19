@@ -2,6 +2,8 @@ package cn.srv0.sshinjector.domain.usecase
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.util.Log
 import cn.srv0.sshinjector.data.local.DomainListManager
 import cn.srv0.sshinjector.domain.model.ConnectStage
@@ -1495,22 +1497,45 @@ class VpnController
         }
 
         /**
-         * 获取系统配置的 DNS 服务器 (IPv4 优先)
+         * 获取系统配置的 DNS 服务器 (IPv4 优先), 作为**受保护 socket** 查询的上游。
+         *
+         * 必须显式跳过 VPN 网络 (2026-10-19 真机定位): 白名单模式 (dnsMode=2) 下 App 自己的流量
+         * 也进隧道, `activeNetwork` 就是本 VPN, 而它的 DNS 恒为 [VpnNetwork.TUN_IP]
+         * (`SshVpnService.buildVpnBuilder` 的 `addDnsServer(10.0.0.2)`)。受保护 socket 会把查询发到
+         * **物理链路**上的 10.0.0.2 —— 那是本机 TUN 地址, 物理网上无人应答 → 3s×2 静默超时。
+         * 表现: 「解析真实 IP」永远"解析不到"、MX/TXT 的直查回退同样哑掉 (两者都看不出原因)。
+         * 非白名单模式 App 被 `addDisallowedApplication` 排除, 取到的本来就是物理网络 ——
+         * 过滤对它是恒等变换, 无行为变化。
          */
         private fun getSystemDnsServers(): List<String> {
             val dnsList = mutableListOf<String>()
             try {
                 val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-                val network = cm.activeNetwork ?: return dnsList
-                val linkProperties = cm.getLinkProperties(network) ?: return dnsList
-
+                val isVpn = { net: Network ->
+                    cm.getNetworkCapabilities(net)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+                }
+                val isValidated = { net: Network ->
+                    cm.getNetworkCapabilities(net)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+                }
+                // App 实际会用的那条网络优先 (非 VPN 时), 其余物理网络按"已通过系统校验"排前
+                val active = cm.activeNetwork?.takeIf { !isVpn(it) }
+                val ordered =
+                    buildList {
+                        active?.let { add(it) }
+                        cm.allNetworks
+                            .filter { it != active && !isVpn(it) }
+                            .sortedByDescending { isValidated(it) }
+                            .forEach { add(it) }
+                    }
                 val (v4, v6) =
-                    linkProperties.dnsServers
+                    ordered
+                        .flatMap { cm.getLinkProperties(it)?.dnsServers.orEmpty() }
                         .map { it.hostAddress }
                         .filterNotNull()
                         .filter { host ->
                             !host.startsWith("fe80") && !host.startsWith("::1") && !host.startsWith("127.")
-                        }.partition { it.contains(':') }
+                        }.distinct()
+                        .partition { it.contains(':') }
                 dnsList.addAll(v4)
                 dnsList.addAll(v6)
             } catch (e: Exception) {

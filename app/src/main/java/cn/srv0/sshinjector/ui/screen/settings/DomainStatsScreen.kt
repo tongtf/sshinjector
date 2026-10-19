@@ -315,16 +315,19 @@ private fun DetailContent(
         )
         DetailLine(label = stringResource(R.string.domain_stats_label_first), value = formatTime(row.firstSeenAt))
         DetailLine(label = stringResource(R.string.domain_stats_label_last), value = formatTime(row.lastSeenAt))
-        TextButton(onClick = onResolve, enabled = !resolving) {
-            Text(
-                text =
-                    if (resolving) {
-                        stringResource(R.string.domain_stats_resolving)
-                    } else {
-                        stringResource(R.string.domain_stats_resolve_ip)
-                    },
-                fontSize = 13.sp,
-            )
+        // IP 字面量条目 (没有域名映射, key 就是 "ip:port") 不给解析入口: 解析的是域名, 点了必然空等超时
+        if (!row.isIpLiteral) {
+            TextButton(onClick = onResolve, enabled = !resolving) {
+                Text(
+                    text =
+                        if (resolving) {
+                            stringResource(R.string.domain_stats_resolving)
+                        } else {
+                            stringResource(R.string.domain_stats_resolve_ip)
+                        },
+                    fontSize = 13.sp,
+                )
+            }
         }
     }
 }
