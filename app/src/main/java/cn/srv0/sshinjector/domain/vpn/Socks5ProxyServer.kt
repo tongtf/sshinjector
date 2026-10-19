@@ -789,15 +789,11 @@ private class Socks5Connection(
             try {
                 val tunnel = factory.createDirectChannel(resolvedHost, port)
                 if (tunnel == null) {
-                    Log.e(
-                        "Socks5Proxy",
-                        "connectToTarget failed: createDirectChannel returned null for $host:$port",
-                    )
-                    VpnController.appLogThrottled(
-                        "SSH 通道建立失败 · $resolvedHost:$port — 通道工厂返回 null",
-                        level = LogLevel.ERROR,
-                        throttleKey = "SSH 通道建立失败",
-                    )
+                    // 只留 logcat: `createDirectChannel` 自己已经打了**信息更全**的那条
+                    // (ERROR「SSH 通道打开失败 · … 试了 N/N · 末次耗时 · 在途通道 · pool 快照」
+                    // 或 INFO「远端不解析该目标」)。这里再打一条等于把同一个失败算两类故障,
+                    // 还会在假 IP 模式下把 NXDOMAIN 噪声翻倍。
+                    Log.d("Socks5Proxy", "connectToTarget: createDirectChannel returned null for $host:$port")
                     sendErrorReplyAndClose(0x05)
                     return@launch
                 }

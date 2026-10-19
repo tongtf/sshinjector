@@ -384,6 +384,24 @@ internal object ChannelOpenBudget {
         lastStallAtMs: Long,
         nowMs: Long,
     ): Boolean = lastStallAtMs > 0L && nowMs - lastStallAtMs < STALL_DEMOTE_MS
+
+    /**
+     * 「所有候选都被秒拒」判据: 试满了全部候选, 且**没有一次**拖到迟滞阈值。
+     *
+     * 与「等不到 OPEN_CONFIRMATION 的超时」必须分开 —— JSch 对两种情况抛的是**同一条**
+     * `channel is not opened.`, 只能按耗时归类:
+     * - 秒拒 = 服务器立刻回 `CHANNEL_OPEN_FAILURE`, 绝大多数是**目标域名在服务器上解析不出来**
+     *   (假 IP 模式把任何 A 查询都回成 198.18.x.x, 客户端照常建连, 而真实 DNS 本该回 NXDOMAIN)
+     *   → 「目标不存在」, 不是本栈故障, 按 INFO 记录 (真机: `update.kiwibrowser.com.unused` 3/3 全 124ms);
+     * - 拖到迟滞阈值 = 会话读线程被堵/服务器没把目标连上 → 才是需要 ERROR 的通道故障。
+     *
+     * `attempted < candidateCount` (总预算耗尽提前 `break`) 不算秒拒 —— 那说明至少有一次拖住了。
+     */
+    fun isFastRejectOnAllCandidates(
+        attempted: Int,
+        candidateCount: Int,
+        stalledAny: Boolean,
+    ): Boolean = candidateCount > 0 && attempted == candidateCount && !stalledAny
 }
 
 @Singleton
@@ -1373,9 +1391,10 @@ class JschSshClient
             // 单个会话可能正处在断开瞬间 (JSch connected 标志是异步翻转的),
             // "channel is not opened"/"session is down" 换下一个健康会话即可透明吸收,
             // 不再像旧实现那样单次失败就把错误抛给客户端 (rep=5 → 下载失败)
+            // 池在同一刻被清空 (重连/断开) 时 `snapshot` 可能是空的 —— 不留静默 return:
+            // 直接落到下方 `candidates.isEmpty()` 分支, 保证"返回 null"永远有一条可见日志。
             val snapshot = pool.toList()
             val size = snapshot.size
-            if (size == 0) return null
             val start = sessionIndex.getAndIncrement()
             val now = System.currentTimeMillis()
             val candidates =
@@ -1413,6 +1432,9 @@ class JschSshClient
             var lastError: Exception? = null
             var attempted = 0
             var lastAttemptMs = 0L
+            // 全部候选都被"秒拒"(没有任何一次拖到 OPEN_STALL_MIN_MS) = 服务器主动回了
+            // CHANNEL_OPEN_FAILURE, 与"等不到 OPEN_CONFIRMATION 的超时"是两回事 (见下方归类)。
+            var stalledAny = false
             val connectStartedAt = System.currentTimeMillis()
             val deadlineAtMs = connectStartedAt + CHANNEL_BUDGET_MS
             for (pooled in candidates) {
@@ -1461,7 +1483,10 @@ class JschSshClient
                     // 拖到秒级 = 等不到 OPEN_CONFIRMATION (服务器还没把目标连上/会话读线程被堵),
                     // 与"服务器秒回 OPEN_FAILURE (目标不可达)"是两回事: 后者是目标问题, 不该怪会话。
                     // 这个区分只能靠耗时 —— JSch 对两种情况抛的是**同一条** "channel is not opened."
-                    if (elapsedMs >= OPEN_STALL_MIN_MS) pooled.lastOpenStallAtMs = System.currentTimeMillis()
+                    if (elapsedMs >= OPEN_STALL_MIN_MS) {
+                        pooled.lastOpenStallAtMs = System.currentTimeMillis()
+                        stalledAny = true
+                    }
                     Log.w(TAG, "createDirectChannel failed: $host:$port", e)
                     lastError = e
                     // 区分「SSH 会话坏了」与「这一个 channel 打不开」:
@@ -1509,10 +1534,26 @@ class JschSshClient
                 pool.joinToString(prefix = "[", postfix = "]") {
                     "conn=${it.session.isConnected}/healthy=${it.healthy}"
                 }
-            VpnController.appLogThrottled(
-                "SSH 通道打开失败 · $host:$port — ${lastError?.message} · 试了 $attempted/${candidates.size} 个候选" +
+            val detail =
+                "${lastError?.message} · 试了 $attempted/${candidates.size} 个候选" +
                     " · 末次耗时 ${lastAttemptMs}ms · 在途通道 ${pool.sumOf { it.activeChannels.get() }}" +
-                    " (pool: $poolState)",
+                    " (pool: $poolState)"
+            if (ChannelOpenBudget.isFastRejectOnAllCandidates(attempted, candidates.size, stalledAny)) {
+                // 每个候选都是 RTT 级被拒 = 服务器立刻回 CHANNEL_OPEN_FAILURE, 目标**在服务器上**
+                // 连不上/解析不出来 —— 假 IP 模式下客户端拿到 198.18.x.x 照常建连, 而真实 DNS
+                // 本该回 NXDOMAIN (真机: `update.kiwibrowser.com.unused`, 三个候选全 124ms 秒拒)。
+                // 这是"目标不存在", 不是本栈故障 → INFO, 不进「故障归因」把真故障淹掉。
+                // 系统性拒绝 (sshd 关掉 AllowTcpForwarding 之类) 仍能从 `SSH 通道统计` 的
+                // 目标层失败计数与「所有域名一起失败」看出来。
+                VpnController.appLogThrottled(
+                    "远端不解析该目标 (域名可能不存在) · $host:$port — $detail",
+                    level = LogLevel.INFO,
+                    throttleKey = "远端不解析该目标",
+                )
+                return null
+            }
+            VpnController.appLogThrottled(
+                "SSH 通道打开失败 · $host:$port — $detail",
                 level = LogLevel.ERROR,
                 throttleKey = "SSH 通道打开失败",
             )

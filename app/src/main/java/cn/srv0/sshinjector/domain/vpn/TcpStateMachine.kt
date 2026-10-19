@@ -969,9 +969,14 @@ class TcpStateMachine(
         if (repVer2 != 0x05 || rep != 0x00) {
             Log.e(TAG, "SOCKS5 CONNECT failed: rep=$rep")
             // 应用内可见: rep=3 是"假 IP 映射失效"的经典现场 (下载卡 0%), 节流防 Play 重试刷屏
-            val detail = if (rep == 0x03) "目标映射失效(0x03), DNS 映射可能已被 LRU 回收" else "rep=$rep"
+            val detail =
+                when (rep) {
+                    0x03 -> "目标映射失效(0x03), DNS 映射可能已被 LRU 回收"
+                    0x05 -> "rep=5 (远端拒绝该目标 — 域名在远端可能不存在, 或目标不可达)"
+                    else -> "rep=$rep"
+                }
             VpnController.appLogThrottled(
-                "SOCKS 连接被拒 · ${conn.dstIp.hostAddress}:${conn.dstPort} — $detail",
+                "SOCKS 连接被拒 · ${target(conn)} — $detail",
                 SOCKS_FAIL_LOG_THROTTLE_MS,
                 level = LogLevel.WARNING,
                 throttleKey = "SOCKS 连接被拒",
