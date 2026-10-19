@@ -10,6 +10,11 @@
 
 ## 1. ③ 远端解析开关 (本轮完整落地)
 
+> ⚠️ **机制段已更新 (v1.2.7, 2026-10-19 真机定案)**: §1.1 契约 #2 与 §1.2 里"exec `getent ahosts`"
+> 的描述**已被真机推翻** —— 加固过的服务器对 exec 恒给空输出 (`ForceCommand /bin/false` / chroot +
+> `nologin`), 实测服务器就是这样。现在远端腿 = 池内会话 `direct-tcpip` 到公共 DNS (53/TCP) 自己问。
+> **完整取证、改动清单与判据见 §4**。其余契约 (#1、#3~#11) 不变。
+
 ### 1.1 冻结契约 (直接来自设计 §7.2 / §7.3, 不再议)
 
 | # | 契约 | 落地位置 |
@@ -144,4 +149,69 @@
 - 真机 (清单 S16): 连上 VPN → 浏览几个 App (浏览器/应用商店) → 统计页出现「应用」列且是**真实应用名**;
   快照资源节出现 `UID 归属 命中 H/Q 查询` 且 `H > 0` (H==0 且 Q>0 = 该设备拿不到归属, 回报那一节);
   断开后**不得**出现 `UID 归属 不可用` / 反复 `UID 归属反查被平台拒绝` (窗口化应只出一次)。
+
+---
+
+## 4. v1.2.6 真机回灌 → v1.2.7 修复 (2026-10-19)
+
+> 用户回报的 v1.2.6 日志暴露四处问题, 本轮全部处理;**每一条都有"日志指纹 → 根因 → 改法"**。
+
+### 4.1 ③ 远端解析: exec 机制在加固服务器上永远拿不到输出 (改机制)
+
+- **日志指纹**: `远端解析不可用 · <域名> — 已回退本地视角 (exec 不可用或会话池无活口)` 多次出现,
+  而**同期**快照是 `SSH 会话 3/3 (健康 3, 可疑 0)`, 且耗时 <1s (秒级、非黑洞)。
+- **根因 (服务器侧取证)**: 实测服务器 `/etc/ssh/sshd_config.d/socks-proxy.conf`:
+  ```
+  Match User sproxy
+      ChrootDirectory /home/sproxy/chroot
+      AllowTcpForwarding yes
+      ForceCommand /bin/false     ← exec 请求被替换成 /bin/false: 无输出、exit 1
+      PermitTTY no
+  ```
+  本应用向导生成的 Match 块同理 (chroot + `nologin` 账号 = chroot 里没有 shell, exec 起不来)。
+  也就是说: **exec 不可用不是"某些服务器"的例外, 而是"加固过的服务器"的常态**, 而
+  `AllowTcpForwarding yes` 恰好说明 **direct-tcpip 才是被允许的那条路** (整个数据面本来就靠它)。
+- **改法**: 远端腿改为池内会话开 `direct-tcpip` 到公共 DNS (`1.1.1.1` → `8.8.8.8` →
+  `2606:4700:4700::1111`), 自己组 DNS over TCP 报文 (RFC 1035 §4.2.2: 2 字节长度前缀 + 报文),
+  解析 A/AAAA 应答。总预算 5s + 单候选 1.5s + `isSaturated()` 预检 + 单飞不变。
+  - 通道姿势**照抄数据面 `createDirectChannel`** (`setInput/OutputStream(null)` + `getInputStream()/getOutputStream()`),
+    **不能**用 exec 那套 `setOutputStream(BAOS)`; 通道 `finally { disconnect() }` 且 `activeChannels` 配对增减;
+  - 顺序即答案 (不重排 v4/v6), 上限 8; 结果形态与本地腿一致 (`InetAddress.hostAddress`);
+  - 三态不变, 但 `Unavailable`/`Failed` 现在**带人话成因** (`detail`), 直接进 INFO 文案 ——
+    无 adb 时这是唯一能判断"哪一侧不干活"的通道 (v1.2.6 的文案没有任何信息量)。
+- **顺带修掉的真 bug (本地腿)**: 真机日志
+  `本地解析查询失败 · connectivitycheck.gstatic.com (type=1) — RelativeNameException: '…' is not an
+  absolute name` —— `resolveLocally` 用 `Name.fromString(name)` 构造 QUESTION, 而域名已 `trimEnd('.')`
+  过 = 相对名 → dnsjava 直接抛异常, **一个包都没发出去** → 表现是"点解析永远解析不到 IP"。
+  改为 `absoluteName()` (`Name.fromString(host, Name.root)`), 单测锁死 (绝对名 + 尾点 + 空白/尾点收敛)。
+  这条同时影响**非 A/AAAA 查询的受保护直查** (MX/TXT)。
+
+### 4.2 ④ uid 命中率: 反查时机从"关闭时"提到"SYN 到达时"
+
+- **日志指纹**: 快照 `UID 归属 命中 5/28 → 7/79 → 7/88 → 7/105` (命中**不再增长**);
+  探针 `getConnectionOwnerUid=NO_OWNER (自测回环 uid=-1/-1, 期望 10500)`。
+- **根因**: `getConnectionOwnerUid` 查的是**内核里这条 socket 的归属**, 而连接关闭那一刻应用常已把
+  socket 销毁 —— 大量 `存活 0s` 的短连接 (HTTP/2 预热、探测请求) 一个都查不到。
+- **改法**: 反查在 `createTcpConnection` (SYN 到达) 发起, 结果缓存在 `TcpConnection.appUid`
+  (body 属性, 不是构造参数), 关闭时回写统计; 关闭**先**发生时由回调里的补写路径兜住
+  (`state == Closed` → 用同一口径的 `statsKey` 直接 `attachAppUid`)。每个客户端 socket **只查一次**。
+- **探针语义更正**: `NO_OWNER` 是**环回连接的预期假阴性** (环回不属于任何隧道, 平台不给归属),
+  **不是**"能力不可用" —— 判定 ④ 是否可用看**数据面命中率**。所以探针结果现在同时带上
+  `VpnController.appUidDiagnostics()`, 并把结论从 Toast 改成**可复制的弹窗** (真机反馈"且无法复制")。
+
+### 4.3 本轮新增/改动单测
+
+| 用例 | 锁什么 |
+|---|---|
+| `DnsInterceptorTest.resolveLocally builds an absolute question name` | 缺尾点的域名必须补成绝对名 (v1.2.6 的 `RelativeNameException` 回归锁) |
+| `RemoteLookupTest` (重写 11 例) | 线格式 2 字节前缀往返 / 绝对名 + `RD` / 类型透传 / 截断·零长·超长帧判掉 / 答案保序去重与上限 / 垃圾应答 → 空表 |
+| `DomainIpResolverTest` (2 例改名带 detail) | 三态回退路径语义不变 |
+| `TcpDomainStatsTest.a late uid callback arriving after close is still recorded` | 关闭后才回来的 uid 必须补写 (短命连接全靠这条) |
+| `AppUidProbeTest.probe surfaces the data plane hit rate` | 探针必须把数据面命中率带出来 (NO_OWNER 不是结论) |
+
+### 4.4 本轮明确不做
+
+- 不做远端解析结果缓存到 `DnsInterceptor` / 不用于隧道决策 (纯展示, 与 P0/P1 一致);
+- 不把 uid 塞进 CSV (列序是冻结契约)、不做按 uid 的隧道决策;
+- 不加"记录应用归属"开关 (拿不到就少一列, 无需开关)。
 

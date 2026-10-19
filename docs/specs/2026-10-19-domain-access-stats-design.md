@@ -50,7 +50,7 @@
 | 域名代理名单 | `DomainListManager` (`DomainListManager.kt`) + `settingsDataStore.domainListUrl` (`:123`) | 关联动作 B 的目标。`matches(host)==true` → DOMAIN_SPLIT 下走隧道 |
 | 设置页骨架 | `SettingsSection` / `SettingsRow` (`SettingsScreen.kt:574`,`:606`) + `NavGraph` (`NavGraph.kt:63-81`) | 入口与页面挂载 |
 | 设置持久化 | `SettingsDataStore` (DataStore Preferences) | 存"统计生成的规则"叠加层、开关、保留策略 |
-| 远端命令 | `RemoteCommandExecutor` + `JschSshClient.verifySessionRoundTrip` (会返回 `UNAVAILABLE`) | 7.2 的"按需解析真实 IP"(远端视角为**可选开关**) |
+| 远端命令 | ~~`RemoteCommandExecutor`~~ → **不用它**; 远端腿走 `JschSshClient.resolveIps` 的池内 `direct-tcpip` + DNS 53/TCP (r2 机制纠错) | 7.2 的"按需解析真实 IP"(远端视角为**可选开关**) |
 
 ### 两个"白送"的好处
 
@@ -223,29 +223,40 @@ class DomainStat(
 | 路径 | 机制 | 拿到的是 | 何时用 |
 |---|---|---|---|
 | **本地视角 (默认)** | `protect` socket 直查 (同 `ConnectivityProber` 思路) | 本机看到的 IP (国内可能被污染) | 默认动作; 零 SSH 依赖、零额外通道 |
-| 远端视角 (开关打开时) | **池内会话** exec `getent ahosts <domain>` | **VPS 出口实际会连的那个 IP** (CDN 就近节点正确) | 用户显式打开「远端解析」后 |
+| 远端视角 (开关打开时) | **池内会话** 开 `direct-tcpip` 到公共 DNS (53/TCP) 自己问 DNS | **VPS 出口实际会连的那个 IP** (CDN 就近节点正确) | 用户显式打开「远端解析」后 |
 
 开关语义: 页面顶部 `[ ] 使用远端解析 (经 SSH)`。**默认关**。
 
-> ⚠️ **机制纠错 (性能审计 §3.2)**: **不要用 `RemoteCommandExecutor.execSingleShot`** —— 它每次
-> `jsch.getSession()` + `s.connect()` 建**一整条新 SSH 会话** (`JschSshClient.kt:1345-1385`),
-> 代价 **0.4~4s** 且会在服务器侧堆积会话 (AGENTS 记录过"累积会话 → SSH connect 超时")。
-> 正确做法二选一:
-> - **① 复用池内会话**: 照抄 `verifySessionRoundTrip` (`JschSshClient.kt:853-884`) 的
->   `pooled.session.openChannel("exec")` 模板 → 一次 channel open + RTT ≈ **数十 ms**;
-> - **② 单会话批量 (更优)**: 把本页所有待解析域名合成**一条**命令
->   (`getent ahosts a; echo ---; getent ahosts b; …`) → 一次 RTT 解 N 个, 天然限流。
->
-> 两种都**不在 `SshIoDispatcher` 里**(原稿那句"与 SshIoDispatcher 同池"不成立) —— 与
-> `verifySessionRoundTrip` 一致跑 `Dispatchers.IO`。
+> ⚠️ **机制纠错 (r2, 2026-10-19 真机定案)**: 远端腿**不是** exec `getent ahosts` (初稿的错误),
+> 而是 `direct-tcpip` + DNS over TCP。原因: 加固过的服务器对 exec **永远给不出输出** ——
+> 实测服务器 `/etc/ssh/sshd_config.d/socks-proxy.conf`:
+> ```
+> Match User sproxy
+>     ChrootDirectory /home/sproxy/chroot
+>     AllowTcpForwarding yes
+>     ForceCommand /bin/false      ← 任何 exec 都被替换成 /bin/false: 无输出、exit 1
+>     PermitTTY no
+> ```
+> 本应用向导生成的 Match 块同样如此 (chroot + `nologin` 账号 = 没有 shell, exec 也跑不起来)。
+> 真机日志指纹: 池健康 `3/3`、耗时 <1s 就回退, 只有 `远端解析不可用 · … (exec 不可用或会话池无活口)`。
+> 而**同一份配置里的 `AllowTcpForwarding yes` 恰好说明 direct-tcpip 是被允许的那条路** ——
+> 整个数据面本来就靠它。于是: 池内会话开 `direct-tcpip` 到 `1.1.1.1:53` / `8.8.8.8:53` /
+> `2606:4700:4700::1111:53`, 自己组 DNS 报文 (单候选 1.5s, 总预算 5s), 拿权威 DNS 按**查询源 IP**
+> 给的就近答案 —— 这正是"VPS 出口视角"。
 
-**必须处理的前提**: exec 可能不可用 —— `verifySessionRoundTrip` 会返回
-`ROUND_TRIP_UNAVAILABLE` (OpenWrt/dropbear 常见), 且**秒级被拒**才算"不支持 exec", 慢失败是黑洞。
-所以:
-- 开关开着但 exec 不可用 → **不要报错**, 静默回退本地视角, UI 标注 `本地视角 (远端不可用)`;
-- **超时 5s** + 启动前 `isSaturated()` 预检 + **单飞** (同时只允许一个解析在跑);
+> ⚠️ **机制纠错 (性能审计 §3.2, 仍然有效)**: **不要用 `RemoteCommandExecutor.execSingleShot`** ——
+> 它每次 `jsch.getSession()` + `s.connect()` 建**一整条新 SSH 会话**, 代价 **0.4~4s** 且在服务器侧
+> 堆积会话 (AGENTS 记录过"累积会话 → SSH connect 超时")。远端腿一律复用**池内会话**, 且**不在
+> `SshIoDispatcher` 里** (那个专用池只服务数据面阻塞读写) —— 与 `verifySessionRoundTrip` 一致跑
+> `Dispatchers.IO`。
+
+**必须处理的前提**: 远端腿可能不可用 (服务器禁出网 53 / 会话池忙 / 全候选打不开), 所以:
+- 开关开着但远端不可用 → **不要报错**, 静默回退本地视角, UI 标注 `本地视角 (远端不可用)`,
+  INFO 文案必须带**人话成因** (`通道打不开 …` / `应答里没有 A/AAAA 记录 (1.1.1.1)` /
+  `查询无响应 (8.8.8.8 撑满 1500ms)`) —— 无 adb 时这是唯一能定位"哪一侧不干活"的通道;
+- **总预算 5s** + 单候选 1.5s + 启动前 `isSaturated()` 预检 + **单飞** (同时只允许一个解析在跑);
 - 结果**缓存进该条目** (`realIp`/`realIp2`), 不重复解析;
-- **绝不后台批量解析**: 即使是路径 ①, N 次往返也是 N 个 RTT 的自伤捷径 (路径 ② 才允许批量, 且仍是用户触发)。
+- **绝不后台批量解析**: N 次往返 = N 个 RTT 的自伤捷径 (只有用户触发才解析)。
 
 ### 7.3 展示纪律
 
@@ -427,7 +438,7 @@ matches(host) =
 | 内存 (UI 快照) | 峰值 ≈ 160KB 数组 + 排序临时表 | 审计 §3.1 | — |
 | trim | **只由 30s flusher 做**, 一次压回 90% | 审计 §2.4 | 计数器 `统计淘汰` |
 | 落盘 (P1) | 追 **dirty set** + 分块事务 (500 行/事务, 块间 `yield()`); **实测耗时进快照** | 审计 §3.3 (原稿 "≤200ms" 无依据, 20000 行单事务是秒级 + 写放大) | 快照 `统计落盘 Tms` |
-| 远端解析 | 池内 exec / 单会话批量; 超时 5s; 单飞 | 审计 §3.2 | 日志 `远端解析 · <域名> — Nms` |
+| 远端解析 | `JschSshClient.resolveIps` (池内会话 `direct-tcpip` → DNS 53/TCP); 总预算 5s + 单候选 1.5s; 单飞 | 审计 §3.2 + r2 机制纠错 (exec 恒被 `ForceCommand /bin/false` 吃掉) | 日志 `远端解析 · <域名> — Nms · N 个 IP (S… · <DNS>)` |
 | UDP 归属 (P2) | 逐包 +1 CHM (与既有 `merge` 同量级), 建议**每流首次**计数 | 审计 §2.5 先例 | 现有 `UDP 丢弃` 节 |
 | 断电/被杀 | 丢失 ≤ 30s 数据 (P1) | — | 可接受 |
 
