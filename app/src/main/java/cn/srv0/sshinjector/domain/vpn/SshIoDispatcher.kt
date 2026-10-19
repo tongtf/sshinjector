@@ -23,7 +23,7 @@ import javax.inject.Singleton
  * - allowCoreThreadTimeOut: 所有空闲线程 60s 后回收(含 core), 完全空闲回到 0
  */
 @Singleton
-class SshIoDispatcher
+open class SshIoDispatcher
     @Inject
     constructor() {
         /** 饱和回执次数 (见 [diagnostics]); 声明在 [executor] 之前, 避免初始化顺序上的任何疑义。 */
@@ -36,8 +36,11 @@ class SshIoDispatcher
          * 线程池是否已饱和 (活跃线程数达到上限)。
          * 调用方 (如 SOCKS5 eventLoop) 在派发阻塞任务前检查, 避免 CallerRunsPolicy
          * 把阻塞 SSH 操作回执到 eventLoop 线程冻结整个代理。
+         *
+         * `open`: 唯一的测试替身入口 —— 池满需要真起 128 条线程, 单测里不现实;
+         * `DomainIpResolverTest` 用它把"池饱和 → 让位回退本地"这条分支变成确定性断言。
          */
-        fun isSaturated(): Boolean = executor.activeCount >= MAX_THREADS
+        open fun isSaturated(): Boolean = executor.activeCount >= MAX_THREADS
 
         /**
          * SSH IO 线程池资源快照 (周期日志用)。

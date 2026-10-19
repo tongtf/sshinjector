@@ -5,6 +5,8 @@ import android.util.Log
 import cn.srv0.sshinjector.data.local.dao.ServerDao
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.usecase.VpnController
+import cn.srv0.sshinjector.domain.vpn.RemoteDomainResolver
+import cn.srv0.sshinjector.domain.vpn.RemoteResolveOutcome
 import cn.srv0.sshinjector.domain.vpn.SshChannelFactory
 import cn.srv0.sshinjector.domain.vpn.TunnelChannel
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
@@ -391,7 +393,8 @@ class JschSshClient
         private val knownHostsManager: KnownHostsManager,
         private val serverDao: ServerDao,
     ) : SshChannelFactory,
-        RemoteCommandExecutor {
+        RemoteCommandExecutor,
+        RemoteDomainResolver {
         companion object {
             private const val TAG = "JschSshClient"
             private const val SESSION_POOL_SIZE = 3
@@ -422,6 +425,12 @@ class JschSshClient
             private const val ROUND_TRIP_SLOW_FAIL_MS = 2500L
 
             private const val CHANNEL_WINDOW_SIZE = 8 * 1024 * 1024
+
+            /** 远端解析 exec 的输出上限 (防服务器灌爆内存; getent 的正常输出只有几百字节)。 */
+            private const val REMOTE_RESOLVE_MAX_OUTPUT = 64 * 1024
+
+            /** 远端解析 exec 的关闭轮询间隔 (阻塞线程, 与回程中继的刻意 sleep 同性质)。 */
+            private const val REMOTE_RESOLVE_POLL_MS = 20L
 
             /**
              * JSch 每条 Session 只有**一个读线程** (`Session.run`), 它把 CHANNEL_DATA
@@ -884,21 +893,165 @@ class JschSshClient
         }
 
         /**
-         * 等往返探活结果: 超时返回 [ROUND_TRIP_FAILED], 且无论成功/超时都取消未完成的探活协程。
+         * 等一个阻塞探活/查询的结果: 超时返回 **null**, 且无论成功/超时都取消未完成的协程。
          *
-         * exec 阻塞在 socket 上, `withTimeout` 中断不了阻塞调用, 但必须取消 `probe` (Job 取消可打断
+         * exec/查询阻塞在 socket 上, `withTimeout` 中断不了阻塞调用, 但必须取消 `probe` (Job 取消可打断
          * 挂起中的等待) 避免协程句柄长期留存; 阻塞的 IO 线程在 socket 超时后自会结束。
          * 抽为独立函数便于单测用短超时锁死"超时必取消"语义 (无需等真实 10s 超时)。
          */
-        internal suspend fun awaitProbeOrCancel(
-            probe: Deferred<Int>,
+        internal suspend fun <T> awaitOrCancel(
+            probe: Deferred<T>,
             timeoutMs: Long,
-        ): Int =
+        ): T? =
             try {
-                withTimeoutOrNull(timeoutMs) { probe.await() } ?: ROUND_TRIP_FAILED
+                withTimeoutOrNull(timeoutMs) { probe.await() }
             } finally {
                 if (!probe.isCompleted) probe.cancel()
             }
+
+        /** 往返探活版本: 超时归 [ROUND_TRIP_FAILED]。 */
+        internal suspend fun awaitProbeOrCancel(
+            probe: Deferred<Int>,
+            timeoutMs: Long,
+        ): Int = awaitOrCancel(probe, timeoutMs) ?: ROUND_TRIP_FAILED
+
+        /**
+         * 远端解析 (域名统计「使用远端解析」开关): 复用**池内已有会话**的 exec 通道跑
+         * `getent ahosts <域名>`, 拿到 VPS 出口实际会连的 IP (设计 §7.2)。
+         *
+         * **绝不用** `execSingleShot`: 那个实现每次 `getSession()+connect()` 建**一整条新 SSH 会话**
+         * (0.4~4s), 且会在服务器侧堆积会话 (AGENTS 记录过"累积会话 → SSH connect 超时")。
+         * 也不在 `SshIoDispatcher` 上跑 —— 那个专用池只服务数据面阻塞读写。
+         *
+         * 三态 (见 [RemoteResolveOutcome]): 秒级被拒 = 服务器禁用 exec → 换个会话再试, 全都快失败才
+         * Unavailable; 撑满预算 = 黑洞 → 立刻 Failed (不拿别的会话陪跑)。**任何异常都不外抛**,
+         * 调用方一律回退本地视角且不报错。
+         *
+         * 纯观测动作: 不开 direct-tcpip、不碰隧道状态、不进 DNS 缓存。
+         */
+        override suspend fun resolveIps(
+            domain: String,
+            timeoutMs: Long,
+        ): RemoteResolveOutcome {
+            // 域名来自 DNS 应答 (也就是网络, 不可信): 不合法就绝不拼进命令 (命令注入防护)
+            if (!RemoteLookup.isValidHost(domain)) {
+                Log.w(TAG, "resolveIps: rejected unsafe host")
+                return RemoteResolveOutcome.Unavailable
+            }
+            if (pool.isEmpty()) return RemoteResolveOutcome.Unavailable
+            val now = System.currentTimeMillis()
+            val candidates =
+                pool
+                    .toList()
+                    .filter { it.session.isConnected && it.healthy }
+                    // 与 createDirectChannel 同一判据: 刚出过问题的会话排最后, 别在它身上反复烧预算
+                    .sortedWith(
+                        compareBy(
+                            { ChannelOpenBudget.isRecentlyStalled(it.lastOpenStallAtMs, now) },
+                            { it.activeChannels.get() },
+                        ),
+                    )
+            if (candidates.isEmpty()) return RemoteResolveOutcome.Unavailable
+
+            val deadlineAt = System.currentTimeMillis() + timeoutMs
+            val command = RemoteLookup.command(domain)
+            var fastRejected = false
+            for (pooled in candidates) {
+                val left = deadlineAt - System.currentTimeMillis()
+                if (left <= 0) break
+                val probe = pooled.scope.async(Dispatchers.IO) { runExecLookup(pooled, command, left) }
+                when (val outcome = awaitOrCancel(probe, left)) {
+                    null -> return RemoteResolveOutcome.Failed // 撑满预算没回 = 黑洞
+                    is RemoteResolveOutcome.Ok -> return outcome
+                    RemoteResolveOutcome.Unavailable -> fastRejected = true
+                    RemoteResolveOutcome.Failed -> return RemoteResolveOutcome.Failed
+                }
+            }
+            return if (fastRejected) RemoteResolveOutcome.Unavailable else RemoteResolveOutcome.Failed
+        }
+
+        /**
+         * 一次 exec 查询 (**阻塞**: 只允许在 `Dispatchers.IO` 上跑, 与 [verifySessionRoundTrip] 一致)。
+         *
+         * 读输出用 `setOutputStream(有界流)`: JSch 的读线程直接写进我们的流。**不能**
+         * `setOutputStream(null)` 后再手工读 —— 那会走通道默认的 32KB `PipedOutputStream`, 我们读慢一点
+         * 就阻塞会话的**唯一读线程**, 整条 SSH 会话 (含所有数据通道) 一起冻结 (AGENTS「JSch 一条 Session
+         * 只有一个读线程」)。
+         */
+        private fun runExecLookup(
+            pooled: PooledSession,
+            command: String,
+            timeoutMs: Long,
+        ): RemoteResolveOutcome {
+            var channel: ChannelExec? = null
+            val startedAt = System.currentTimeMillis()
+            return try {
+                channel = pooled.session.openChannel("exec") as ChannelExec
+                channel.setCommand(command)
+                channel.setInputStream(null)
+                val sink = BoundedSink(REMOTE_RESOLVE_MAX_OUTPUT)
+                channel.setOutputStream(sink)
+                channel.setErrStream(ByteArrayOutputStream())
+                channel.connect(timeoutMs.toInt())
+                val closeAt = System.currentTimeMillis() + timeoutMs
+                while (!channel.isClosed && System.currentTimeMillis() < closeAt) {
+                    Thread.sleep(REMOTE_RESOLVE_POLL_MS)
+                }
+                val exitStatus = channel.exitStatus
+                val ips = RemoteLookup.parseGetent(sink.text())
+                val elapsedMs = System.currentTimeMillis() - startedAt
+                if (ips.isEmpty()) {
+                    // 空输出 = getent 不存在 (exit 127) / 无记录 —— 都算"远端给不出答案", 回退本地
+                    Log.i(TAG, "remote resolve empty: exit=$exitStatus elapsed=${elapsedMs}ms")
+                    RemoteResolveOutcome.Unavailable
+                } else {
+                    RemoteResolveOutcome.Ok(
+                        ips = ips,
+                        elapsedMs = elapsedMs,
+                        sessionId = "S" + Integer.toHexString(System.identityHashCode(pooled.session)),
+                    )
+                }
+            } catch (e: Exception) {
+                // 与往返探活同一判据: 撑到慢失败阈值 = 服务器没回应 (黑洞); 秒级被拒 = 不支持 exec
+                val stalled = System.currentTimeMillis() - startedAt >= ROUND_TRIP_SLOW_FAIL_MS
+                Log.w(TAG, "remote resolve failed (stalled=$stalled): ${e.message}")
+                if (stalled) RemoteResolveOutcome.Failed else RemoteResolveOutcome.Unavailable
+            } finally {
+                // 成功/异常都必须断开: exec 通道残留在 JSch 静态 Channel.pool 里 = 泄漏 + 持续灌管道
+                runCatching { channel?.disconnect() }
+            }
+        }
+
+        /**
+         * 有上限的输出流 (JSch 读线程写, 我们的 IO 线程读 → 必须同步)。
+         * 超过上限直接丢弃多余字节 (正常 `getent` 输出只有几百字节; 上限挡的是被灌爆内存)。
+         */
+        private class BoundedSink(
+            private val limit: Int,
+        ) : java.io.OutputStream() {
+            private val buf = ByteArrayOutputStream()
+            private val single = ByteArray(1)
+
+            @Synchronized
+            override fun write(b: Int) {
+                single[0] = b.toByte()
+                write(single, 0, 1)
+            }
+
+            @Synchronized
+            override fun write(
+                b: ByteArray,
+                off: Int,
+                len: Int,
+            ) {
+                val room = limit - buf.size()
+                if (room <= 0 || len <= 0) return
+                buf.write(b, off, minOf(len, room))
+            }
+
+            @Synchronized
+            fun text(): String = buf.toString(Charsets.UTF_8.name())
+        }
 
         /**
          * 一次心跳确认会话写路径是否可用。

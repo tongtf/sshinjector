@@ -52,6 +52,12 @@ class SettingsDataStore
             private val KEY_DOMAIN_LIST_REMOVED_FROM_STATS =
                 stringSetPreferencesKey("domain_list_removed_from_stats")
 
+            /**
+             * 域名统计「使用远端解析 (经 SSH)」开关 (**默认关**, 设计 §7.2/§15 已定)。
+             * 默认值由读取方 (`DomainStatsViewModel`) 补 false —— 无键 = 关。
+             */
+            private val KEY_USE_REMOTE_RESOLVE = booleanPreferencesKey("use_remote_resolve")
+
             const val DEFAULT_DOMAIN_LIST_URL = "https://gitlab.com/gfwlist/gfwlist/raw/master/gfwlist.txt"
 
             // 广告规则远程刷新间隔默认值(分钟); 实际取值由 AdBlockManager 约束在 [MIN, MAX]
@@ -151,6 +157,11 @@ class SettingsDataStore
         val domainListRemovedFromStats: Flow<Set<String>> =
             context.dataStore.data
                 .map { it[KEY_DOMAIN_LIST_REMOVED_FROM_STATS] ?: emptySet() }
+
+        /** 「使用远端解析」开关 (无键 = 关; 默认关是设计 §15 的已定项)。 */
+        val useRemoteResolve: Flow<Boolean> =
+            context.dataStore.data
+                .map { it[KEY_USE_REMOTE_RESOLVE] ?: false }
 
         suspend fun setAutoConnect(enabled: Boolean) {
             context.dataStore.edit { it[KEY_AUTO_CONNECT] = enabled }
@@ -291,6 +302,17 @@ class SettingsDataStore
                     it.remove(KEY_DOMAIN_LIST_REMOVED_FROM_STATS)
                 } else {
                     it[KEY_DOMAIN_LIST_REMOVED_FROM_STATS] = domains
+                }
+            }
+        }
+
+        /** 「使用远端解析」开关: 关 = 移除该键 (与"默认关"同义, 不留脏键)。 */
+        suspend fun setUseRemoteResolve(enabled: Boolean) {
+            context.dataStore.edit {
+                if (enabled) {
+                    it[KEY_USE_REMOTE_RESOLVE] = true
+                } else {
+                    it.remove(KEY_USE_REMOTE_RESOLVE)
                 }
             }
         }

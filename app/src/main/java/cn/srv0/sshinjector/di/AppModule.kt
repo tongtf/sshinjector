@@ -6,6 +6,7 @@ import cn.srv0.sshinjector.data.remote.config.ServerProvisioner
 import cn.srv0.sshinjector.data.remote.ssh.JschSshClient
 import cn.srv0.sshinjector.data.remote.ssh.RemoteCommandExecutor
 import cn.srv0.sshinjector.domain.model.ServerProvisionerContract
+import cn.srv0.sshinjector.domain.vpn.RemoteDomainResolver
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -33,6 +34,10 @@ object AppModule {
     @Provides
     @Singleton
     fun provideRemoteCommandExecutor(client: JschSshClient): RemoteCommandExecutor = client
+
+    @Provides
+    @Singleton
+    fun provideRemoteDomainResolver(client: JschSshClient): RemoteDomainResolver = client
 
     @Provides
     @Singleton

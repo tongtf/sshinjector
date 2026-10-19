@@ -28,6 +28,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -86,6 +87,7 @@ fun DomainStatsScreen(
     val msgExportFailed = stringResource(R.string.domain_stats_export_failed)
     val msgResolveFailed = stringResource(R.string.domain_stats_resolve_failed)
     val msgIpUnavailable = stringResource(R.string.domain_stats_ip_unavailable)
+    val msgRemoteUnavailable = stringResource(R.string.domain_stats_remote_unavailable)
 
     LaunchedEffect(state.message) {
         val code = state.message ?: return@LaunchedEffect
@@ -96,6 +98,7 @@ fun DomainStatsScreen(
                 DomainStatsViewModel.MSG_EXPORT_FAILED -> msgExportFailed
                 DomainStatsViewModel.MSG_RESOLVE_FAILED -> msgResolveFailed
                 DomainStatsViewModel.MSG_IP_UNAVAILABLE -> msgIpUnavailable
+                DomainStatsViewModel.MSG_REMOTE_UNAVAILABLE -> msgRemoteUnavailable
                 else -> null
             }
         if (text != null) Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
@@ -165,6 +168,33 @@ fun DomainStatsScreen(
                     .fillMaxSize()
                     .padding(innerPadding),
         ) {
+            // 远端解析开关 (设计 §9.2 顶部开关区; 默认关): 打开后"解析真实 IP"走池内会话 exec
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.domain_stats_use_remote_resolve),
+                    fontSize = 13.sp,
+                    modifier = Modifier.weight(1f),
+                )
+                Switch(
+                    checked = state.useRemoteResolve,
+                    onCheckedChange = { viewModel.setUseRemoteResolve(it) },
+                )
+            }
+            if (state.useRemoteResolve && state.remoteUnavailable) {
+                Text(
+                    text = stringResource(R.string.domain_stats_remote_unavailable),
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
+
             OutlinedTextField(
                 value = state.query,
                 onValueChange = { viewModel.setQuery(it) },
@@ -298,7 +328,7 @@ private fun DomainStatCard(
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                text = row.realIp ?: EMPTY_IP,
+                text = ipText(row),
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -375,6 +405,15 @@ private fun summaryText(row: DomainStatSnapshot): String {
         "$recent ${formatTime(row.lastSeenAt)}"
 }
 
+/**
+ * 真实 IP 展示 (设计 §7.3): 条目只留两槽, 多个地址时显示首个 + `+N` —— 让"截断"看得见。
+ * `+N` 是语言无关的数字后缀, 不进 i18n。
+ */
+private fun ipText(row: DomainStatSnapshot): String {
+    val first = row.realIp ?: return EMPTY_IP
+    return if (row.realIpTotal > 1) "$first +${row.realIpTotal - 1}" else first
+}
+
 @Composable
 private fun DetailContent(
     row: DomainStatSnapshot,
@@ -382,7 +421,7 @@ private fun DetailContent(
     onResolve: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        DetailLine(label = "IP", value = row.realIp ?: EMPTY_IP)
+        DetailLine(label = "IP", value = ipText(row))
         DetailLine(label = "IP2", value = row.realIp2 ?: EMPTY_IP)
         DetailLine(
             label = stringResource(R.string.domain_stats_label_failed),

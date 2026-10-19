@@ -349,6 +349,8 @@ SOFTWARE.</string>
     <string name="domain_stats_export_failed">导出失败</string>
     <string name="domain_stats_resolve_failed">解析失败</string>
     <string name="domain_stats_ip_unavailable">未解析到真实 IP</string>
+    <string name="domain_stats_use_remote_resolve">使用远端解析 (经 SSH)</string>
+    <string name="domain_stats_remote_unavailable">本地视角 (远端不可用)</string>
     <string name="domain_stats_count">已记录 %1$d/%2$d(淘汰 %3$d)</string>
     <string name="domain_stats_label_up">上行</string>
     <string name="domain_stats_label_down">下行</string>

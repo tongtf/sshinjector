@@ -26,6 +26,11 @@ data class DomainStatSnapshot(
     val lastPort: Int,
     val realIp: String?,
     val realIp2: String?,
+    /**
+     * 最近一次解析拿到的**地址总数** (只留两槽, 这个数让"截断"在 UI 上可见 —— 设计 §7.3 的 `+N`)。
+     * 0 = 从未解析过 / 解析无结果。
+     */
+    val realIpTotal: Int = 0,
 )
 
 /**
@@ -65,6 +70,7 @@ class DomainStatsStore
             var lastPort: Int = 0
             var realIp: String? = null
             var realIp2: String? = null
+            var realIpTotal: Int = 0
 
             /** 只在持有本对象监视器 (`synchronized(this)`) 时调用。 */
             @Suppress("LongParameterList") // 热路径累加器: 包成 config 对象会在每次连接关闭时多一次分配
@@ -131,22 +137,22 @@ class DomainStatsStore
         /**
          * 真实 IP 标注: 只更新**已存在**的条目 (不存在时什么都不做, 不新建 —— 保持
          * `connCount ≥ 1` = 真访问过的语义, 也避免把"解析了但没连"的域名灌进表)。
-         * 去重; `realIp` 空则填 `realIp`, 否则填 `realIp2`, 再多**丢弃** (不引 Set)。
+         *
+         * **整对覆盖** (而不是往空槽里追加): 一次解析就是一次刷新, 结果要么全换要么不动 ——
+         * 追加语义会让第二次解析的第二个地址永远进不来 (两槽早被上一次填满)。
+         * 只留前两槽 (不引 `Set`), 但**无论落几槽都记 [DomainStatSnapshot.realIpTotal] = 总数**,
+         * 让截断在 UI 上看得见 (设计 §7.3 `+N`)。只锁内读写 (32 位 ABI 防撕裂)。
          */
         fun attachRealIp(
             domain: String,
-            ip: String,
+            ips: List<String>,
         ) {
+            if (ips.isEmpty()) return
             val entry = map[domain] ?: return
             synchronized(entry) {
-                // 去重 + 只留两个槽: realIp 空则填 realIp, 否则 realIp2 空则填 realIp2, 再多的丢弃 (不引 Set)。
-                val first = entry.realIp
-                val second = entry.realIp2
-                if (first == null) {
-                    entry.realIp = ip
-                } else if (first != ip && second == null) {
-                    entry.realIp2 = ip
-                }
+                entry.realIp = ips.getOrNull(0)
+                entry.realIp2 = ips.getOrNull(1)
+                entry.realIpTotal = ips.size
             }
         }
 
@@ -168,6 +174,7 @@ class DomainStatsStore
                             lastPort = entry.lastPort,
                             realIp = entry.realIp,
                             realIp2 = entry.realIp2,
+                            realIpTotal = entry.realIpTotal,
                         )
                     },
                 )

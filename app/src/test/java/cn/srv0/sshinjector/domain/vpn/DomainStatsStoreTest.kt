@@ -66,27 +66,52 @@ class DomainStatsStoreTest {
     @Test
     fun `attachRealIp does not create a missing entry`() {
         val store = DomainStatsStore()
-        store.attachRealIp("ghost.com", "1.1.1.1")
+        store.attachRealIp("ghost.com", listOf("1.1.1.1"))
         assertEquals(0, store.size())
     }
 
     @Test
-    fun `attachRealIp dedupes and keeps at most two ips`() {
+    fun `attachRealIp keeps two slots and exposes the truncation via realIpTotal`() {
         val store = DomainStatsStore()
         store.recordClose("a.com", false, 443, 0L, 0L, 0L, CloseKind.REMOTE_EOF, 0L)
 
-        store.attachRealIp("a.com", "1.1.1.1")
-        store.attachRealIp("a.com", "1.1.1.1") // 去重
+        // 单地址: 只占第一槽, 没有截断 (+0 不显示)
+        store.attachRealIp("a.com", listOf("1.1.1.1"))
         val one = store.snapshot().single()
         assertEquals("1.1.1.1", one.realIp)
         assertNull(one.realIp2)
+        assertEquals(1, one.realIpTotal)
 
-        store.attachRealIp("a.com", "2.2.2.2")
-        store.attachRealIp("a.com", "3.3.3.3") // 第三个被丢弃
-        store.attachRealIp("a.com", "2.2.2.2") // 去重
-        val two = store.snapshot().single()
-        assertEquals("1.1.1.1", two.realIp)
-        assertEquals("2.2.2.2", two.realIp2)
+        // 三地址: 只留前两槽, 但 realIpTotal = 3 → UI 显示 "1.1.1.1 +2"
+        store.attachRealIp("a.com", listOf("1.1.1.1", "2.2.2.2", "3.3.3.3"))
+        val three = store.snapshot().single()
+        assertEquals("1.1.1.1", three.realIp)
+        assertEquals("2.2.2.2", three.realIp2)
+        assertEquals(3, three.realIpTotal)
+    }
+
+    @Test
+    fun `attachRealIp replaces the previous pair instead of appending to empty slots`() {
+        val store = DomainStatsStore()
+        store.recordClose("a.com", false, 443, 0L, 0L, 0L, CloseKind.REMOTE_EOF, 0L)
+
+        store.attachRealIp("a.com", listOf("1.1.1.1", "2.2.2.2"))
+        // 第二次解析 (远端视角可能给出不同的 CDN 节点) 必须整对覆盖 —— 追加语义会让第二个地址永远进不来
+        store.attachRealIp("a.com", listOf("9.9.9.9", "8.8.8.8"))
+        val s = store.snapshot().single()
+        assertEquals("9.9.9.9", s.realIp)
+        assertEquals("8.8.8.8", s.realIp2)
+        assertEquals(2, s.realIpTotal)
+    }
+
+    @Test
+    fun `attachRealIp ignores an empty result`() {
+        val store = DomainStatsStore()
+        store.recordClose("a.com", false, 443, 0L, 0L, 0L, CloseKind.REMOTE_EOF, 0L)
+        store.attachRealIp("a.com", emptyList())
+        val s = store.snapshot().single()
+        assertNull(s.realIp)
+        assertEquals(0, s.realIpTotal)
     }
 
     @Test

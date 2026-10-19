@@ -7,8 +7,10 @@ import android.provider.MediaStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cn.srv0.sshinjector.data.local.DomainListManager
+import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
+import cn.srv0.sshinjector.domain.usecase.DomainIpResolver
+import cn.srv0.sshinjector.domain.usecase.ResolvePath
 import cn.srv0.sshinjector.domain.usecase.VpnController
-import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
 import cn.srv0.sshinjector.domain.vpn.DomainStatSnapshot
 import cn.srv0.sshinjector.domain.vpn.DomainStatsCsv
 import cn.srv0.sshinjector.domain.vpn.DomainStatsStore
@@ -73,6 +75,10 @@ data class DomainStatsUiState(
     val loading: Boolean = false,
     val resolving: String? = null,
     val message: String? = null,
+    /** 「使用远端解析 (经 SSH)」开关 (默认关, 记忆到 DataStore)。 */
+    val useRemoteResolve: Boolean = false,
+    /** 开关打开但远端不可用 → 页面标注 `本地视角 (远端不可用)` (设计 §7.2)。 */
+    val remoteUnavailable: Boolean = false,
     /** 域名 (已规范化) → 名单状态。只收录**非 IP 字面量**行。 */
     val marks: Map<String, RowListMarks> = emptyMap(),
     /** 待确认建议条数 (底部条 / 设置页徽标)。 */
@@ -97,10 +103,11 @@ class DomainStatsViewModel
     @Inject
     constructor(
         private val store: DomainStatsStore,
-        private val dnsInterceptor: DnsInterceptor,
         private val suggestionStore: StatsSuggestionStore,
         private val domainListManager: DomainListManager,
         private val vpnController: VpnController,
+        private val domainIpResolver: DomainIpResolver,
+        private val settingsDataStore: SettingsDataStore,
     ) : ViewModel() {
         private val _state = MutableStateFlow(DomainStatsUiState())
         val state: StateFlow<DomainStatsUiState> = _state.asStateFlow()
@@ -131,6 +138,12 @@ class DomainStatsViewModel
                         synchronized(membershipLock) { membership = computed }
                         publishMarks()
                     }
+                }
+            }
+            // 「使用远端解析」开关: 以 DataStore 为单一真相 (开关只写库, 状态由这里回流)
+            viewModelScope.launch {
+                settingsDataStore.useRemoteResolve.collect { enabled ->
+                    _state.update { it.copy(useRemoteResolve = enabled) }
                 }
             }
         }
@@ -231,31 +244,57 @@ class DomainStatsViewModel
         }
 
         /**
-         * 对单个域名做**本地视角**解析 (受保护 socket, 不经隧道), 结果回写统计条目并刷新。
-         * 单飞: 已有解析在跑时直接忽略。`resolveLocally` 是阻塞调用, 必须离开主线程。
+         * 对单个域名解析真实 IP, 结果回写统计条目并刷新。
+         *
+         * 路径由页面开关决定 (设计 §7.2): 默认**本地视角** (受保护 socket 直查); 开关打开时先走远端
+         * (池内会话 exec `getent ahosts`), 远端不可用则**静默回退本地**并在页面标注
+         * `本地视角 (远端不可用)` —— 远端腿的裁决/日志全在 [DomainIpResolver] 里。
+         *
+         * 单飞: 已有解析在跑时直接忽略 (同时只允许一个解析)。两条腿都是阻塞调用, 由 resolver 保证
+         * 离开调用线程。
          */
         fun resolveRealIp(domain: String) {
             if (_state.value.resolving != null) return
             _state.update { it.copy(resolving = domain) }
             viewModelScope.launch {
                 try {
-                    val ips = withContext(Dispatchers.IO) { dnsInterceptor.resolveLocally(domain) }
-                    if (ips.isEmpty()) {
-                        _state.update { it.copy(resolving = null, message = MSG_IP_UNAVAILABLE) }
+                    val result = domainIpResolver.resolve(domain, _state.value.useRemoteResolve)
+                    val fellBack = result.path == ResolvePath.LOCAL_FALLBACK
+                    if (result.ips.isEmpty()) {
+                        _state.update {
+                            it.copy(
+                                resolving = null,
+                                message = MSG_IP_UNAVAILABLE,
+                                remoteUnavailable = fellBack,
+                            )
+                        }
                         return@launch
                     }
                     withContext(Dispatchers.Default) {
-                        for (ip in ips) store.attachRealIp(domain, ip)
-                    }
-                    withContext(Dispatchers.Default) {
+                        store.attachRealIp(domain, result.ips)
                         allRows = store.snapshot()
                         publishRows()
                     }
-                    _state.update { it.copy(resolving = null) }
+                    _state.update {
+                        it.copy(
+                            resolving = null,
+                            message = if (fellBack) MSG_REMOTE_UNAVAILABLE else null,
+                            remoteUnavailable = fellBack,
+                        )
+                    }
                 } catch (_: Exception) {
                     _state.update { it.copy(resolving = null, message = MSG_RESOLVE_FAILED) }
                 }
             }
+        }
+
+        /**
+         * 「使用远端解析 (经 SSH)」开关 (默认关): 只写 DataStore, 页面状态由 init 的 collector 回流
+         * (单一真相, 避免两处各写一份)。切开关时清掉上一次的"远端不可用"标注 (`remoteUnavailable`)。
+         */
+        fun setUseRemoteResolve(enabled: Boolean) {
+            _state.update { it.copy(remoteUnavailable = false) }
+            viewModelScope.launch { settingsDataStore.setUseRemoteResolve(enabled) }
         }
 
         /**
@@ -437,5 +476,8 @@ class DomainStatsViewModel
             const val MSG_EXPORT_FAILED = "export_failed"
             const val MSG_RESOLVE_FAILED = "resolve_failed"
             const val MSG_IP_UNAVAILABLE = "ip_unavailable"
+
+            /** 远端解析不可用 → 已回退本地视角 (设计 §7.2 的 `本地视角 (远端不可用)`)。 */
+            const val MSG_REMOTE_UNAVAILABLE = "remote_unavailable"
         }
     }
