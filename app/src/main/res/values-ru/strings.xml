@@ -304,6 +304,36 @@
     <string name="log_export_failed">Ошибка экспорта</string>
     <string name="log_cleared">Журнал очищен</string>
 
+    <!-- Статистика доменов (DomainStatsScreen) -->
+    <string name="settings_domain_stats">Статистика доменов</string>
+    <string name="settings_domain_stats_desc">Просмотр посещённых доменов и трафика за сессию</string>
+    <string name="domain_stats_title">Статистика доменов</string>
+    <string name="domain_stats_empty">Пока нет данных — начните просмотр сайтов</string>
+    <string name="domain_stats_search_hint">Поиск домена / IP</string>
+    <string name="domain_stats_sort_connections">Соединения</string>
+    <string name="domain_stats_sort_traffic">Трафик</string>
+    <string name="domain_stats_sort_recent">Недавние</string>
+    <string name="domain_stats_sort_domain">Домен</string>
+    <string name="domain_stats_filter_all">Все</string>
+    <string name="domain_stats_filter_with_ip">С реальным IP</string>
+    <string name="domain_stats_filter_unknown_ip">Без IP</string>
+    <string name="domain_stats_filter_failed">Ошибки</string>
+    <string name="domain_stats_resolve_ip">Определить реальный IP</string>
+    <string name="domain_stats_resolving">Определение…</string>
+    <string name="domain_stats_export">Экспорт</string>
+    <string name="domain_stats_clear">Очистить</string>
+    <string name="domain_stats_cleared">Статистика очищена</string>
+    <string name="domain_stats_export_ok">Экспортировано в «Загрузки»</string>
+    <string name="domain_stats_export_failed">Ошибка экспорта</string>
+    <string name="domain_stats_resolve_failed">Ошибка определения</string>
+    <string name="domain_stats_ip_unavailable">Реальный IP не определён</string>
+    <string name="domain_stats_count">Записано %1$d/%2$d (удалено %3$d)</string>
+    <string name="domain_stats_label_up">Исх.</string>
+    <string name="domain_stats_label_down">Вх.</string>
+    <string name="domain_stats_label_failed">Ошибки</string>
+    <string name="domain_stats_label_first">Первый раз</string>
+    <string name="domain_stats_label_last">Последний раз</string>
+
     <!-- Отображение статуса (карточка + уведомление) -->
     <string name="status_connected">Подключено</string>
     <string name="status_verifying">Проверка сети</string>

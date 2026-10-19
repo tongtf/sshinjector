@@ -5,12 +5,18 @@ import androidx.annotation.VisibleForTesting
 import cn.srv0.sshinjector.data.local.DomainListManager
 import cn.srv0.sshinjector.domain.usecase.VpnController
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
+import org.xbill.DNS.AAAARecord
+import org.xbill.DNS.ARecord
+import org.xbill.DNS.DClass
 import org.xbill.DNS.Flags
 import org.xbill.DNS.Message
+import org.xbill.DNS.Name
 import org.xbill.DNS.Opcode
 import org.xbill.DNS.Rcode
 import org.xbill.DNS.Record
 import org.xbill.DNS.Section
+import org.xbill.DNS.Type
+import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.nio.ByteBuffer
@@ -18,6 +24,7 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -34,6 +41,7 @@ import javax.inject.Singleton
  * 接收响应后封装回 TUN 接口
  */
 @Singleton
+@Suppress("TooManyFunctions") // 已 39 个: 本地解析必须复用本类私有的 protectSocket / 系统 DNS 配置, 拆出去要另开通道
 class DnsInterceptor
     @Inject
     constructor() {
@@ -97,6 +105,22 @@ class DnsInterceptor
 
             // 定期清理过期待处理查询
             private const val PENDING_QUERY_TIMEOUT_MS = 30_000L
+
+            /**
+             * 域名统计的"解析真实 IP"旁路查询超时 (毫秒)。3s 覆盖一般移动网络 RTT, 又不会让设置页
+             * 的"解析中"转圈过久; A / AAAA 两次查询各自计时, 最坏约 2× 该值。
+             */
+            private const val LOCAL_RESOLVE_TIMEOUT_MS = 3000
+
+            // 本地解析要查的记录类型 (顺序即结果顺序): 先 A 后 AAAA
+            private val LOCAL_RESOLVE_TYPES = intArrayOf(Type.A, Type.AAAA)
+
+            // 旁路查询自身用的 DNS 服务端口; 4096 覆盖 A/AAAA 多记录应答
+            private const val DNS_QUERY_PORT = 53
+
+            // DNS 报文 ID 上界 (16 位, 不包含): nextInt(1, 本值) 取有效非零 ID
+            private const val DNS_QUERY_ID_EXCLUSIVE_BOUND = 0x1_0000
+            private const val DNS_ANSWER_BUFFER_SIZE = 4096
         }
 
         enum class DnsTransport {
@@ -765,6 +789,64 @@ class DnsInterceptor
                     onDnsResponse(queryId, ByteArray(0))
                 }
             }
+        }
+
+        /**
+         * 本地视角解析 (受保护 socket, 不经隧道): 供域名统计的"解析真实 IP"用。
+         *
+         * **阻塞**调用, 必须在 IO 线程或挂起上下文中使用 (单查询 `timeoutMs` × 2 的最坏同步等待)。
+         * 返回 A/AAAA 记录的字面量 (去重、保序); 失败 / 未连接返回空表。
+         *
+         * 纯旁路查询: 不写 [onDnsResponse]、不进 `dnsCache`、不动 `realIpToDomain`、不改 `transportMode`,
+         * 因此对隧道数据面没有任何副作用; 未连接 (`protectSocket == null`) 时静默空返回 —— 这里若打
+         * WARNING 会污染"故障归因"(用户在设置页点一次解析就会凭空多一类故障)。
+         */
+        fun resolveLocally(
+            host: String,
+            timeoutMs: Int = LOCAL_RESOLVE_TIMEOUT_MS,
+        ): List<String> {
+            val name = host.trim().trimEnd('.')
+            if (name.isEmpty()) return emptyList()
+            // 未设置 = 未连接 (protectSocket 由 VpnService 连接时注入), 静默空返回
+            if (protectSocket == null) return emptyList()
+
+            // 每个类型一个独立 socket: 任一失败不影响另一个, 部分结果照常返回;
+            // LinkedHashSet 去重保序 (A 在前)。姿势照抄 sendDnsOverProtectedSocket。
+            val out = LinkedHashSet<String>()
+            for (type in LOCAL_RESOLVE_TYPES) {
+                val socket = DatagramSocket()
+                try {
+                    socket.soTimeout = timeoutMs
+                    protectSocket?.invoke(socket)
+
+                    val server = systemDnsServers.firstOrNull() ?: "8.8.8.8"
+                    // Message() + 随机 id + RD (递归请求) —— 与既有查询组包方式一致
+                    val message = Message()
+                    message.header.setID(ThreadLocalRandom.current().nextInt(1, DNS_QUERY_ID_EXCLUSIVE_BOUND))
+                    message.header.setFlag(Flags.RD.toInt())
+                    message.addRecord(Record.newRecord(Name.fromString(name), type, DClass.IN), Section.QUESTION)
+
+                    val query = message.toWire()
+                    socket.send(DatagramPacket(query, query.size, InetAddress.getByName(server), DNS_QUERY_PORT))
+
+                    val buffer = ByteArray(DNS_ANSWER_BUFFER_SIZE)
+                    val responsePacket = DatagramPacket(buffer, buffer.size)
+                    socket.receive(responsePacket)
+                    val answers = Message(buffer.copyOfRange(0, responsePacket.length)).getSection(Section.ANSWER)
+                    for (record in answers) {
+                        when (record) {
+                            is ARecord -> out.add(record.address.hostAddress)
+                            is AAAARecord -> out.add(record.address.hostAddress)
+                        }
+                    }
+                } catch (e: Exception) {
+                    // 只 Log.d: 打 appLog 会让用户点一次"解析"就凭空多一类"故障归因"
+                    Log.d(TAG, "本地解析失败 · $name (type=$type) — ${e.message}")
+                } finally {
+                    socket.close()
+                }
+            }
+            return out.toList()
         }
 
         /**

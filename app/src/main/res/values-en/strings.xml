@@ -304,6 +304,36 @@
     <string name="log_export_failed">Export failed</string>
     <string name="log_cleared">Logs cleared</string>
 
+    <!-- Domain access stats (DomainStatsScreen) -->
+    <string name="settings_domain_stats">Domain access stats</string>
+    <string name="settings_domain_stats_desc">View domains visited this session and their traffic</string>
+    <string name="domain_stats_title">Domain access stats</string>
+    <string name="domain_stats_empty">No data yet — start browsing to collect</string>
+    <string name="domain_stats_search_hint">Search domain / IP</string>
+    <string name="domain_stats_sort_connections">Connections</string>
+    <string name="domain_stats_sort_traffic">Traffic</string>
+    <string name="domain_stats_sort_recent">Recent</string>
+    <string name="domain_stats_sort_domain">Domain</string>
+    <string name="domain_stats_filter_all">All</string>
+    <string name="domain_stats_filter_with_ip">With real IP</string>
+    <string name="domain_stats_filter_unknown_ip">Unknown IP</string>
+    <string name="domain_stats_filter_failed">Failed</string>
+    <string name="domain_stats_resolve_ip">Resolve real IP</string>
+    <string name="domain_stats_resolving">Resolving…</string>
+    <string name="domain_stats_export">Export</string>
+    <string name="domain_stats_clear">Clear</string>
+    <string name="domain_stats_cleared">Statistics cleared</string>
+    <string name="domain_stats_export_ok">Exported to Downloads</string>
+    <string name="domain_stats_export_failed">Export failed</string>
+    <string name="domain_stats_resolve_failed">Resolution failed</string>
+    <string name="domain_stats_ip_unavailable">No real IP resolved</string>
+    <string name="domain_stats_count">Recorded %1$d/%2$d (trimmed %3$d)</string>
+    <string name="domain_stats_label_up">Up</string>
+    <string name="domain_stats_label_down">Down</string>
+    <string name="domain_stats_label_failed">Failed</string>
+    <string name="domain_stats_label_first">First seen</string>
+    <string name="domain_stats_label_last">Last seen</string>
+
     <!-- Status display (shared by status card + notification) -->
     <string name="status_connected">Connected</string>
     <string name="status_verifying">Verifying network</string>

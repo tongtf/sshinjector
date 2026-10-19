@@ -13,6 +13,7 @@ import cn.srv0.sshinjector.ui.screen.server.ServerListScreen
 import cn.srv0.sshinjector.ui.screen.server.ServerWizardScreen
 import cn.srv0.sshinjector.ui.screen.settings.AdBlockSettingsScreen
 import cn.srv0.sshinjector.ui.screen.settings.DomainListSettingsScreen
+import cn.srv0.sshinjector.ui.screen.settings.DomainStatsScreen
 import cn.srv0.sshinjector.ui.screen.settings.LogScreen
 import cn.srv0.sshinjector.ui.screen.settings.SettingsScreen
 import cn.srv0.sshinjector.ui.screen.whitelist.WhitelistScreen
@@ -68,7 +69,11 @@ fun AppNavGraph(
                 onNavigateToServerManagement = { navController.navigate("servers") },
                 onNavigateToKeyManagement = { navController.navigate("keys") },
                 onNavigateToLogs = { navController.navigate("logs") },
+                onNavigateToDomainStats = { navController.navigate("domain_stats") },
             )
+        }
+        composable("domain_stats") {
+            DomainStatsScreen(onBack = { navController.popBackStack() })
         }
         composable("domain_list_settings") {
             DomainListSettingsScreen(onNavigateBack = { navController.popBackStack() })

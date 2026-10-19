@@ -35,6 +35,9 @@ class TcpStateMachine(
     private val tunWriterProvider: () -> TunSink?,
     private val stats: PacketStats,
     private val sshIoDispatcher: SshIoDispatcher,
+    // 域名访问统计 (T-02)。**带默认值**: 既有 6 个测试类按 4 参构造, 不传即用独立实例;
+    // 生产由 PacketProcessor 显式传入它的单例, 所以默认值只服务测试。
+    private val domainStats: DomainStatsStore = DomainStatsStore(),
 ) {
     companion object {
         private const val TAG = "PacketProcessor"
@@ -1848,13 +1851,39 @@ class TcpStateMachine(
                 !notifyBrowser -> "客户端关闭(RST/FIN)"
                 else -> "内部失败/超时"
             }
+        // 与 why 同口径的关闭归因 (只用于 failedConnCount): 只有"内部失败/超时"计失败连接。
+        val kind =
+            when {
+                reason.isNotEmpty() -> CloseKind.INTERNAL_FAILURE
+                graceful -> CloseKind.REMOTE_EOF
+                !notifyBrowser -> CloseKind.CLIENT_CLOSED
+                else -> CloseKind.INTERNAL_FAILURE
+            }
+        // 域名**只查一次**: target(conn) 有 14 个调用点 (改动会波及其它日志), 这里保留它不动,
+        // 本函数的结果同时喂下面的日志与域名统计, 不必重复反查 LRU 映射。
+        // ipLiteral 抽出来一次, 日志分支与统计兜底共用 (也压住这一行的宽度)。
+        val ipLiteral = "${conn.dstIp.hostAddress}:${conn.dstPort}"
+        val srcDomain = dnsInterceptor?.lookupDomain(conn.dstIp.hostAddress)
+        val label = if (srcDomain != null) "$srcDomain(${conn.dstPort})" else ipLiteral
         VpnController.appLogThrottled(
-            "TCP 连接结束 · ${target(conn)} — $why · " +
+            "TCP 连接结束 · $label — $why · " +
                 "上行 ${conn.forwardedBytes}B / 下行 ${conn.downstreamBytes}B · " +
                 "存活 ${(System.currentTimeMillis() - conn.createdAt) / 1000}s",
             level = LogLevel.INFO,
         )
         reportTunnelBlackHole(conn, why)
+        // 域名访问统计 (T-02): 每连接一次。**必须在任何 synchronized(conn) 之外** —— recordClose
+        // 内部自取条目锁, 在 conn 锁内调会与 relay/establish 路径形成锁序反转 (审计 §2.5-③)。
+        domainStats.recordClose(
+            domain = srcDomain ?: ipLiteral,
+            isIpLiteral = srcDomain == null,
+            dstPort = conn.dstPort,
+            upBytes = conn.forwardedBytes,
+            downBytes = conn.downstreamBytes,
+            startedAtMs = conn.createdAt,
+            kind = kind,
+            nowMs = System.currentTimeMillis(),
+        )
         // F6: 通知浏览器使其立即 abort 而非挂死; 移除条目后同五元组新 SYN 自动重建。
         // graceful=true (远端正常 EOF) 发 FIN+ACK 而非 RST: 对端是正常收尾的应用,
         // RST 会让它看到 connection reset; 出错/拒绝/陈旧/断线清理仍走 RST 立即 abort。

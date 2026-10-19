@@ -304,6 +304,36 @@
     <string name="log_export_failed">导出失败</string>
     <string name="log_cleared">日志已清空</string>
 
+    <!-- 域名访问统计 (DomainStatsScreen) -->
+    <string name="settings_domain_stats">域名访问统计</string>
+    <string name="settings_domain_stats_desc">查看本会话访问过的域名与流量</string>
+    <string name="domain_stats_title">域名访问统计</string>
+    <string name="domain_stats_empty">暂无数据，连接并访问网站后开始采集</string>
+    <string name="domain_stats_search_hint">搜索域名 / IP</string>
+    <string name="domain_stats_sort_connections">连接数</string>
+    <string name="domain_stats_sort_traffic">流量</string>
+    <string name="domain_stats_sort_recent">最近</string>
+    <string name="domain_stats_sort_domain">域名</string>
+    <string name="domain_stats_filter_all">全部</string>
+    <string name="domain_stats_filter_with_ip">有真实IP</string>
+    <string name="domain_stats_filter_unknown_ip">未知IP</string>
+    <string name="domain_stats_filter_failed">失败</string>
+    <string name="domain_stats_resolve_ip">解析真实 IP</string>
+    <string name="domain_stats_resolving">解析中…</string>
+    <string name="domain_stats_export">导出</string>
+    <string name="domain_stats_clear">清空</string>
+    <string name="domain_stats_cleared">已清空统计</string>
+    <string name="domain_stats_export_ok">已导出到下载目录</string>
+    <string name="domain_stats_export_failed">导出失败</string>
+    <string name="domain_stats_resolve_failed">解析失败</string>
+    <string name="domain_stats_ip_unavailable">未解析到真实 IP</string>
+    <string name="domain_stats_count">已记录 %1$d/%2$d(淘汰 %3$d)</string>
+    <string name="domain_stats_label_up">上行</string>
+    <string name="domain_stats_label_down">下行</string>
+    <string name="domain_stats_label_failed">失败连接</string>
+    <string name="domain_stats_label_first">首次</string>
+    <string name="domain_stats_label_last">最近</string>
+
     <!-- 状态展示 (StatusDisplay: 状态卡 + 通知栏共用) -->
     <string name="status_connected">已连接</string>
     <string name="status_verifying">网络验证中</string>

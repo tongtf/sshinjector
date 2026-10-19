@@ -22,6 +22,9 @@ class PacketProcessor
     constructor(
         private val tunnelManager: TunnelManager,
         private val sshIoDispatcher: SshIoDispatcher,
+        // 域名访问统计 (T-02)。**带默认值**: `PacketProcessorTest` 按 2 参构造; Hilt 场景下
+        // Dagger 仍会注入真正的 @Singleton 单例 (默认值只服务测试, 这是刻意的)。
+        private val domainStats: DomainStatsStore = DomainStatsStore(),
     ) {
         companion object {
             const val DEFAULT_CONNECTION_CLEANUP_TIMEOUT_MS = 300000L // 5 分钟默认值
@@ -36,7 +39,7 @@ class PacketProcessor
         @Volatile private var dnsInterceptor: DnsInterceptor? = null
 
         private val tcpStateMachine =
-            TcpStateMachine(tunnelManager, { tunSink }, stats, sshIoDispatcher)
+            TcpStateMachine(tunnelManager, { tunSink }, stats, sshIoDispatcher, domainStats)
         private val udpRelay = UdpRelay(stats)
         private val icmpv6Responder = Icmpv6Responder({ tunSink })
 
@@ -48,6 +51,9 @@ class PacketProcessor
                 while (isActive) {
                     delay(STATS_FLUSH_INTERVAL_MS)
                     stats.syncToFlows()
+                    // 域名统计的低频维护: 清超窗 + 超限淘汰 (maybeTrim 内部按 30s 门控, 这里每 100ms
+                    // 调一次几乎全是 no-op)。**绝不**放进任何逐包路径 —— 淘汰含 O(n log n) 排序。
+                    domainStats.maybeTrim(System.currentTimeMillis())
                 }
             }
         }
@@ -167,6 +173,12 @@ class PacketProcessor
 
         /** TCP 数据面诊断快照 (周期日志): 活跃连接 / 背压丢段 / 回程闸门阻塞。 */
         fun tcpDiagnostics(): String = tcpStateMachine.diagnostics()
+
+        /**
+         * 域名访问统计快照 (60s 数据面快照的资源节): "域名统计 N/20000(淘汰 K)"。
+         * O(1), 由 VpnController 的资源节拼接 (T-06)。
+         */
+        fun domainStatsDiagnostics(): String = domainStats.diagnostics()
 
         /**
          * UDP 非 DNS 丢弃量 (QUIC/游戏等)。UdpRelay 自己会按目标端口周期上报,

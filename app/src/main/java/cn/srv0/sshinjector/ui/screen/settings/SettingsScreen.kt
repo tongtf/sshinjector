@@ -70,6 +70,7 @@ fun SettingsScreen(
     onNavigateToServerManagement: () -> Unit = {},
     onNavigateToKeyManagement: () -> Unit = {},
     onNavigateToLogs: () -> Unit = {},
+    onNavigateToDomainStats: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val biometricUnlock by viewModel.biometricUnlock.collectAsState()
@@ -302,6 +303,19 @@ fun SettingsScreen(
                         )
                     },
                     onClick = { showDnsDialog = true },
+                )
+
+                SettingsRow(
+                    title = stringResource(R.string.settings_domain_stats),
+                    subtitle = stringResource(R.string.settings_domain_stats_desc),
+                    trailing = {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    onClick = onNavigateToDomainStats,
                 )
 
                 SettingsRow(

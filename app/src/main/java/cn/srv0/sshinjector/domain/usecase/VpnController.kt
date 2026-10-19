@@ -1309,7 +1309,8 @@ class VpnController
                     tunNoInterfaceDropped = droppedNoTun.get(),
                     // 资源占用: 泄漏类问题 (队列堆积 / 映射表打满) 的唯一可见面
                     resourceDiagnostics =
-                        "TUN 写队列 ${tunWriter?.depth() ?: 0} · ${dnsInterceptor.diagnostics()}",
+                        "TUN 写队列 ${tunWriter?.depth() ?: 0} · ${dnsInterceptor.diagnostics()} · " +
+                            packetProcessor.domainStatsDiagnostics(),
                     tcpDiagnostics = packetProcessor.tcpDiagnostics(),
                     udpDiagnostics = packetProcessor.udpDiagnostics(),
                     ipv6Diagnostics = packetProcessor.ipv6Diagnostics(),
