@@ -19,7 +19,13 @@ internal object DomainStatsCsv {
     /** 列顺序是外部契约 (单测锁死); 改动等于改导出格式, 需同步文档。 */
     private const val HEADER =
         "domain,real_ip,real_ip2,is_ip_literal,conn_count,failed_conn_count," +
-            "up_bytes,down_bytes,first_seen_ms,last_seen_ms,last_port"
+            "up_bytes,down_bytes,first_seen_ms,last_seen_ms,last_port,app_uids,app"
+
+    /**
+     * 应用列的分隔符 (uids 与 labels 各自内部): 纯 ASCII, 与 UI 的「应用」文本同形。
+     * 空列表渲染成空字段; 多值会被 [escape] 按 RFC4180 加引号 (`"10500,10123"`)。
+     */
+    private const val APP_SEPARATOR = ","
 
     /** 文件名模板: 只含 ASCII 数字, 与地区/历法无关。 */
     private const val FILE_NAME_PATTERN = "'sshinjector-domains-'yyyyMMdd-HHmmss'.csv'"
@@ -32,12 +38,20 @@ internal object DomainStatsCsv {
     /** 命中任一字符就必须按 RFC4180 加引号 (逗号分隔符 / 引号 / 两种换行)。 */
     private const val MUST_QUOTE_CHARS = ",\"\n\r"
 
-    /** 表头 + 每行一条 (RFC4180 转义), 行尾 `\n`。返回全文, 编码由调用方按 UTF-8 落盘。 */
-    fun render(rows: List<DomainStatSnapshot>): String {
+    /**
+     * 表头 + 每行一条 (RFC4180 转义), 行尾 `\n`。返回全文, 编码由调用方按 UTF-8 落盘。
+     *
+     * @param appLabels uid → 应用名 (④ 按应用归属); 由调用方 (带 Context 的展示层) 预先解析好 ——
+     *   本对象不碰 Android, 缺失的 uid 按 `uid N` 渲染 (与页面「应用」列同一口径, 机器事实不隐藏)。
+     */
+    fun render(
+        rows: List<DomainStatSnapshot>,
+        appLabels: Map<Int, String> = emptyMap(),
+    ): String {
         val sb = StringBuilder(HEADER.length + NEWLINE.length + rows.size * ESTIMATED_ROW_CHARS)
         sb.append(HEADER).append(NEWLINE)
         for (row in rows) {
-            appendRow(sb, row)
+            appendRow(sb, row, appLabels)
         }
         return sb.toString()
     }
@@ -50,6 +64,7 @@ internal object DomainStatsCsv {
     private fun appendRow(
         sb: StringBuilder,
         row: DomainStatSnapshot,
+        appLabels: Map<Int, String>,
     ) {
         sb.append(escape(row.domain)).append(',')
         sb.append(escape(row.realIp ?: "")).append(',')
@@ -61,8 +76,21 @@ internal object DomainStatsCsv {
         sb.append(row.downBytes).append(',')
         sb.append(row.firstSeenAt).append(',')
         sb.append(row.lastSeenAt).append(',')
-        sb.append(row.lastPort).append(NEWLINE)
+        sb.append(row.lastPort).append(',')
+        // 应用两列放在**末尾**: 老消费者按列号解析 0..10 不受影响 (契约只增不改)。
+        // 空槽 (未反查到 uid) 从列表里滤掉, 因此"没反查到"渲染成空字段, 与页面一致。
+        val uids = appUids(row)
+        sb
+            .append(escape(uids.joinToString(APP_SEPARATOR)))
+            .append(',')
+            .append(escape(uids.joinToString("$APP_SEPARATOR ") { appLabels[it] ?: "uid $it" }))
+            .append(NEWLINE)
     }
+
+    /** 快照里的 uid 槽 (最多 3), 无序语义 (一域名被多个应用用过)。 */
+    private fun appUids(row: DomainStatSnapshot): List<Int> =
+        listOf(row.appUid1, row.appUid2, row.appUid3)
+            .filter { it >= 0 }
 
     /**
      * RFC4180: 只有含逗号 / 引号 / 换行的字段才用双引号包裹, 内部引号翻倍;

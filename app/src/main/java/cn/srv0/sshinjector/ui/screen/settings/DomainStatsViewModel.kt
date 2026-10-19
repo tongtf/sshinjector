@@ -346,7 +346,10 @@ class DomainStatsViewModel
         suspend fun exportCsv(context: Context): Result<String> =
             withContext(Dispatchers.IO) {
                 try {
-                    val text = DomainStatsCsv.render(store.snapshot())
+                    // 应用列 (④): uid 是数据面的机器事实, 应用名由展示层按需解析 ——
+                    // 与页面「应用」列同口径 (超出 [MAX_APP_LABELS] 或解析不到时退化成 `uid N`)。
+                    val rows = store.snapshot()
+                    val text = DomainStatsCsv.render(rows, resolveAppLabels(rows))
                     val fileName = DomainStatsCsv.fileName(System.currentTimeMillis())
                     val values =
                         ContentValues().apply {

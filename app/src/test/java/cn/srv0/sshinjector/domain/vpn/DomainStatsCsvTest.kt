@@ -17,13 +17,14 @@ class DomainStatsCsvTest {
     /** 固定列顺序的期望表头: 改这里就等于改导出契约, 需同步设计文档。 */
     private val expectedHeader =
         "domain,real_ip,real_ip2,is_ip_literal,conn_count,failed_conn_count," +
-            "up_bytes,down_bytes,first_seen_ms,last_seen_ms,last_port"
+            "up_bytes,down_bytes,first_seen_ms,last_seen_ms,last_port,app_uids,app"
 
     private fun row(
         domain: String = "example.com",
         isIpLiteral: Boolean = false,
         realIp: String? = null,
         realIp2: String? = null,
+        appUids: List<Int> = emptyList(),
     ) = DomainStatSnapshot(
         domain = domain,
         isIpLiteral = isIpLiteral,
@@ -36,6 +37,9 @@ class DomainStatsCsvTest {
         lastPort = 443,
         realIp = realIp,
         realIp2 = realIp2,
+        appUid1 = appUids.getOrElse(0) { -1 },
+        appUid2 = appUids.getOrElse(1) { -1 },
+        appUid3 = appUids.getOrElse(2) { -1 },
     )
 
     @Test
@@ -48,7 +52,7 @@ class DomainStatsCsvTest {
     fun `plain row keeps column order and renders null ips as empty fields`() {
         val text = DomainStatsCsv.render(listOf(row(domain = "example.com")))
         assertEquals(
-            "$expectedHeader\nexample.com,,,false,2,1,100,200,1000,2000,443\n",
+            "$expectedHeader\nexample.com,,,false,2,1,100,200,1000,2000,443,,\n",
             text,
         )
     }
@@ -60,7 +64,7 @@ class DomainStatsCsvTest {
                 listOf(row(domain = "example.com", isIpLiteral = true, realIp = "1.1.1.1", realIp2 = "2.2.2.2")),
             )
         assertEquals(
-            "$expectedHeader\nexample.com,1.1.1.1,2.2.2.2,true,2,1,100,200,1000,2000,443\n",
+            "$expectedHeader\nexample.com,1.1.1.1,2.2.2.2,true,2,1,100,200,1000,2000,443,,\n",
             text,
         )
     }
@@ -69,7 +73,7 @@ class DomainStatsCsvTest {
     fun `field containing comma is wrapped in quotes`() {
         val text = DomainStatsCsv.render(listOf(row(domain = "a,b.com")))
         assertEquals(
-            "$expectedHeader\n\"a,b.com\",,,false,2,1,100,200,1000,2000,443\n",
+            "$expectedHeader\n\"a,b.com\",,,false,2,1,100,200,1000,2000,443,,\n",
             text,
         )
     }
@@ -78,7 +82,7 @@ class DomainStatsCsvTest {
     fun `field containing quote doubles it and wraps the field`() {
         val text = DomainStatsCsv.render(listOf(row(domain = "he\"llo.com")))
         assertEquals(
-            "$expectedHeader\n\"he\"\"llo.com\",,,false,2,1,100,200,1000,2000,443\n",
+            "$expectedHeader\n\"he\"\"llo.com\",,,false,2,1,100,200,1000,2000,443,,\n",
             text,
         )
     }
@@ -87,7 +91,50 @@ class DomainStatsCsvTest {
     fun `field containing newline is wrapped in quotes`() {
         val text = DomainStatsCsv.render(listOf(row(domain = "a\nb.com")))
         assertEquals(
-            "$expectedHeader\n\"a\nb.com\",,,false,2,1,100,200,1000,2000,443\n",
+            "$expectedHeader\n\"a\nb.com\",,,false,2,1,100,200,1000,2000,443,,\n",
+            text,
+        )
+    }
+
+    @Test
+    fun `a single app uid and its label render unquoted`() {
+        val text =
+            DomainStatsCsv.render(
+                listOf(row(domain = "example.com", appUids = listOf(10500))),
+                appLabels = mapOf(10500 to "Chrome"),
+            )
+        assertEquals(
+            "$expectedHeader\nexample.com,,,false,2,1,100,200,1000,2000,443,10500,Chrome\n",
+            text,
+        )
+    }
+
+    @Test
+    fun `multiple app uids are quoted and unknown uids fall back to uid N`() {
+        // 与页面「应用」列同口径: 认不出名字时保留机器事实 (`uid N`), 不隐藏、不留空白。
+        val text =
+            DomainStatsCsv.render(
+                listOf(row(domain = "example.com", appUids = listOf(10500, 10123, 1000))),
+                appLabels = mapOf(10500 to "Chrome"),
+            )
+        assertEquals(
+            "$expectedHeader\nexample.com,,,false,2,1,100,200,1000,2000,443," +
+                "\"10500,10123,1000\",\"Chrome, uid 10123, uid 1000\"\n",
+            text,
+        )
+    }
+
+    @Test
+    fun `an empty uid slot is filtered out of both app columns`() {
+        // 空槽是 -1 (DomainStatsStore.NO_UID): 只留真实存在的槽, 不留空字段/重复分隔符
+        val text =
+            DomainStatsCsv.render(
+                listOf(row(domain = "example.com", appUids = listOf(10500, -1, 1000))),
+                appLabels = mapOf(10500 to "Chrome"),
+            )
+        assertEquals(
+            "$expectedHeader\nexample.com,,,false,2,1,100,200,1000,2000,443," +
+                "\"10500,1000\",\"Chrome, uid 1000\"\n",
             text,
         )
     }
