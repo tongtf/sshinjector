@@ -115,6 +115,52 @@ class DomainStatsStoreTest {
     }
 
     @Test
+    fun `attachAppUid does not create a missing entry`() {
+        val store = DomainStatsStore()
+        store.attachAppUid("ghost.com", 10086)
+        assertEquals(0, store.size())
+    }
+
+    @Test
+    fun `attachAppUid fills three slots, dedupes and counts the overflow`() {
+        val store = DomainStatsStore()
+        store.recordClose("a.com", false, 443, 0L, 0L, 0L, CloseKind.REMOTE_EOF, 0L)
+        assertEquals("未反查到归属时三个槽都是哨兵", DomainStatsStore.NO_UID, store.snapshot().single().appUid1)
+
+        store.attachAppUid("a.com", 101)
+        store.attachAppUid("a.com", 101) // 重复: 不占新槽
+        store.attachAppUid("a.com", DomainStatsStore.NO_UID) // 无归属哨兵: 必须忽略
+        store.attachAppUid("a.com", 102)
+        store.attachAppUid("a.com", 103)
+        val three = store.snapshot().single()
+        assertEquals(101, three.appUid1)
+        assertEquals(102, three.appUid2)
+        assertEquals(103, three.appUid3)
+        assertEquals("三槽内的重复不算溢出", 0L, store.appUidOverflow())
+
+        // 第四 / 第五个不同 uid: 只计数, 不动槽 (固定槽位 = 内存可预测)
+        store.attachAppUid("a.com", 104)
+        store.attachAppUid("a.com", 105)
+        assertEquals(2L, store.appUidOverflow())
+        val after = store.snapshot().single()
+        assertEquals(101, after.appUid1)
+        assertEquals(103, after.appUid3)
+        assertTrue("溢出必须在资源节可见", store.diagnostics().contains("归属溢出 2"))
+    }
+
+    @Test
+    fun `clear resets the uid overflow counter`() {
+        val store = DomainStatsStore()
+        store.recordClose("a.com", false, 443, 0L, 0L, 0L, CloseKind.REMOTE_EOF, 0L)
+        repeat(5) { store.attachAppUid("a.com", 200 + it) }
+        assertEquals(2L, store.appUidOverflow())
+
+        store.clear()
+        assertEquals(0L, store.appUidOverflow())
+        assertEquals(0, store.size())
+    }
+
+    @Test
     fun `snapshot is a copy and does not reflect later writes`() {
         val store = DomainStatsStore()
         store.recordClose("a.com", false, 443, 10L, 20L, 0L, CloseKind.REMOTE_EOF, 1L)

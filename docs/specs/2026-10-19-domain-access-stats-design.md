@@ -128,6 +128,8 @@ class DomainStat(
     var lastPort: Int = 0,                // 最近一次目的端口 (443/80/…)
     var realIp: String? = null,           // 不引入 Set: 绝大多数条目 0~2 个 IP (§3.1 拿不到 IP 是常态)
     var realIp2: String? = null,
+    var realIpTotal: Int = 0,             // 最近一次解析的地址总数 (让"截断"可见, §7.3)
+    var appUids: IntArray? = null,        // ④ 发起方 uid 槽 (最多 3; null = 尚未拿到任何一个, 惰性分配)
     var source: StatSource = StatSource.TUN,  // TUN / (预留) UDP / (预留) 直连
 )
 ```
@@ -167,6 +169,7 @@ class DomainStat(
 |---|---|---|---|
 | **主** | `TcpStateMachine.closeTcpConnection` | domain, connCount++, up/down 字节, lastSeenAt, 失败计数 (按 `why`), dstPort | 每连接 1 次 |
 | 辅 | `DnsInterceptor.onDnsResponse` | 真实 IP 关联 (**只标注已存在的条目, 不新建**; 写入 `realIp`/`realIp2`) | 每次真解析 |
+| 辅 (P2 ④) | `TcpStateMachine.closeTcpConnection` → `AppUidResolver` 线程 | 发起方 uid 关联 (**只标注已存在的条目**, 写入 `appUids` 槽) | 每连接 1 次 (异步, 不在数据面线程) |
 | 可选 P2 | `UdpRelay.processUdpPacket` | QUIC/443 丢弃按**假 IP → 域名**归属 (现在只有端口分布) | 每丢包 1 次 |
 
 > P2 的价值: 现在 `UDP 丢弃 114 个 (443→114)` 只能看出"QUIC 很多", 看不出是哪个域名在死磕 QUIC。
@@ -448,6 +451,8 @@ matches(host) =
 
 - 数据**只在本机**; 导出是用户显式动作;
 - **对外可解释**: 文档/隐私说明里明确"记录域名与连接次数, 不含 URL/内容";
+- ④ 起额外记录**发起方应用 uid** (仅用于在列表里标注"哪个 App 连的", 只在本机内存里, 与域名同期清理);
+  不产出任何 "应用 × 域名" 的外部上报, 导出 CSV 仍只含域名维度;
 - 提供"清空统计"一键;
 - **清空时机**: P0 内存统计随会话 (新会话清零, 与既有 `resetSessionCounters()` 口径一致);
   P1 起由 Room 跨会话累计, 用户要清只能显式"清空统计" (默认**不**自动清);
@@ -461,7 +466,7 @@ matches(host) =
 |---|---|---|
 | **P0 只读采集** ✅ **已落地 2026-10-19** | 内存聚合 (第 4/5 节) + `DomainStatsScreen` + 设置入口 + 真实 IP **本地解析** + 导出 CSV + i18n | 浏览 10 个站点后, 列表出现对应域名、连接数 ≥ 1、加密站点显示 `— · 远端解析(不可得)`; 数据面快照各项不变量不变 |
 | **P1 建议→应用 + 持久化** | 待确认建议列表 (8.1) + 复核页 + 批量应用 (8.2/8.3) + `adBlockRulesFromStats` + `domainList{Added,Removed}FromStats` 叠加层 + `reloadAdBlockRules()` + 撤销 (8.4) + 远端解析开关 (池内 exec, §7.2) + Room v5 (**dirty set 分块落盘**) + 时间窗 | 应用广告规则后**无需重连**即生效 (被拦域名回 0.0.0.0); 撤销后恢复; 重启进程统计仍在; 远端 `update()` 不动叠加层 (单测); 快照 `统计落盘 Tms` 远小于 30s |
-| **P2 增强** | 按应用归属 (uid 反查, 附录 A)、QUIC/UDP 域名归属、自动建议 (8.5)、按端口/失败率筛选 | 自动建议只进待确认列表, 绝不自动应用 |
+| **P2 增强** | ✅ 按应用归属 (uid 反查, 附录 A) · QUIC/UDP 域名归属 · 自动建议 (8.5) · 按端口/失败率筛选 | 自动建议只进待确认列表, 绝不自动应用; uid 只进展示, 不做隧道决策 |
 
 **建议先只做 P0**: 它能独立验证"采集对不对", 不碰 DB、不碰名单, 风险最低。
 
@@ -493,20 +498,33 @@ matches(host) =
 
 ---
 
-## 附录 A. P2: 按应用维度 (uid 反查) — 可行性待验证
+## 附录 A. P2: 按应用维度 (uid 反查) — ✅ 已落地 (前提已在本地 SDK 取证更正)
 
-需求: "哪个 App 在连哪些域名"。**这是 P2 里唯一有平台可行性风险的一项**, 先摆事实:
+需求: "哪个 App 在连哪些域名"。
 
-- TUN 侧每个连接只有 `(srcIp, dstIp, srcPort, dstPort)`; `srcIp` 恒为 `10.0.0.2`
-  (`VpnNetwork.TUN_IP`), **不含发起方 uid**。
-- 官方没有给普通应用"连接 → uid"的 API:
-  `ConnectivityManager.getConnectionOwnerUid()` 是 `@SystemApi`
-  (`NETWORK_STACK` 权限), 普通应用调不到。
-- 可行的近似路径:
-  | 路径 | 能力 | 代价 |
-  |---|---|---|
-  | `NetworkStatsManager.queryDetailsForUid` | **每个应用的总流量** (给不了"连了哪些域名") | 需 `PACKAGE_USAGE_STATS` 特殊权限 (用户在系统设置里手动授权), 且是聚合值 |
-  | 读 `/proc/net/*` (socket inode → `/proc/<pid>/fd` → uid) | 理论可到 `连接 → uid` | 需要 root / Shizuku, 易碎, 不做 |
-- **结论**: P2 落地前必须先在真机上验证"能拿到什么"。如果只能到"每应用总流量",
-  那它与本功能 (每域名) 是**两个正交维度**, UI 上必须分开呈现, 不能塞进同一张表冒充
-  "应用 × 域名"矩阵。**在验证通过前, 不要把 `appUid` 写进数据模型**。
+**前提更正 (2026-10-19, 本地 SDK 取证 —— 本节初判是错的)**: `ConnectivityManager.getConnectionOwnerUid(int, InetSocketAddress, InetSocketAddress)`
+**不是 `@SystemApi`, 而是公开 API**:
+
+1. `platforms/android-37.0/android.jar` 的公开 stub 里 `javap` 可见该签名; 同 SDK 的 `@SystemApi`
+   (`startTethering`/`getTetheringSupported`) 与 `@hide` 的 `android.os.ServiceManager` 都不在 → 这个
+   jar 是严格公开面;
+2. `platforms/android-37.0/data/api-versions.xml` 记该签名 `since="29"` (Android 10 起公开);
+3. stub javadoc 明确写给**活动 VpnService** ("if it is associated with the calling VPN app's
+   VpnService tunnel"; `@throws SecurityException if the caller is not the active VpnService"),
+   `annotations.zip` 里**无** `@RequiresPermission`。
+
+含义: 不需要 `PACKAGE_USAGE_STATS`, 不需要 root/Shizuku; 本应用连上后**就是**该 API 的目标调用者。
+约束: TUN 侧 `srcIp` 恒为 `10.0.0.2` (`VpnNetwork.TUN_IP`) 且**不含 uid**, 所以 uid 只能**反查**:
+`(TCP, local = srcIp:srcPort, remote = dstIp:dstPort)` 与内核里的那条 socket 完全同键 (本栈不做 NAT)。
+
+落地形态 (与初判时的"先验证再动数据模型"一致 —— 先落探针取证, 再按取证结果落数据面):
+
+| 步骤 | 交付 | 说明 |
+|---|---|---|
+| 取证 (v1.2.5) | `domain/vpn/AppUidProbe.kt` + 统计页顶栏 `i` | 未连接直接 `VPN_NOT_ACTIVE` (未连接时的 `SecurityException` 是误判不是结论); 连上后用**本进程内一条真实回环连接**双向各查一次 → `AVAILABLE`/`NO_OWNER`/`DENIED` |
+| 数据面 (v1.2.6) | `domain/vpn/AppUidResolver.kt` + `ConnectivityAppUidResolver.kt` | `closeTcpConnection` 里**只入队**(原子计数 + `execute`, 无 binder/无阻塞), 查询跑**单线程有界队列**; 拿到才回调回写 |
+| 展示 | `DomainStatsStore.attachAppUid` + 统计页「应用」列 | 每域名最多 3 个 uid 槽 (惰性 `IntArray`), 溢出计入资源节 `归属溢出 N`; 应用名由 `ui/screen/settings/AppUidLabels.kt` 解析 (uid 数量级 = 用户真用过的应用数, 带缓存) |
+
+`NetworkStatsManager.queryDetailsForUid` (需 `PACKAGE_USAGE_STATS`, 只有每应用**总流量**) 仍**只作退路**:
+它与本功能是**正交维度**, UI 上必须分开呈现, 不能塞进同一张表冒充"应用 × 域名"矩阵。
+**`appUid` 只进展示, 绝不参与任何隧道决策** (域名/路由/名单判定都不看它)。

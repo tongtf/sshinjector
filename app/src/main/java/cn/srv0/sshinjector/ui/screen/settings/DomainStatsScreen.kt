@@ -275,6 +275,7 @@ fun DomainStatsScreen(
                         DomainStatCard(
                             row = row,
                             marks = state.marks[DomainSuffixSet.normalize(row.domain)],
+                            appLabels = state.appLabels,
                             expanded = expanded == row.domain,
                             resolving = state.resolving == row.domain,
                             onToggle = {
@@ -326,6 +327,7 @@ private fun filterLabel(filter: DomainStatsFilter): String =
 private fun DomainStatCard(
     row: DomainStatSnapshot,
     marks: RowListMarks?,
+    appLabels: Map<Int, String>,
     expanded: Boolean,
     resolving: Boolean,
     onToggle: () -> Unit,
@@ -377,13 +379,13 @@ private fun DomainStatCard(
         }
         Spacer(Modifier.height(2.dp))
         Text(
-            text = summaryText(row),
+            text = summaryText(row, appLabels),
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         if (expanded) {
             Spacer(Modifier.height(8.dp))
-            DetailContent(row = row, resolving = resolving, onResolve = onResolve)
+            DetailContent(row = row, appLabels = appLabels, resolving = resolving, onResolve = onResolve)
         }
     }
 }
@@ -415,17 +417,38 @@ private fun ListChip(
     )
 }
 
-/** 摘要行: `连接数 N · 上行 x · 下行 y · :port · 最近 <time>`。 */
+/** 摘要行: `连接数 N · 上行 x · 下行 y · :port · 最近 <time> [· 应用 A, B]`。 */
 @Composable
-private fun summaryText(row: DomainStatSnapshot): String {
+private fun summaryText(
+    row: DomainStatSnapshot,
+    appLabels: Map<Int, String>,
+): String {
     val connections = stringResource(R.string.domain_stats_sort_connections)
     val up = stringResource(R.string.domain_stats_label_up)
     val down = stringResource(R.string.domain_stats_label_down)
     val recent = stringResource(R.string.domain_stats_sort_recent)
-    return "$connections ${row.connCount} · $up ${MainViewModel.formatBytes(row.upBytes)} · " +
-        "$down ${MainViewModel.formatBytes(row.downBytes)} · :${row.lastPort} · " +
-        "$recent ${formatTime(row.lastSeenAt)}"
+    val base =
+        "$connections ${row.connCount} · $up ${MainViewModel.formatBytes(row.upBytes)} · " +
+            "$down ${MainViewModel.formatBytes(row.downBytes)} · :${row.lastPort} · " +
+            "$recent ${formatTime(row.lastSeenAt)}"
+    val apps = appText(row, appLabels)
+    return if (apps.isEmpty()) base else "$base · ${stringResource(R.string.domain_stats_label_apps)} $apps"
 }
+
+/**
+ * 「应用」文本 (④ 按应用归属): 已知归属的应用名; 空串 = 尚未反查到 —— 折叠行**不显示占位**
+ * (多数行会是空的, 占位只会变噪音), 详情里才用 `—` 明说"未知"。
+ *
+ * uid 解析不到名字 (已卸载 / 共享 uid / 超出本次解析预算) 时退化成 `uid N`: 机器事实比空白更有
+ * 诊断价值 (真机排障时能直接看出"反查到了但认不出名字"还是"根本没反查到")。
+ */
+private fun appText(
+    row: DomainStatSnapshot,
+    labels: Map<Int, String>,
+): String =
+    listOf(row.appUid1, row.appUid2, row.appUid3)
+        .filter { it >= 0 }
+        .joinToString(", ") { labels[it] ?: "uid $it" }
 
 /**
  * 真实 IP 展示 (设计 §7.3): 条目只留两槽, 多个地址时显示首个 + `+N` —— 让"截断"看得见。
@@ -439,12 +462,17 @@ private fun ipText(row: DomainStatSnapshot): String {
 @Composable
 private fun DetailContent(
     row: DomainStatSnapshot,
+    appLabels: Map<Int, String>,
     resolving: Boolean,
     onResolve: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         DetailLine(label = "IP", value = ipText(row))
         DetailLine(label = "IP2", value = row.realIp2 ?: EMPTY_IP)
+        DetailLine(
+            label = stringResource(R.string.domain_stats_label_apps),
+            value = appText(row, appLabels).ifEmpty { EMPTY_IP },
+        )
         DetailLine(
             label = stringResource(R.string.domain_stats_label_failed),
             value = row.failedConnCount.toString(),

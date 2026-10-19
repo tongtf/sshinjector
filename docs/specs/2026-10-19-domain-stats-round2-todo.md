@@ -51,7 +51,7 @@
 
 ---
 
-## 2. ④ 按应用 uid (本轮只出**可行性探针** —— 附前提更正)
+## 2. ④ 按应用 uid (前提更正 + 探针 + 数据面, 均已落地)
 
 ### 2.1 前提更正 (2026-10-19 本地 SDK 取证, 推翻设计附录 A 的初判)
 
@@ -101,6 +101,27 @@
 **已定 (不随探针结果变)**: uid 查询一律**异步 + 有界 + 失败静默**; 绝不在 `closeTcpConnection`
 (数据面热路径) 里做 binder 调用; `appUid` 只进统计展示, 不参与任何隧道决策 (与 P0/P1 的纪律一致)。
 
+### 2.4 数据面落地 (v1.2.6, 按 `AVAILABLE` 路径实现)
+
+| 环节 | 位置 | 纪律 |
+|---|---|---|
+| 触发 | `TcpStateMachine.closeTcpConnection` (紧接 `recordClose`) | 只 `lookup(五元组, 回调)`: 原子计数 + `execute` 入队; **无 binder、无阻塞、无分配洪泛**; 地址用 `conn.srcIpBytes/dstIpBytes` (原始字节, 不在数据面线程物化 `InetAddress`); 回调只 `attachAppUid(domainKey, uid)` |
+| 查询 | `domain/vpn/ConnectivityAppUidResolver.kt` | 反射调 `getConnectionOwnerUid` (编译期 SDK 有、运行设备可能没有 → 反射让"缺失"退化成静默停用而不是 `NoSuchMethodError`); **单线程** `ThreadPoolExecutor` + **有界** `ArrayBlockingQueue(128)`; 在途上限 64 ≪ 队列容量 (保证不触发拒绝); `-1`/异常一律只计 `misses` |
+| 写回 | `DomainStatsStore.attachAppUid` | 与 `attachRealIp` 同纪律: **不新建条目**、`uid < 0` 忽略、去重、最多 `MAX_APP_UID_SLOTS=3` 槽 (惰性 `IntArray`), 溢出只计数 (`appUidOverflow` → 资源节 `归属溢出 N`) |
+| 展示 | `ui/screen/settings/AppUidLabels.kt` + `DomainStatsViewModel.resolveAppLabels` | uid → 应用名带缓存 (uid 数量级 = 用户真用过的应用数); 每次刷新最多解析 `MAX_APP_LABELS=64` 个 (超出退化成 `uid N`); 解析跑在 `Dispatchers.Default`, **绝不在组合期** |
+| 观测 | 快照资源节 `UID 归属 命中 H/Q 查询 · 无归属 M [· 被拒 D] [· 队列丢弃 X]` | "到底有没有拿到 uid" 的唯一判据 (无 adb 现场) |
+
+**两条不随实现变的红线**:
+
+1. **断开瞬间必然 `SecurityException`** —— `resetTcpState()` 会逐条关连接并触发反查, 而那时本进程已不是
+   活动 VpnService。所以"被拒"只能是**有时间窗的暂停** (`DisableWindow`: 30s, 窗口内只打一条 WARNING),
+   **绝不能永久停用** (一次正常断开就把功能杀死到下次进程启动, 重连也不恢复 —— 这是实现期差点落下的
+   回归, 由 `AppUidResolverTest` 的时钟注入用例钉死)。
+2. **`appUid` 只进展示**: 域名/路由/名单判定都不读它; 拿不到 uid 时页面只是少一列, 隧道行为逐字节不变。
+
+仍**不做**: 后台批量解析、把 uid 写进持久化模型 (P1 起仍只落名单三键)、把 uid 塞进导出 CSV
+(CSV 列序是冻结契约, 要加列需另起一次显式变更)、按 uid 的隧道决策。
+
 ---
 
 ## 3. 验证
@@ -115,4 +136,12 @@
 - 单测: `AppUidProbeTest` (3 例: 公开 SDK 前提锁 / 未连接时不跑 / 无服务时安全降级)。
 - 真机 (清单 S15): **先连上 VPN** → 统计页顶栏 `i` → 日志与 Toast 各一行
   `UID 归属探针 · getConnectionOwnerUid=<token> · …`; 按 §2.3 的表决定 ④ 的下一步。
+- 单测 (④ 数据面): `AppUidResolverTest` (5 例: 无服务静默 null / 查询计数且不抛 / `NONE` 空实现 /
+  平台 `SecurityException` 计一次"被拒"且进入暂停窗口 / 暂停窗口到期自动恢复 —— 时钟注入, 不 sleep)、
+  `TcpDomainStatsTest` (+2 例: 反查到的 uid 必须回写且五元组与连接一致 / 负数 uid 不得进槽)、
+  `DomainStatsStoreTest` (+3 例: `attachAppUid` 不新建条目 / 三槽去重与溢出计数 + 资源节可见 /
+  `clear` 归零溢出)、`AppUidLabelsTest` (3 例: 解析不到退化 `uid N` / 缓存命中只问一次 / 无包退化)。
+- 真机 (清单 S16): 连上 VPN → 浏览几个 App (浏览器/应用商店) → 统计页出现「应用」列且是**真实应用名**;
+  快照资源节出现 `UID 归属 命中 H/Q 查询` 且 `H > 0` (H==0 且 Q>0 = 该设备拿不到归属, 回报那一节);
+  断开后**不得**出现 `UID 归属 不可用` / 反复 `UID 归属反查被平台拒绝` (窗口化应只出一次)。
 

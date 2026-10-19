@@ -90,6 +90,11 @@ data class DomainStatsUiState(
     val marks: Map<String, RowListMarks> = emptyMap(),
     /** 待确认建议条数 (底部条 / 设置页徽标)。 */
     val pendingCount: Int = 0,
+    /**
+     * 展示行里出现的 uid → 应用名 (只在 `publishRows` 里重建; 见 [AppUidLabels])。
+     * 未解析到 (超预算 / 已卸载) 的 uid 由页面退化成 `uid N`。
+     */
+    val appLabels: Map<Int, String> = emptyMap(),
 )
 
 /**
@@ -116,6 +121,7 @@ class DomainStatsViewModel
         private val domainIpResolver: DomainIpResolver,
         private val settingsDataStore: SettingsDataStore,
         private val appUidProbe: AppUidProbe,
+        private val appUidLabels: AppUidLabels,
     ) : ViewModel() {
         private val _state = MutableStateFlow(DomainStatsUiState())
         val state: StateFlow<DomainStatsUiState> = _state.asStateFlow()
@@ -371,9 +377,11 @@ class DomainStatsViewModel
             val current = _state.value
             val filtered = allRows.filter { matchesFilter(it, current.query, current.filter) }
             val sorted = sortRows(filtered, current.sort)
+            val labels = resolveAppLabels(sorted)
             _state.update {
                 it.copy(
                     rows = sorted,
+                    appLabels = labels,
                     total = total,
                     cap = DomainStatsStore.MAX_DOMAINS,
                     trimmed = trimmed,
@@ -381,6 +389,32 @@ class DomainStatsViewModel
                 )
             }
             publishMarks()
+        }
+
+        /**
+         * 把展示行里出现的 uid 解析成应用名 (④ 按应用归属)。
+         *
+         * 预算纪律 (与 [computeMembership] 同精神): `PackageManager` 查询是 ~ms 级, 而 uid 的
+         * **distinct 数量级 = 用户真用过的应用数** (几十) —— 仍加 [MAX_APP_LABELS] 上限兜底,
+         * 绝不因为"20000 行里有很多 uid"让 refresh 变慢 (超上限的行退化成 `uid N`)。
+         * [AppUidLabels] 自带缓存, 所以重复刷新基本是 map 命中。
+         */
+        private fun resolveAppLabels(rows: List<DomainStatSnapshot>): Map<Int, String> {
+            val labels = HashMap<Int, String>()
+            for (row in rows) {
+                collectAppLabel(labels, row.appUid1)
+                collectAppLabel(labels, row.appUid2)
+                collectAppLabel(labels, row.appUid3)
+            }
+            return labels
+        }
+
+        private fun collectAppLabel(
+            labels: HashMap<Int, String>,
+            uid: Int,
+        ) {
+            if (uid < 0 || labels.size >= MAX_APP_LABELS || labels.containsKey(uid)) return
+            labels[uid] = appUidLabels.label(uid)
         }
 
         /** 把「已解析的成员关系」与「待确认建议」合成 chip 状态。 */
@@ -500,6 +534,9 @@ class DomainStatsViewModel
             private const val MEMBERSHIP_BUDGET_MS = 60L
             private const val NANOS_PER_MS = 1_000_000L
             private const val ARPA_SUFFIX = ".arpa"
+
+            /** 每次刷新最多解析多少个 uid→应用名 (超出退化成 `uid N`; distinct uid 数量级本来就很小)。 */
+            private const val MAX_APP_LABELS = 64
 
             /** 一次性消息哨兵: 页面按它映射成 i18n 文案 (ViewModel 不能解析资源)。 */
             const val MSG_CLEARED = "cleared"

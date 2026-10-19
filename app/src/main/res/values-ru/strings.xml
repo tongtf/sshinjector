@@ -336,6 +336,7 @@
     <string name="domain_stats_label_up">Исх.</string>
     <string name="domain_stats_label_down">Вх.</string>
     <string name="domain_stats_label_failed">Ошибки</string>
+    <string name="domain_stats_label_apps">Приложения</string>
     <string name="domain_stats_label_first">Первый раз</string>
     <string name="domain_stats_label_last">Последний раз</string>
 

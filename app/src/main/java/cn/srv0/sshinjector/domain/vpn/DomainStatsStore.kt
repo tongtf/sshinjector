@@ -31,6 +31,15 @@ data class DomainStatSnapshot(
      * 0 = 从未解析过 / 解析无结果。
      */
     val realIpTotal: Int = 0,
+    /**
+     * 本域名已知的**发起方 uid** (最多 [DomainStatsStore.MAX_APP_UID_SLOTS] 槽, `-1` = 该槽空)。
+     *
+     * 与 [realIp] 同样的取舍: 只留固定几槽 (不引 `Set` —— 20000 条 × 空 `HashSet` 就是 1.4MB), 溢出
+     * 由 [DomainStatsStore.appUidOverflow] 全局计数兜底; 每槽是**普通 Int**, 快照层零分配。
+     */
+    val appUid1: Int = -1,
+    val appUid2: Int = -1,
+    val appUid3: Int = -1,
 )
 
 /**
@@ -54,6 +63,12 @@ class DomainStatsStore
             const val MAX_DOMAINS: Int = 20000
             const val TRIM_INTERVAL_MS: Long = 30_000
             const val WINDOW_MS: Long = 7L * 24 * 3600 * 1000
+
+            /** 每域名最多保留几个 uid 槽 (溢出计入 [appUidOverflow], 只用于诊断)。 */
+            const val MAX_APP_UID_SLOTS: Int = 3
+
+            /** 空 uid 槽的哨兵 (`-1` = `Process.INVALID_UID`, 也是平台"无归属"的返回值)。 */
+            const val NO_UID: Int = -1
         }
 
         /** 单个域名的可变聚合条目。普通 class (非 data class): 覆盖 11 个字段的 equals/toString 没有意义。 */
@@ -71,6 +86,12 @@ class DomainStatsStore
             var realIp: String? = null
             var realIp2: String? = null
             var realIpTotal: Int = 0
+
+            /**
+             * 已知归属 uid 槽 (`null` = 尚未拿到任何一个)。**惰性分配**: 没有归属的条目 (多数)
+             * 一个字节都不多花 —— 3 槽 × 4B + 头 ≈ 32B, 20000 条最坏 0.6MB。
+             */
+            var appUids: IntArray? = null
 
             /** 只在持有本对象监视器 (`synchronized(this)`) 时调用。 */
             @Suppress("LongParameterList") // 热路径累加器: 包成 config 对象会在每次连接关闭时多一次分配
@@ -100,6 +121,9 @@ class DomainStatsStore
 
         /** 淘汰累计 (含超窗清理), 供快照资源节读; [clear] 归零。 */
         private val trimmedTotalCount = AtomicLong(0L)
+
+        /** 归属 uid 槽满被忽略的次数 (诊断: 出现非 0 说明 3 槽不够, 但绝不因此扩容)。 */
+        private val appUidOverflowCount = AtomicLong(0L)
 
         /** [maybeTrim] 的间隔门控状态, 只在 [gate] 内访问。 */
         private val gate = Any()
@@ -156,12 +180,40 @@ class DomainStatsStore
             }
         }
 
+        /**
+         * 归属 uid 标注 (④ 按应用归属): 与 [attachRealIp] 同纪律 —— 只更新**已存在**的条目
+         * (不新建, 保持 `connCount ≥ 1` = 真访问过的语义), 去重后写入空槽, 槽满只计数。
+         *
+         * **不在数据面线程上调用**: 这是反查线程的回调 (`DomainStatsStore` 只保证线程安全与零分配,
+         * 不保证快)。锁纪律同 [recordClose] (32 位 ABI 防撕裂)。
+         */
+        fun attachAppUid(
+            domain: String,
+            uid: Int,
+        ) {
+            if (uid < 0) return
+            val entry = map[domain] ?: return
+            synchronized(entry) {
+                val slots =
+                    entry.appUids
+                        ?: IntArray(MAX_APP_UID_SLOTS) { NO_UID }.also { entry.appUids = it }
+                if (slots.contains(uid)) return
+                val free = slots.indexOfFirst { it == NO_UID }
+                if (free < 0) {
+                    appUidOverflowCount.incrementAndGet()
+                    return
+                }
+                slots[free] = uid
+            }
+        }
+
         /** 全量快照 (未排序); 每条在条目锁内读取 (32 位防撕裂读)。调用方在 Default 线程排序。 */
         fun snapshot(): List<DomainStatSnapshot> {
             val out = ArrayList<DomainStatSnapshot>(map.size)
             for (entry in map.values) {
                 out.add(
                     synchronized(entry) {
+                        val uids = entry.appUids
                         DomainStatSnapshot(
                             domain = entry.domain,
                             isIpLiteral = entry.isIpLiteral,
@@ -175,6 +227,9 @@ class DomainStatsStore
                             realIp = entry.realIp,
                             realIp2 = entry.realIp2,
                             realIpTotal = entry.realIpTotal,
+                            appUid1 = uids?.get(0) ?: NO_UID,
+                            appUid2 = uids?.get(1) ?: NO_UID,
+                            appUid3 = uids?.get(2) ?: NO_UID,
                         )
                     },
                 )
@@ -186,9 +241,13 @@ class DomainStatsStore
 
         fun trimmedTotal(): Long = trimmedTotalCount.get()
 
+        /** 归属 uid 槽满被忽略的累计次数 (诊断 / 单测)。 */
+        fun appUidOverflow(): Long = appUidOverflowCount.get()
+
         fun clear() {
             map.clear()
             trimmedTotalCount.set(0L)
+            appUidOverflowCount.set(0L)
             trimPending = false
             synchronized(gate) { nextTrimAllowedAtMs = 0L }
         }
@@ -202,8 +261,17 @@ class DomainStatsStore
             return sweepAndTrim(nowMs)
         }
 
-        /** 快照资源节用: "域名统计 123/20000(淘汰 0)"。O(1)。 */
-        fun diagnostics(): String = "域名统计 ${map.size}/$MAX_DOMAINS(淘汰 ${trimmedTotalCount.get()})"
+        /**
+         * 快照资源节用: "域名统计 123/20000(淘汰 0)"。
+         *
+         * **无归属溢出时字符串与 P0/P1 逐字一致** (真机验收清单 S12 拿它和页面数字对账); 有溢出的
+         * 时候才追加一节 —— 那是"3 槽不够"的唯一可见信号。O(1)。
+         */
+        fun diagnostics(): String {
+            val base = "域名统计 ${map.size}/$MAX_DOMAINS(淘汰 ${trimmedTotalCount.get()})"
+            val overflow = appUidOverflowCount.get()
+            return if (overflow > 0L) "$base · 归属溢出 $overflow" else base
+        }
 
         /** 测试钩子: 绕过 [TRIM_INTERVAL_MS] 门控立刻淘汰一次 (生产代码不要调)。 */
         internal fun trimNowForTest(nowMs: Long = System.currentTimeMillis()): Int = sweepAndTrim(nowMs)

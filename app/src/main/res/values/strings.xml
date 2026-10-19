@@ -357,6 +357,7 @@ SOFTWARE.</string>
     <string name="domain_stats_label_up">上行</string>
     <string name="domain_stats_label_down">下行</string>
     <string name="domain_stats_label_failed">失败连接</string>
+    <string name="domain_stats_label_apps">应用</string>
     <string name="domain_stats_label_first">首次</string>
     <string name="domain_stats_label_last">最近</string>
 

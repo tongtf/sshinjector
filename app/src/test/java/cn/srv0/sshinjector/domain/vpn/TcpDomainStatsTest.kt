@@ -58,9 +58,53 @@ class TcpDomainStatsTest {
         assertEquals("最近端口取本次连接的目的端口", dstPort, row.lastPort)
     }
 
+    @Test
+    fun `the resolved owner uid is attached to the recorded row`() {
+        val closedPort = ServerSocket(0).use { it.localPort }
+        val store = DomainStatsStore()
+        val rstLatch = CountDownLatch(1)
+        val resolver = FakeUidResolver(uid = 10086)
+        val sm =
+            newStateMachine(FakeSocksPlugin(closedPort), store, resolver) { p ->
+                if (isRst(p)) rstLatch.countDown()
+            }
+
+        sendSyn(sm)
+
+        assertTrue("连接必须在 5s 内关闭", rstLatch.await(5, TimeUnit.SECONDS))
+        assertEquals("④ 反查到的 uid 必须回写到统计条目", 10086, store.snapshot().single().appUid1)
+        assertEquals("查询用的必须是本连接的五元组 (客户端 srcPort)", srcPort, resolver.srcPort)
+        assertEquals("查询用的必须是本连接的五元组 (目的端口)", dstPort, resolver.dstPort)
+        assertTrue("源地址必须是客户端的原始字节", resolver.srcIp.contentEquals(clientIp.address))
+        assertTrue("目的地址必须是目标的原始字节", resolver.dstIp.contentEquals(serverIp.address))
+    }
+
+    @Test
+    fun `a negative uid from the resolver never lands in the row`() {
+        val closedPort = ServerSocket(0).use { it.localPort }
+        val store = DomainStatsStore()
+        val rstLatch = CountDownLatch(1)
+        // 平台返回 -1 = 无归属; 契约是"不回调", 这里故意回调以锁死 store 侧的哨兵守卫
+        val resolver = FakeUidResolver(uid = DomainStatsStore.NO_UID)
+        val sm =
+            newStateMachine(FakeSocksPlugin(closedPort), store, resolver) { p ->
+                if (isRst(p)) rstLatch.countDown()
+            }
+
+        sendSyn(sm)
+
+        assertTrue("连接必须在 5s 内关闭", rstLatch.await(5, TimeUnit.SECONDS))
+        assertEquals(
+            "无归属不得写进任何 uid 槽",
+            DomainStatsStore.NO_UID,
+            store.snapshot().single().appUid1,
+        )
+    }
+
     private fun newStateMachine(
         plugin: TunnelPlugin,
         store: DomainStatsStore,
+        appUidResolver: AppUidResolver = AppUidResolver.NONE,
         onTunPacket: (ByteArray) -> Unit,
     ): TcpStateMachine {
         val tunnelManager = mock<TunnelManager>()
@@ -71,6 +115,7 @@ class TcpDomainStatsTest {
             PacketStats(),
             SshIoDispatcher(),
             store,
+            appUidResolver,
         )
     }
 
@@ -103,6 +148,35 @@ class TcpDomainStatsTest {
                 putShort(0)
                 putShort(0)
             }.array()
+
+    /**
+     * 假反查器: **同步**回调 (真实现是异步单线程池), 于是"uid 回写"变成确定性断言 —— 不需要
+     * sleep 赌线程调度, 但也不覆盖真实现的线程/队列纪律 (那条由 `AppUidResolverTest` 负责)。
+     */
+    private class FakeUidResolver(
+        private val uid: Int,
+    ) : AppUidResolver {
+        var srcIp: ByteArray? = null
+        var srcPort: Int = -1
+        var dstIp: ByteArray? = null
+        var dstPort: Int = -1
+
+        override fun lookup(
+            srcIp: ByteArray,
+            srcPort: Int,
+            dstIp: ByteArray,
+            dstPort: Int,
+            onResolved: (Int) -> Unit,
+        ) {
+            this.srcIp = srcIp
+            this.srcPort = srcPort
+            this.dstIp = dstIp
+            this.dstPort = dstPort
+            onResolved(uid)
+        }
+
+        override fun diagnostics(): String = "fake"
+    }
 
     /** 最小 SOCKS 插件: 只需要能返回一个指向已关闭端口的 localSocksPort。 */
     private class FakeSocksPlugin(

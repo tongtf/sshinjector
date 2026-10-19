@@ -38,6 +38,9 @@ class TcpStateMachine(
     // 域名访问统计 (T-02)。**带默认值**: 既有 6 个测试类按 4 参构造, 不传即用独立实例;
     // 生产由 PacketProcessor 显式传入它的单例, 所以默认值只服务测试。
     private val domainStats: DomainStatsStore = DomainStatsStore(),
+    // 「连接 → uid」反查 (④ 按应用归属)。默认 NONE = 不查询 (测试/无平台能力), 生产由 PacketProcessor
+    // 显式传入单例。**只用来给统计标注应用名**, 绝不参与任何隧道决策。
+    private val appUidResolver: AppUidResolver = AppUidResolver.NONE,
 ) {
     companion object {
         private const val TAG = "PacketProcessor"
@@ -1865,6 +1868,8 @@ class TcpStateMachine(
         val ip = conn.dstIp.hostAddress ?: "-" // hostAddress 是平台类型, 与 target(conn) 同口径
         val ipLiteral = "$ip:${conn.dstPort}"
         val srcDomain = dnsInterceptor?.lookupDomain(ip)
+        // 统计键与日志标签同源: 有域名映射用域名, 否则用 IP:port 字面量 (④ 的 uid 回写也用这个键)
+        val domainKey = srcDomain ?: ipLiteral
         val label = if (srcDomain != null) "$srcDomain(${conn.dstPort})" else ipLiteral
         VpnController.appLogThrottled(
             "TCP 连接结束 · $label — $why · " +
@@ -1876,7 +1881,7 @@ class TcpStateMachine(
         // 域名访问统计 (T-02): 每连接一次。**必须在任何 synchronized(conn) 之外** —— recordClose
         // 内部自取条目锁, 在 conn 锁内调会与 relay/establish 路径形成锁序反转 (审计 §2.5-③)。
         domainStats.recordClose(
-            domain = srcDomain ?: ipLiteral,
+            domain = domainKey,
             isIpLiteral = srcDomain == null,
             dstPort = conn.dstPort,
             upBytes = conn.forwardedBytes,
@@ -1885,6 +1890,11 @@ class TcpStateMachine(
             kind = kind,
             nowMs = System.currentTimeMillis(),
         )
+        // ④ 按应用归属: 异步反查发起方 uid, 拿到才回写 (**不在本线程调 binder**; 拿不到就当没有 ——
+        // uid 只影响统计展示, 不影响任何隧道行为)。地址用 conn 缓存的原始字节, 热路径零分配。
+        appUidResolver.lookup(conn.srcIpBytes, conn.srcPort, conn.dstIpBytes, conn.dstPort) { uid ->
+            domainStats.attachAppUid(domainKey, uid)
+        }
         // F6: 通知浏览器使其立即 abort 而非挂死; 移除条目后同五元组新 SYN 自动重建。
         // graceful=true (远端正常 EOF) 发 FIN+ACK 而非 RST: 对端是正常收尾的应用,
         // RST 会让它看到 connection reset; 出错/拒绝/陈旧/断线清理仍走 RST 立即 abort。

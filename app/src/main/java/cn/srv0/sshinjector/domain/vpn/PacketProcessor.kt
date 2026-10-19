@@ -25,6 +25,8 @@ class PacketProcessor
         // 域名访问统计 (T-02)。**带默认值**: `PacketProcessorTest` 按 2 参构造; Hilt 场景下
         // Dagger 仍会注入真正的 @Singleton 单例 (默认值只服务测试, 这是刻意的)。
         private val domainStats: DomainStatsStore = DomainStatsStore(),
+        // 「连接 → uid」反查 (④ 按应用归属); 同样只带默认值服务测试。
+        private val appUidResolver: AppUidResolver = AppUidResolver.NONE,
     ) {
         companion object {
             const val DEFAULT_CONNECTION_CLEANUP_TIMEOUT_MS = 300000L // 5 分钟默认值
@@ -39,7 +41,7 @@ class PacketProcessor
         @Volatile private var dnsInterceptor: DnsInterceptor? = null
 
         private val tcpStateMachine =
-            TcpStateMachine(tunnelManager, { tunSink }, stats, sshIoDispatcher, domainStats)
+            TcpStateMachine(tunnelManager, { tunSink }, stats, sshIoDispatcher, domainStats, appUidResolver)
         private val udpRelay = UdpRelay(stats)
         private val icmpv6Responder = Icmpv6Responder({ tunSink })
 
@@ -179,6 +181,12 @@ class PacketProcessor
          * O(1), 由 VpnController 的资源节拼接 (T-06)。
          */
         fun domainStatsDiagnostics(): String = domainStats.diagnostics()
+
+        /**
+         * ④ 按应用归属的反查命中率 (`命中 H/Q 查询`), 进 60s 数据面快照资源节 ——
+         * 无 adb 现场时这是"uid 到底有没有拿到"的唯一判据。无平台能力时返回空串。
+         */
+        fun appUidDiagnostics(): String = appUidResolver.diagnostics()
 
         /**
          * UDP 非 DNS 丢弃量 (QUIC/游戏等)。UdpRelay 自己会按目标端口周期上报,

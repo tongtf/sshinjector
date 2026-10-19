@@ -1345,9 +1345,7 @@ class VpnController
                     tunTrailingDropped = trailingBytesDropped.get(),
                     tunNoInterfaceDropped = droppedNoTun.get(),
                     // 资源占用: 泄漏类问题 (队列堆积 / 映射表打满) 的唯一可见面
-                    resourceDiagnostics =
-                        "TUN 写队列 ${tunWriter?.depth() ?: 0} · ${dnsInterceptor.diagnostics()} · " +
-                            packetProcessor.domainStatsDiagnostics(),
+                    resourceDiagnostics = resourceDiagnostics(),
                     tcpDiagnostics = packetProcessor.tcpDiagnostics(),
                     udpDiagnostics = packetProcessor.udpDiagnostics(),
                     ipv6Diagnostics = packetProcessor.ipv6Diagnostics(),
@@ -1357,6 +1355,20 @@ class VpnController
                     failureSummary = if (force) "" else AppMetrics.summary(),
                 ).render(),
             )
+        }
+
+        /**
+         * 资源节文本: TUN 写队列 / DNS 映射表 / 域名统计 / (有平台能力时) UID 归属命中率。
+         *
+         * UID 归属段**无能力时整段省略** (不打印空段), 有溢出/停用时才多出对应小节 —— 这样
+         * 真机验收清单 S12 里那条"资源节数字与页面一致"的断言在 ④ 上线后仍然成立。
+         */
+        private fun resourceDiagnostics(): String {
+            val base =
+                "TUN 写队列 ${tunWriter?.depth() ?: 0} · ${dnsInterceptor.diagnostics()} · " +
+                    packetProcessor.domainStatsDiagnostics()
+            val uid = packetProcessor.appUidDiagnostics()
+            return if (uid.isEmpty()) base else "$base · $uid"
         }
 
         /**
