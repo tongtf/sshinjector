@@ -84,6 +84,12 @@ configure_openssh() {
     # chroot skeleton (ChrootDirectory must be root-owned per OpenSSH)
     mkdir -p "${CHROOT}/dev" "${CHROOT}/etc" "${CHROOT}/lib" "${CHROOT}/lib64"
     mkdir -p "${ACCT_HOME}/.ssh"
+    # OpenSSH validates every component of ChrootDirectory: the account home
+    # (parent of the chroot) must be root-owned and not group/world-writable,
+    # otherwise every session dies with "bad ownership or modes for chroot
+    # directory component". .ssh below stays owned by the tunnel account.
+    chown root:root "${ACCT_HOME}"
+    chmod 755 "${ACCT_HOME}"
     chown -R root:root "${CHROOT}"
     chmod 755 "${CHROOT}"
     chown -R "${ACCT}:${ACCT}" "${ACCT_HOME}/.ssh"
