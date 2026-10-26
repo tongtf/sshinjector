@@ -46,6 +46,12 @@ private fun isFakeTunnelHost(host: String): Boolean = VpnNetwork.isFakeHost(host
 private const val SSH_SEND_QUEUE_CAPACITY = 128
 
 /**
+ * loopback 接收缓冲 (本栈上行 → 本地 SOCKS)。与 TcpStateMachine 的 512KB 通告窗口配套:
+ * TcpStateMachine 侧还设了同样大小的发送缓冲, 两侧一起避免 512KB 突发灌进来时成片丢段。
+ */
+private const val LOOPBACK_RECEIVE_BUFFER_BYTES = 512 * 1024
+
+/**
  * 本地 SOCKS5 代理服务器 (RFC 1928)
  *
  * 接受来自 VPNService 的连接，通过 SSH 隧道转发到远程服务器
@@ -277,6 +283,8 @@ class Socks5ProxyServer
             // 防御注释: 认证前连接来自任意同设备应用 (loopback 非隔离域), expectedAuth 的
             // 随机 token 是唯一防线 — 未认证连接由握手超时 (UNAUTHENTICATED_TIMEOUT_MS) 快速回收
             clientChannel.configureBlocking(false)
+            // 与 TcpStateMachine 的 512KB 通告窗口配套 (见 LOOPBACK_RECEIVE_BUFFER_BYTES)。
+            runCatching { clientChannel.socket().receiveBufferSize = LOOPBACK_RECEIVE_BUFFER_BYTES }
             val connectionId = connectionIdCounter.incrementAndGet()
 
             val clientPort =

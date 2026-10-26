@@ -91,7 +91,7 @@ class VpnController
         // → 虚假 TUN FAIL (需连续 2 窗才降级, 影响小但不该有)
         @Volatile private var packetLoopJob: Job? = null
         private var tunGeneration = 0L
-        private val readBuffer = ByteBuffer.allocate(32768).order(ByteOrder.BIG_ENDIAN)
+        private val readBuffer = ByteBuffer.allocate(65536).order(ByteOrder.BIG_ENDIAN)
 
         // 分阶段健康 (TUN/DNS/转发三段): 端到端探测探不到的盲区由它补
         private val stageEvaluator = StageHealthEvaluator()
@@ -903,7 +903,9 @@ class VpnController
                 // 解析 IP 版本
                 val firstByte = buffer.get(buffer.position()).toInt() and 0xFF
                 val version = firstByte shr 4
-                if (Log.isLoggable(TAG, Log.DEBUG)) {
+                // 用启动时缓存的 IS_DEBUG: Log.isLoggable 是 JNI 调用, 每包一次在
+                // 200k pps 下就是实打实的开销。
+                if (IS_DEBUG) {
                     Log.d(
                         TAG,
                         "processPacket: firstByte=0x${"%02x".format(firstByte)} " +

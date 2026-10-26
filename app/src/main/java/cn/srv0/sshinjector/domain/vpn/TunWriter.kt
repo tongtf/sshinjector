@@ -25,7 +25,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 生命周期: `connect` 时 [attach] 输出流, `disconnect` 时 [close] (先排空再退出)。关闭后不可复用,
  * 必须新建实例。
  *
- * @param capacity 队列容量 (包数)。满时控制包被丢并计数, 数据包阻塞等待 —— 有界, 不会无限堆积。
+ * @param capacity 队列容量 (条目数; 单包控制包/关闭包算 1, 回程批量条目算 1)。满时控制包被丢并计数,
+ *   数据包阻塞等待 —— 有界, 不会无限堆积。
  * @param joinTimeoutMs [close] 等待写线程退出的上限 (写线程可能正卡在 TUN 写上)。
  * @param onWritten 成功写入回调 (字节数) —— 计数必须在这里做, 保证"只有真写出去才算"。
  * @param onWriteFailed 写入失败回调 (null = 尚未挂载输出流; 否则为写入抛出的异常)。
@@ -40,8 +41,13 @@ class TunWriter(
     private val onControlDropped: (Int) -> Unit = {},
 ) : TunSink,
     AutoCloseable {
+    /**
+     * 队列元素: 单包 (控制包/关闭包) 或一批回程数据。
+     * 单包路径不建 List —— packetLoop 的 ACK 是逐包热路径, 多一次分配就是多一次 GC 压力。
+     */
     private class Pending(
-        val data: ByteArray,
+        val data: ByteArray?,
+        val batch: List<ByteArray>? = null,
         val done: CountDownLatch? = null,
     ) {
         @Volatile var written: Boolean = false
@@ -89,11 +95,23 @@ class TunWriter(
 
     override fun writeBlocking(data: ByteArray): Boolean {
         if (!accepting.get()) return false
-        val pending = Pending(data, CountDownLatch(1))
-        if (!enqueue(pending, data)) return false
+        val pending = Pending(data, done = CountDownLatch(1))
+        if (!enqueue(pending, data.size)) return false
         // 入队后无超时等待: 与旧实现 (阻塞 FileOutputStream.write) 语义一致。释放路径有两条 ——
         // 写线程处理到它, 或 close() 的 failRemaining 按失败结算; 写线程本身绝不会因单次
         // 写失败而退出 (见 drainLoop), 所以不会永久搁浅。
+        pending.done?.await()
+        return pending.written
+    }
+
+    override fun writeBlockingBatch(packets: List<ByteArray>): Boolean {
+        if (packets.isEmpty()) return true
+        // 单包批次的退化路径: 别为 1 个包多套一层 List (flush 尾部常见)
+        if (packets.size == 1) return writeBlocking(packets[0])
+        if (!accepting.get()) return false
+        val bytes = packets.sumOf { it.size }
+        val pending = Pending(null, packets, CountDownLatch(1))
+        if (!enqueue(pending, bytes)) return false
         pending.done?.await()
         return pending.written
     }
@@ -105,7 +123,7 @@ class TunWriter(
      */
     private fun enqueue(
         pending: Pending,
-        data: ByteArray,
+        size: Int,
     ): Boolean {
         val deadline = System.currentTimeMillis() + queueWaitTimeoutMs
         while (accepting.get()) {
@@ -117,7 +135,7 @@ class TunWriter(
             }
             if (System.currentTimeMillis() > deadline) {
                 onWriteFailed(null)
-                Log.e(TAG, "TUN 写队列 ${queueWaitTimeoutMs}ms 未腾出空间, 回程数据写入失败 (${data.size}B)")
+                Log.e(TAG, "TUN 写队列 ${queueWaitTimeoutMs}ms 未腾出空间, 回程数据写入失败 (${size}B)")
                 return false
             }
         }
@@ -180,9 +198,19 @@ class TunWriter(
                 onWriteFailed(null)
                 return
             }
-            out.write(item.data)
-            item.written = true
-            onWritten(item.data.size)
+            val single = item.data
+            if (single != null) {
+                out.write(single)
+                item.written = true
+                onWritten(single.size)
+            } else {
+                // 批量: 顺序写, 逐包回调 (packetsSentCounter/StageCounters 按包计数, 不能合并成一次)
+                for (packet in item.batch.orEmpty()) {
+                    out.write(packet)
+                    onWritten(packet.size)
+                }
+                item.written = true
+            }
         } catch (e: Exception) {
             item.written = false
             onWriteFailed(e)
@@ -206,7 +234,7 @@ class TunWriter(
         private const val TAG = "TunWriter"
         private const val THREAD_NAME = "tun-writer"
 
-        /** 队列容量 (包数)。按 MTU 1500 算最多约 384KB 在途; TUN 一慢先丢控制包。 */
+        /** 队列容量 (条目数)。单包是控制包/关闭包; 回程批量条目 ≤64 段 (≈93KB)。 */
         private const val DEFAULT_QUEUE_CAPACITY = 256
 
         /** close 等待写线程退出的上限。 */

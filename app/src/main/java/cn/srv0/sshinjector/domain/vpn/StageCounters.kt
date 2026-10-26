@@ -39,7 +39,11 @@ object StageCounters {
         forwardAttempts.incrementAndGet()
     }
 
-    /** 隧道转发完成 SOCKS5 握手 + CONNECT, 连接已建立。 */
+    /**
+     * 本地 SOCKS5 代理握手 + 认证通过 (= 本地转发腿可用)。
+     * 不含 CONNECT 结果: 远端目标 NXDOMAIN/被墙/拒绝是目标侧问题, 计入会把
+     * "连不上 Google" 误报成 "数据转发故障" (端到端探测负责远端归因)。
+     */
     fun onForwardEstablished() {
         forwardEstablished.incrementAndGet()
     }

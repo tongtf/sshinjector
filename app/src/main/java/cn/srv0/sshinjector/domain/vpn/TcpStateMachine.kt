@@ -49,6 +49,13 @@ class TcpStateMachine(
         private const val RELAY_IDLE_SLEEP_MAX_MS = 8L // 回程空闲退避上限
         private const val MAX_TCP_SEGMENT = 1460
         private const val MAX_TCP_SEGMENT_V6 = 1440 // MTU1500 - IPv6 头40 - TCP 头20
+
+        /**
+         * 回程批量交接的段数上限 (64×1460 ≈ 93KB)。逐段交接 (每次一个 CountDownLatch)
+         * 在 2.5G 带宽下会成为单核瓶颈; 批量把交接次数除以 64, 同时把跨连接排队控制在
+         * 百 KB 量级 —— 不想让一条慢连接在写队列里攥着几 MB。
+         */
+        private const val RETURN_BATCH_PACKETS = 64
         private const val UINT32_MASK = 0xFFFFFFFFL
         private const val TUN_CONNECT_TIMEOUT_MS = 5000
 
@@ -85,6 +92,25 @@ class TcpStateMachine(
         private const val MAX_INFLIGHT_SANITY = 1L shl 31 // 在途超过该值视为 ack/seq 状态异常 (放开闸门)
         private const val FLOW_WAIT_TIMEOUT_MS = 1000L // 窗口等待重查间隔 (漏通知兜底, 不可移除)
         private const val MAX_WINDOW_SCALE = 14 // RFC 7323 上限, 防畸形 SYN 溢出
+
+        /**
+         * 本端在 SYN-ACK 中通告的窗口缩放因子 (客户端据此放大我们回的 window 字段)。
+         *
+         * shift=0 时上行发送窗口被 65535 封顶 —— 单流吞吐 ≈ 64KB / ACK 往返,
+         * 本机进程内 ACK 往返约 0.5~2ms, 即 0.3~1.0Gbps, 2.5G 局域网下是硬瓶颈。
+         * 3 → 65535<<3 ≈ 512KB, 2ms 往返仍可跑 2Gbps, 且不需要我们真的缓存半 MB
+         * (上行写不进 loopback 就不 ACK, 由客户端重传, 见 forwardToSocks)。
+         * 客户端 SYN 未带 WS 选项时无法缩放, 仍是 64KB —— 这是协议限制。
+         */
+        private const val ADVERTISED_WSCALE_SHIFT = 3
+        private const val ADVERTISED_WINDOW = 65535
+
+        /**
+         * loopback (本栈 ↔ 本地 SOCKS5) 的 socket 收发缓冲, 与 [ADVERTISED_WSCALE_SHIFT]
+         * 配套: 通告窗口 512KB 时, 上游一次性灌进来的数据要有地方待着, 否则
+         * `forwardToSocks` 的 write()==0 会造成成片的丢段+重传 (本栈无乱序缓存)。
+         */
+        private const val LOOPBACK_SOCKET_BUFFER_BYTES = 512 * 1024
         private const val TCP_FLAGS_RST_ACK = 0x5014
         private const val TCP_FLAGS_FIN_ACK = 0x5011
         private const val SOCKS_FAIL_LOG_THROTTLE_MS = 10_000L // CONNECT 拒绝的应用内日志节流窗口
@@ -92,7 +118,7 @@ class TcpStateMachine(
         private const val SLOW_HANDSHAKE_SAMPLE_EVERY = 20 // 每 N 次建连评估一次慢握手占比
         private const val SLOW_HANDSHAKE_RATE_PCT = 30 // 慢握手占比阈值 (%)
         private const val MAX_PENDING_RETURN_BYTES = 512 * 1024 // 回程排队上限 (SYN-ACK 前/flush 期间)
-        private const val MAX_PENDING_UPSTREAM_BYTES = 256 * 1024L // 通道就绪前可缓存的上行数据上限
+        private const val MAX_PENDING_UPSTREAM_BYTES = 512 * 1024L // 通道就绪前可缓存的上行数据上限 (≥ 通告窗口)
         private const val UPSTREAM_WAIT_LOG_THROTTLE_MS = 3_000L // "上行等待通道" 告警节流 (需比 10s 更密才可见)
         private const val NANOS_PER_MILLI = 1_000_000L // System.nanoTime → ms
     }
@@ -841,10 +867,20 @@ class TcpStateMachine(
         plugin: TunnelPlugin,
         socksPort: Int,
     ) {
-        // 分阶段健康: 进入隧道转发路径计数 (成功建立在 CONNECT 应答通过后计)
+        // 分阶段健康: 进入隧道转发路径计数 (成功 = 本地 SOCKS 握手/认证通过, 见下方)。
+        // 刻意**不**用 CONNECT 应答判定: 那一步等的是远端目标, 被墙/NXDOMAIN 会把
+        // "目标不可达"误报成"数据转发故障" (真机连北京节点访问 Google 即触发)。
         StageCounters.onForwardAttempt()
         val connKey = conn.key
         val sock = SocketChannel.open()
+        // 与 ADVERTISED_WSCALE_SHIFT 配套: 512KB 窗口灌进来时, 不能因为 loopback
+        // 发送缓冲太小就在 write()==0 处成片丢段 (丢段 = 客户端重传, 本栈无乱序缓存)。
+        // TCP_NODELAY 顺手关掉 Nagle: loopback 上小段 (SOCKS 握手 / 短 ACK) 不再凑包。
+        // 设置失败不影响功能 (回退内核默认值)。
+        runCatching {
+            sock.socket().sendBufferSize = LOOPBACK_SOCKET_BUFFER_BYTES
+            sock.socket().tcpNoDelay = true
+        }
         // 握手期非阻塞: readFully/writeFully 靠各阶段自己的 deadline 兜底 (见其 KDoc)。
         // 握手完成后 forwardToSocks/回程中继同样依赖非阻塞 write 的 write()==0 背压语义。
         sock.configureBlocking(false)
@@ -916,6 +952,9 @@ class TcpStateMachine(
             closeTcpConnection(connKey, conn)
             return
         }
+        // 本地转发腿可用 (代理应答 + 认证通过) 即计成功。CONNECT 之后的结果取决于远端
+        // 目标 (sshd 解析/被墙/拒绝), 由端到端探测归因, 不能算作 FORWARD 段故障。
+        StageCounters.onForwardEstablished()
 
         // SOCKS5 CONNECT 请求
         val dstHost = conn.dstIp.hostAddress
@@ -1024,7 +1063,6 @@ class TcpStateMachine(
         flushPendingReturn(conn)
         // 握手期间缓存的上行数据 (客户端提前发来的请求) 现在送出并补 ACK
         flushPendingUpstream(conn)
-        StageCounters.onForwardEstablished()
         VpnController.appLogThrottled(
             "隧道通道就绪 · ${target(conn)} — " +
                 "SSH+SOCKS 建连耗时 ${System.currentTimeMillis() - handshakeStartedAt}ms",
@@ -1155,7 +1193,11 @@ class TcpStateMachine(
         if (queued) return
         var pos = offset
         val maxSegment = if (conn.dstIpBytes.size == 16) MAX_TCP_SEGMENT_V6 else MAX_TCP_SEGMENT
+        val batch = ArrayList<ByteArray>(RETURN_BATCH_PACKETS)
         while (pos < end) {
+            // 先写掉手里的包再进窗口等待: 这些段的 serverSeq 已推进、客户端却还没收到,
+            // 留到等待里就成了"等一个永远不会到来的 ACK"(每秒空转一次重查, 吞吐塌掉)。
+            flushReturnBatch(sink, conn, batch)
             val capacity = awaitFlowCapacity(conn)
             if (capacity <= 0) {
                 // 静默丢弃是重大盲点: 曾导致"代理从 SSH 读到 3.4MB、TUN 只收到 0.4MB"
@@ -1164,18 +1206,42 @@ class TcpStateMachine(
                 reportDownstreamDrop(conn, end - pos)
                 return
             }
-            val chunkLen = minOf(maxSegment, end - pos, capacity)
-            val responsePacket = buildTcpResponsePacket(conn, payload, pos, chunkLen)
-            pos += chunkLen
-            if (responsePacket != null) {
-                // 回程数据走**阻塞**写入: 组包时 serverSeq 已推进, 本栈无重传, 丢了就是永久洞
-                sink.writeBlocking(responsePacket)
-                conn.downstreamBytes += chunkLen.toLong()
-            } else {
-                droppedDownstreamBytes.addAndGet(chunkLen.toLong())
-                reportDownstreamDrop(conn, chunkLen)
+            // 用本次拿到的窗口额度连续组包, 把 N 次"入队 + park/unpark"合成一次批量交接
+            // (逐段交接实测只有 ~325k pps, 组包本身 4.2M pps —— 交接是单核瓶颈)。
+            var budget = capacity
+            while (budget > 0 && batch.size < RETURN_BATCH_PACKETS) {
+                if (pos >= end || conn.state == TcpConnection.TcpState.Closed) break
+                val chunkLen = minOf(maxSegment, end - pos, budget)
+                val responsePacket = buildTcpResponsePacket(conn, payload, pos, chunkLen)
+                pos += chunkLen
+                budget -= chunkLen
+                if (responsePacket != null) {
+                    // 回程数据走**阻塞**写入: 组包时 serverSeq 已推进, 本栈无重传, 丢了就是永久洞
+                    batch.add(responsePacket)
+                    conn.downstreamBytes += chunkLen.toLong()
+                } else {
+                    droppedDownstreamBytes.addAndGet(chunkLen.toLong())
+                    reportDownstreamDrop(conn, chunkLen)
+                }
             }
         }
+        flushReturnBatch(sink, conn, batch)
+    }
+
+    /**
+     * 批量交接回程包。连接已关闭时直接丢弃 —— 关闭包可能已由 [closeTcpConnection] 先入队,
+     * 再补写数据会变成"FIN/RST 之后还有数据段"(客户端按非法序号丢弃)。
+     */
+    private fun flushReturnBatch(
+        sink: TunSink,
+        conn: TcpConnection,
+        batch: MutableList<ByteArray>,
+    ) {
+        if (batch.isEmpty()) return
+        if (conn.state != TcpConnection.TcpState.Closed) {
+            sink.writeBlockingBatch(batch)
+        }
+        batch.clear()
     }
 
     /** 回程排队溢出上报: pendingReturn 满 → 该段既没进队列也没写 TUN, 客户端会一直重传。 */
@@ -1488,7 +1554,15 @@ class TcpStateMachine(
                 protocol = 6,
                 ipv4Flags = 0,
             )
-            PacketWriter.writeTcpHeader(packet, srcPort, dstPort, seqNum, ackNum, flagsWord = 0x5018, window = 65535)
+            PacketWriter.writeTcpHeader(
+                packet,
+                srcPort,
+                dstPort,
+                seqNum,
+                ackNum,
+                flagsWord = 0x5018,
+                window = ADVERTISED_WINDOW,
+            )
 
             packet.put(payload, payloadOffset, payloadLength)
 
@@ -1553,9 +1627,14 @@ class TcpStateMachine(
 
     /**
      * 组装 SYN-ACK 包 (seq/ack 由调用方给定, 重传时复用原 ISN, 见 [buildSynAckPacket])。
-     * TCP 选项: MSS 恒有; Window Scale 仅当客户端 SYN 提供时回显 (RFC 7323 协商,
-     * shift=0 —— 本端从不缩放自己的窗口字段, 但回显使客户端能启用它自己声明的缩放,
-     * 客户端通告窗口从 64KB 封顶解放到 MB 级)。SACK 不回显 (从不发送 SACK 块)。
+     * TCP 选项: MSS 恒有; Window Scale 仅当客户端 SYN 提供时回显 (RFC 7323 协商)。
+     *
+     * 回显的 shift 是**本端**的通告窗口缩放 (客户端据此放大我们发给它的 window 字段):
+     * 用 [ADVERTISED_WSCALE_SHIFT] 而不是 0 —— 0 时上行发送窗口被 65535 封顶,
+     * 单流吞吐 = 64KB / ACK 往返 (本机进程间 ~0.5ms → 约 1Gbps), 是 2.5G 场景的硬瓶颈。
+     * 放大后本端并不额外缓存数据: 段仍逐段转给 loopback, 写不进去就不 ACK 让客户端重传
+     * (见 forwardToSocks), loopback 缓冲与 [ADVERTISED_WINDOW] 是配套的 —— 见
+     * [LOOPBACK_SOCKET_BUFFER_BYTES]。SACK 不回显 (从不发送 SACK 块)。
      */
     private fun buildSynAckWithSeq(
         conn: TcpConnection,
@@ -1592,9 +1671,9 @@ class TcpStateMachine(
                 seqNum,
                 ackNum,
                 flagsWord = ((tcpHeaderLen / 4) shl 12) or 0x12,
-                window = 65535,
+                window = ADVERTISED_WINDOW,
             )
-            // 选项: [MSS] (+ [NOP WScale 0] 当客户端提供 WS)
+            // 选项: [MSS] (+ [NOP WScale shift=ADVERTISED_WSCALE_SHIFT] 当客户端提供 WS)
             val mss = if (isIPv6) MAX_TCP_SEGMENT_V6 else MAX_TCP_SEGMENT
             packet.put(0x02)
             packet.put(0x04)
@@ -1603,7 +1682,7 @@ class TcpStateMachine(
                 packet.put(0x01) // NOP (对齐惯例)
                 packet.put(0x03)
                 packet.put(0x03)
-                packet.put(0x00) // WScale shift = 0
+                packet.put(ADVERTISED_WSCALE_SHIFT.toByte()) // 本端通告窗口的缩放因子 (上行 64KB 封顶的解法)
             }
 
             if (!isIPv6) {
@@ -1659,7 +1738,15 @@ class TcpStateMachine(
                 ipv4Flags = 0,
             )
             // TCP Header: ACK (无 payload, 不消耗 seq)
-            PacketWriter.writeTcpHeader(packet, srcPort, dstPort, seqNum, ackNum, flagsWord = 0x5010, window = 65535)
+            PacketWriter.writeTcpHeader(
+                packet,
+                srcPort,
+                dstPort,
+                seqNum,
+                ackNum,
+                flagsWord = 0x5010,
+                window = ADVERTISED_WINDOW,
+            )
 
             if (!isIPv6) {
                 PacketWriter.writeIpv4HeaderChecksum(packet, ipHeaderLen)
