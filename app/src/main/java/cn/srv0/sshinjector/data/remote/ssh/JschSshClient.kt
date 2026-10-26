@@ -16,6 +16,7 @@ import com.jcraft.jsch.HostKeyRepository
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.JSchException
 import com.jcraft.jsch.Session
+import com.jcraft.jsch.SocketFactory
 import com.jcraft.jsch.UserInfo
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -37,6 +38,8 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileWriter
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -84,6 +87,50 @@ private fun fingerprintMatches(
     configured: String,
     blob: ByteArray,
 ): Boolean = configured == fingerprintOfBlob(blob) || configured == legacyFingerprintOfBlob(blob)
+
+/**
+ * SSH 底层 socket 的收发缓冲 (SO_SNDBUF/SO_RCVBUF)。
+ *
+ * 目标场景是 2.5G 局域网 (RTT 几 ms 以内, BDP < 1MB), 1MB 足够覆盖; 再大主要服务
+ * 高 RTT 广域网, 而那种场景的瓶颈是 VPS 带宽。注意显式设置会**关闭内核 TCP 自动调优**,
+ * 且值会被 `net.core.wmem_max`/`rmem_max` 裁剪 —— 所以不取 4MB+ (被裁到很小反而更差),
+ * 1MB 是"够用且不易被削"的折中。服务端仍需放开 `net.ipv4.tcp_rmem/wmem`。
+ */
+private const val SSH_SOCKET_BUFFER_SIZE = 1024 * 1024
+
+/**
+ * 自定义 socket 工厂: 只为在建连前放大 SO_SNDBUF/SO_RCVBUF。
+ * TCP_NODELAY 由 JSch 在拿到 socket 后自己设置 (Session.connect 两条分支都会调),
+ * 这里不必重复。
+ */
+private class TunedSocketFactory(
+    private val connectTimeoutMs: Int,
+) : SocketFactory {
+    override fun createSocket(
+        host: String,
+        port: Int,
+    ): Socket {
+        val socket = Socket()
+        try {
+            socket.sendBufferSize = SSH_SOCKET_BUFFER_SIZE
+            socket.receiveBufferSize = SSH_SOCKET_BUFFER_SIZE
+            val address = InetSocketAddress(host, port)
+            if (connectTimeoutMs > 0) {
+                socket.connect(address, connectTimeoutMs)
+            } else {
+                socket.connect(address)
+            }
+        } catch (e: Exception) {
+            runCatching { socket.close() }
+            throw e
+        }
+        return socket
+    }
+
+    override fun getInputStream(socket: Socket) = socket.getInputStream()
+
+    override fun getOutputStream(socket: Socket) = socket.getOutputStream()
+}
 
 /**
  * 单次远程命令执行结果。
@@ -527,8 +574,18 @@ class JschSshClient
 
             // S7 算法白名单。注意 JSch 0.2.x 的 session 配置键是 kex/server_host_key/cipher.c2s/mac.c2s,
             // 写 KexAlgorithms/HostKeyAlgorithms/Cipher/MAC 不会被 Session 读取 (静默 no-op)。
+            //
+            // ECDH 必须在前: jsch 2.x 是 multi-release JAR, `jce.XDH`/`jce.SignatureEd25519` 的
+            // 真实现只存在于 `META-INF/versions/11|15/`, 而 Android 的 D8 不处理 MR-JAR ——
+            // APK 里打包的是抛 "XDH requires Java11+" 的 **stub**, 于是 curve25519 在运行时被
+            // JSch 静默过滤掉 (SSH 日志里客户端提案只剩 group-exchange/group14)。OpenSSH 10
+            // 的默认 KEX 已移除有限域 DH (`mlkem/sntrup/curve25519/ecdh`), 两边的交集就只剩
+            // ECDH → 白名单缺它时必然 `Algorithm negotiation fail: algorithmName="kex"`。
+            // curve25519 保留给 JVM 测试/未来 D8 支持; group-exchange/group14 保留给旧服务器
+            // (dropbear/OpenWrt)。不要删 ECDH, 也不要以为 curve25519 在 Android 上真的可用。
             internal const val KEX_ALGORITHMS =
-                "curve25519-sha256,curve25519-sha256@libssh.org," +
+                "ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521," +
+                    "curve25519-sha256,curve25519-sha256@libssh.org," +
                     "diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256"
             internal const val HOST_KEY_ALGORITHMS =
                 "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521," +
@@ -724,6 +781,9 @@ class JschSshClient
                 // KEX/主机密钥/Cipher/MAC 白名单 (移除 group1-sha1/ssh-dss/CBC/hmac-sha1)
                 applyAlgorithmWhitelist(s)
                 s.setTimeout(config.connectTimeout)
+                // 大 socket 缓冲 + 建连超时: JSch 走自定义 factory 时不再用内置
+                // Util.createSocket(host, port, connect_timeout), 超时只能由这里给。
+                s.setSocketFactory(TunedSocketFactory(config.connectTimeout))
                 // 注意: 绝不要用 mwiede JSch 的 setServerAliveInterval/setServerAliveCountMax ——
                 // 0.2.17 里这两个字段只写不读 (功能未实现), 而 setServerAliveInterval 内部会顺手
                 // setTimeout(同值): 传 30 (秒) 会把 socket 超时改成 30ms, 握手必失败
