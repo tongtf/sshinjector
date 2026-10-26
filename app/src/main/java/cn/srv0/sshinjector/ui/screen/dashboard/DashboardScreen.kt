@@ -541,6 +541,32 @@ private fun DashboardStatusCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
+                    stringResource(cn.srv0.sshinjector.R.string.dashboard_peak_rate),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text =
+                        if (state.peakUpBps > 0 || state.peakDownBps > 0) {
+                            "↑ ${MainViewModel.formatBytes(state.peakUpBps)}/s  " +
+                                "↓ ${MainViewModel.formatBytes(state.peakDownBps)}/s"
+                        } else {
+                            "-"
+                        },
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
                     stringResource(cn.srv0.sshinjector.R.string.dashboard_duration),
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
