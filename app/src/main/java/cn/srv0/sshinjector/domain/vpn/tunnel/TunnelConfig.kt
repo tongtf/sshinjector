@@ -20,6 +20,15 @@ sealed class TunnelConfig {
         val sshPassword: String? = null,
         val sshKeyAlgorithm: String = "ECDSA_P256",
         val socksPort: Int = 1080,
+        /**
+         * 服务器行 id (C-1): 运行时隧道曾丢这个字段, 导致 `persistFingerprint` 的 `id <= 0` 早退,
+         * 首次 TOFU 指纹永远落不了库。0 = 临时配置 (向导/测试), 跳过落库。
+         */
+        val serverId: Long = 0,
+        /**
+         * DB 里已保存的主机密钥指纹 (C-1): 运行时隧道曾丢这个字段, 导致 DB 指纹强校验形同虚设。
+         */
+        val hostKeyFingerprint: String? = null,
     ) : TunnelConfig()
 
     companion object {
@@ -44,6 +53,8 @@ sealed class TunnelConfig {
                         keepAliveInterval = server.keepAliveInterval,
                     ),
                 socksPort = server.socksPort,
+                serverId = server.id,
+                hostKeyFingerprint = server.hostKeyFingerprint,
             )
     }
 }

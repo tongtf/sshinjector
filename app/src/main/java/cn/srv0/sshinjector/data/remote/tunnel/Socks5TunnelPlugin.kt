@@ -43,6 +43,9 @@ class Socks5TunnelPlugin
             return try {
                 val sshConfig =
                     ServerConfig(
+                        // C-1: 运行时隧道曾丢这两个字段 —— 指纹落库与 DB 强校验都失效
+                        id = c.serverId,
+                        hostKeyFingerprint = c.hostKeyFingerprint,
                         name = "SOCKS5",
                         host = c.sshHost,
                         port = c.sshPort,
