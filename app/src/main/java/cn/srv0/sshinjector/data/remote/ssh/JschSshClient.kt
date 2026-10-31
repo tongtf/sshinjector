@@ -404,6 +404,56 @@ internal object ChannelOpenBudget {
     ): Boolean = candidateCount > 0 && attempted == candidateCount && !stalledAny
 }
 
+/**
+ * C-5: 池失败日志按**出口身份**分流。
+ *
+ * 主出口 (`exitLabel == ""`) 保持原文案 + ERROR —— 池就是整条链路的池, "连接即将断开"成立。
+ * 附加出口只能降 WARNING 且必须说清"新连接改走 default": 它的池死了不影响其它出口,
+ * 打全局 ERROR 会让 `故障归因` 凭空多一类假故障, 并把后续排障判读全部带偏 (E-3 / S21)。
+ *
+ * 抽成纯函数是为了让这条判据能被单测确定性锁住 (不需要真 SSH 会话)。
+ */
+internal data class PoolFailureLog(
+    val message: String,
+    val level: LogLevel,
+    val throttleKey: String,
+)
+
+internal fun poolFailureLog(exitLabel: String): PoolFailureLog =
+    if (exitLabel.isEmpty()) {
+        PoolFailureLog(
+            message = "SSH 会话全部丢失 · 连接即将断开并触发重连",
+            level = LogLevel.ERROR,
+            throttleKey = "SSH 会话全部丢失",
+        )
+    } else {
+        PoolFailureLog(
+            message = "出口 SSH 会话全部丢失 · $exitLabel — 新连接改走 default",
+            level = LogLevel.WARNING,
+            throttleKey = "出口降级",
+        )
+    }
+
+internal fun noSessionLog(
+    exitLabel: String,
+    host: String,
+    port: Int,
+    poolState: String,
+): PoolFailureLog =
+    if (exitLabel.isEmpty()) {
+        PoolFailureLog(
+            message = "SSH 通道打开失败 · 无可用会话 ($host:$port) (pool: $poolState)",
+            level = LogLevel.ERROR,
+            throttleKey = "SSH 通道打开失败",
+        )
+    } else {
+        PoolFailureLog(
+            message = "出口无可用会话 · $exitLabel — 新连接改走 default ($host:$port)",
+            level = LogLevel.WARNING,
+            throttleKey = "出口降级",
+        )
+    }
+
 @Singleton
 class JschSshClient
     @Inject
@@ -414,6 +464,14 @@ class JschSshClient
     ) : SshChannelFactory,
         RemoteCommandExecutor,
         RemoteDomainResolver {
+        /**
+         * 出口标签 (C-5): `""` = 主出口 —— 池失败日志与今天**逐字一致** (ERROR, 声称整条连接断开);
+         * 非空 = 附加出口 —— 同一个事件只影响该出口的新连接, 必须降 WARNING 并说清"新连接改走 default",
+         * 否则附加出口抖动会让 `故障归因` 凭空多出一类假 ERROR (E-3 / 验收 S21)。
+         *
+         * 必须放 body 属性: 本类由 Hilt `@Inject` 构造, 加 `String` 构造参数会打断 Dagger 绑定。
+         */
+        @Volatile var exitLabel: String = ""
         companion object {
             private const val TAG = "JschSshClient"
             private const val SESSION_POOL_SIZE = 3
@@ -1297,10 +1355,13 @@ class JschSshClient
         internal fun checkPoolHealth() {
             if (pool.isEmpty() || pool.all { !it.healthy && !it.session.isConnected }) {
                 Log.e(TAG, "All sessions unhealthy, triggering disconnect")
-                VpnController.appLog(
-                    "SSH 会话全部丢失 · 连接即将断开并触发重连",
-                    level = LogLevel.ERROR,
-                )
+                val log = poolFailureLog(exitLabel)
+                if (exitLabel.isEmpty()) {
+                    // 主出口保持原调用 (非节流) —— 关闭多出口时必须与今天逐字、逐行为一致
+                    VpnController.appLog(log.message, level = log.level)
+                } else {
+                    VpnController.appLogThrottled(log.message, level = log.level, throttleKey = log.throttleKey)
+                }
                 isConnectedFlag.set(false)
                 connectionState.value = ConnectionState.Failed
             }
@@ -1416,11 +1477,8 @@ class JschSshClient
                     pool.joinToString(prefix = "[", postfix = "]") {
                         "conn=${it.session.isConnected}/healthy=${it.healthy}"
                     }
-                VpnController.appLogThrottled(
-                    "SSH 通道打开失败 · 无可用会话 ($host:$port) (pool: $poolState)",
-                    level = LogLevel.ERROR,
-                    throttleKey = "SSH 通道打开失败",
-                )
+                val log = noSessionLog(exitLabel, host, port, poolState)
+                VpnController.appLogThrottled(log.message, level = log.level, throttleKey = log.throttleKey)
                 // 池里一个可用会话都没有 (全断 / 全被判 unhealthy) 时必须主动体检:
                 // keepAlive=0 没有周期协程去发现 session.isConnected==false, 只返回 null 会让
                 // 新连接一直拿 0x05 而状态仍显示"已连接"。checkPoolHealth 的条件是
