@@ -25,6 +25,7 @@ import cn.srv0.sshinjector.domain.vpn.StageHealthEvaluator
 import cn.srv0.sshinjector.domain.vpn.TunWriter
 import cn.srv0.sshinjector.domain.vpn.VpnNetwork
 import cn.srv0.sshinjector.domain.vpn.dnsTransportFor
+import cn.srv0.sshinjector.domain.vpn.exit.ExitId
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelConfig
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
@@ -444,7 +445,14 @@ class VpnController
                 val tunnelConfig = TunnelConfig.forSocks5(server, password)
                 updateState { it.copy(connectStage = ConnectStage.TUNNEL) }
                 addLog("正在连接隧道 (socks5)...", LogLevel.INFO)
-                val tunnelResult = tunnelManager.startPlugin("socks5", tunnelConfig)
+                val tunnelResult =
+                    tunnelManager.startExit(
+                        id = ExitId.DEFAULT,
+                        protocolId = "socks5",
+                        label = "",
+                        serverHost = server.host,
+                        config = tunnelConfig,
+                    )
                 if (tunnelResult.isFailure) {
                     val errorMsg = tunnelResult.exceptionOrNull()?.message ?: "Tunnel connection failed"
                     addLog("隧道连接失败: $errorMsg", LogLevel.ERROR)
