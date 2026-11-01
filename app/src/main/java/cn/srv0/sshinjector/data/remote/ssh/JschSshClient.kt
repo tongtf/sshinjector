@@ -472,6 +472,7 @@ class JschSshClient
          * 必须放 body 属性: 本类由 Hilt `@Inject` 构造, 加 `String` 构造参数会打断 Dagger 绑定。
          */
         @Volatile var exitLabel: String = ""
+
         companion object {
             private const val TAG = "JschSshClient"
             private const val SESSION_POOL_SIZE = 3

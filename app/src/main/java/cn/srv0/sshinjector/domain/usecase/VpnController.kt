@@ -1330,7 +1330,7 @@ class VpnController
             val rateText = DataPlaneSnapshot.rateText(windowSec, up, down, lastSnapshotUp, lastSnapshotDown)
             lastSnapshotUp = up
             lastSnapshotDown = down
-            val tunnelStats = tunnelManager.getActiveOrFallback().tunnelDiagnostics()
+            val tunnelStats = tunnelManager.getActiveOrFallback()?.tunnelDiagnostics() ?: ""
             // 文案拼装与速率算术已抽到 DataPlaneSnapshot (纯函数 + 单测锁死方向语义):
             // up = 读 TUN = 上行, down = 写 TUN = 下行, 别再弄反。
             appLog(

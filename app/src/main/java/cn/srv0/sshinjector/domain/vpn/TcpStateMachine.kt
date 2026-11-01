@@ -567,6 +567,17 @@ class TcpStateMachine(
                 }
 
                 val plugin = tunnelManager.getActiveOrFallback()
+                if (plugin == null) {
+                    // 插件由工厂按出口创建, 不再有"未连接实例"兜底; 正常只在隧道未就绪时出现
+                    Log.e(TAG, "No active tunnel plugin for conn ${conn.id} (tunnel not ready?)")
+                    VpnController.appLogThrottled(
+                        "隧道插件异常 · 无活动插件 (隧道未就绪?)",
+                        level = LogLevel.ERROR,
+                        throttleKey = "隧道插件异常",
+                    )
+                    closeTcpConnection(conn.key, conn)
+                    return@launch
+                }
                 val socksPort = plugin.localSocksPort
                 if (socksPort > 0) {
                     forwardThroughLocalSocks(conn, plugin, socksPort)

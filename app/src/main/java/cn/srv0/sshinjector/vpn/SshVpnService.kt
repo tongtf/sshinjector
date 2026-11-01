@@ -210,10 +210,17 @@ class SshVpnService : VpnService() {
         var stageStep: HealthStep? = null
         try {
             val endpoint = settingsDataStore.probeUrl.first() ?: ConnectivityProber.DEFAULT_ENDPOINT
+            // 插件由工厂按出口创建, 不再有"DI 里的未连接实例"兜底 → 可能为 null。
+            // 探活只在连接成功后启动, 正常不会走到这里; 跳过本轮而不是拿空凭据去探测 (那会误判 PROXY 失败)。
+            val plugin = tunnelManager.getActiveOrFallback()
+            if (plugin == null) {
+                Log.d("SshVpnService", "health probe skipped: no active tunnel plugin")
+                return
+            }
             val prober =
                 ConnectivityProber(
                     socksPort = config.socksPort,
-                    socksAuth = tunnelManager.getActiveOrFallback().socksAuth,
+                    socksAuth = plugin.socksAuth,
                     endpointUrl = endpoint,
                 )
             val result = prober.probe()

@@ -3,6 +3,20 @@ package cn.srv0.sshinjector.domain.vpn.tunnel
 interface TunnelPlugin {
     val id: String
 
+    /**
+     * 出口身份 (多出口维度, 与 [id] 的协议名正交)。
+     * `"default"` = 主出口; 其余为用户命名 (`hk`/`jp`)。
+     * 默认空串 = 该插件不区分出口 (旧实现/测试替身), 日志不加前缀。
+     */
+    val exitId: String get() = ""
+
+    /**
+     * 当前活跃连接数 (瞬时值)。单一来源必须是本地代理的连接表
+     * (`Socks5ProxyServer.connections.size`), **不要**另设计数器 —— 两处增减不同步会让
+     * 单出口软上限永不触发或永久触发 (I-19)。默认 0 = 该插件无此概念。
+     */
+    val activeConnections: Int get() = 0
+
     suspend fun connect(config: TunnelConfig): Result<Unit>
 
     suspend fun disconnect()
