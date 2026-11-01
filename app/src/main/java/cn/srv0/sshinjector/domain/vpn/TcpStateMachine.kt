@@ -173,9 +173,6 @@ class TcpStateMachine(
         protectSocketFn = protect
     }
 
-    // 回向直通回调注册目标 (socks5 插件), 连接关闭时用于移除回调
-    @Volatile private var tunCallbackPlugin: TunnelPlugin? = null
-
     private var dnsInterceptor: DnsInterceptor? = null
 
     fun setDnsInterceptor(interceptor: DnsInterceptor) {
@@ -244,6 +241,17 @@ class TcpStateMachine(
          * 定位靠 equals, 可变构造参数会让定位返回 -1 —— 同类历史坑见 `PooledSession.lastOpenStallAtMs`)。
          */
         @Volatile var appUid: Int = AppUidResolver.NO_UID
+
+        /**
+         * 本连接回程回调注册到**哪个插件** (多出口后不能再用机器级字段, C-2)。
+         *
+         * 旧实现是 `TcpStateMachine` 上的一个 `tunCallbackPlugin`, 每次建连都覆盖 ——
+         * 一旦第二条连接走另一个出口, 第一条连接关闭时会去**新出口**上摘回调:
+         * 旧出口的回调永久泄漏 (该端口的下一次复用会把回程写进已死的连接),
+         * 新出口的回调被误删 (那条连接的回程全丢, 表现为"零回程"直到超时)。
+         * 放类体内 (非构造参数) 以免影响 data class 的 equals/hashCode/copy 语义。
+         */
+        @Volatile var tunnelPlugin: TunnelPlugin? = null
 
         /**
          * 已发出的 SYN-ACK 序列号 (ISN)。-1 = 尚未发出。
@@ -895,7 +903,7 @@ class TcpStateMachine(
                 plugin.registerTargetEofCallback(localPort) { graceful ->
                     closeTcpConnection(connKey, conn, graceful = graceful)
                 }
-                tunCallbackPlugin = plugin
+                conn.tunnelPlugin = plugin
                 directRelay = true
             } catch (e: Exception) {
                 Log.w(TAG, "registerTunCallback failed for conn ${conn.id}, falling back to socket relay")
@@ -1982,8 +1990,11 @@ class TcpStateMachine(
         // 1 参 remove(key) 会误删新建的那条 (见 forwardThroughLocalSocks 的重建分支)。
         tcpConnections.remove(key, conn)
         if (conn.socksLocalPort > 0) {
-            tunCallbackPlugin?.removeTunCallback(conn.socksLocalPort)
-            tunCallbackPlugin?.removeTargetEofCallback(conn.socksLocalPort)
+            // 必须用**本连接**的插件摘回调 (多出口: 机器级字段会被别的连接覆盖, C-2)
+            val owner = conn.tunnelPlugin
+            owner?.removeTunCallback(conn.socksLocalPort)
+            owner?.removeTargetEofCallback(conn.socksLocalPort)
+            conn.tunnelPlugin = null
             conn.socksLocalPort = 0
         }
         try {
