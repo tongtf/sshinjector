@@ -219,7 +219,10 @@ class SshVpnService : VpnService() {
             }
             val prober =
                 ConnectivityProber(
-                    socksPort = config.socksPort,
+                    // 用插件**实际监听**的端口: 多出口时每条出口的端口可能不同,
+                    // 拿配置里的端口去探测会打到别的出口 (或没人监听) → 假 PROXY 失败。
+                    // 插件尚未绑定 (0) 时回退配置值, 与改造前逐字一致。
+                    socksPort = plugin.localSocksPort.takeIf { it > 0 } ?: config.socksPort,
                     socksAuth = plugin.socksAuth,
                     endpointUrl = endpoint,
                 )
