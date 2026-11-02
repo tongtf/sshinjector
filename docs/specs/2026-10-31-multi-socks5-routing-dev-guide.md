@@ -403,13 +403,24 @@ class ConnectionBudgetHolder @Inject constructor() {
 ## 8. 进度追踪
 
 ### P0
-- [ ] P0-1 TunnelConfig 透传 (C-1)
-- [ ] P0-2 exitLabel 日志分流 (C-5)
-- [ ] P0-3 工厂 + 去单例
-- [ ] P0-4 TunnelManager 分键 + 可空 fallback
-- [ ] P0-5 conn.tunnelPlugin (C-2)
-- [ ] P0-6 探活端口 (C-3)
-- [ ] P0-7 ConnectionBudget
+- [x] P0-1 TunnelConfig 透传 (C-1) — `9633b7b`
+- [x] P0-2 exitLabel 日志分流 (C-5) — `c54ff77`
+- [x] P0-3 工厂 + 去单例 — `2a61c2f`
+- [x] P0-4 TunnelManager 分键 + 可空 fallback — `d5ef4a9`
+- [x] P0-5 conn.tunnelPlugin (C-2) — `08079c8`
+- [x] P0-6 探活端口 (C-3) — `32d81eb`
+- [x] P0-7 ConnectionBudget — `7a7db56`
+
+#### P0 实施结果与偏差 (2026-11-02)
+
+| 项 | 实际落地 | 与文档的差异 / 原因 |
+|---|---|---|
+| P0-3 | `TunnelPluginFactory` + `Socks5TunnelPluginFactory` 落在 `data/remote/tunnel/`;`Socks5TunnelPlugin` 去 `@Singleton`, ctor 增加 `exitId`/`label`/`budgetHolder` | `TunnelManager` 在 domain 层直接引用 data 层工厂接口 —— 与既有 `VpnController → DomainListManager` 同向, 单模块内可接受 |
+| P0-3 | `getActiveOrFallback()` 改为**可空** | 插件不再有"DI 里那个未连接实例"可兜底。三个调用点: 探活 (跳过本轮 + DEBUG)、快照 (`?: ""`)、转发 (记 `隧道插件异常` + 关连接) |
+| P0-4 | `startExit(id, protocolId, label, serverHost, config)` + `stopExit` + `exit(id)` + `exitsSnapshot()` + `stopAll()` | **不持锁跨 `connect()`**: 阻塞式建池可达数秒, 持锁会让 `forceReset()` 的 `stopAll()` 卡在后面。串行化由 `VpnController.connectMutex` 保证, 绕过它的 `forceReset` 由 `sessionGeneration` 兜底 (启动完成时代际已变 → 自我 `disconnect` 且不登记) |
+| P0-4 | `ActiveExit` 已带 `health/degradedSince/lastProbeOkAt/connTotal/failTotal/degradeTotal/lastError` | 为 P2 探活/快照预留;**活跃连接数不在这里记账** (单一真相源 = `plugin.activeConnections`) |
+| P0-7 | `ConnectionBudget` + `ConnectionBudgetHolder`;`Socks5ProxyServer` ctor 增加 `budget`;`handleAccept` 在**构造后、注册前** acquire, `onClosed` 用 `AtomicBoolean` 保证恰好 release 一次 | 预算拒绝回 `0x01` (新增 `Socks5Connection.rejectAndClose`);注册失败时走 `connection.close()` 归还 permit —— 否则连接表与预算双泄漏。`MAX_CONNECTIONS` 改为引用 `ConnectionBudget.DEFAULT_LIMIT` (同为 512) |
+| 全局 | 新增单测: `ExitIdTest`(5) / `TunnelManagerExitTest`(4) / `MultiExitCallbackTest`(1) / `ConnectionBudgetTest`(7) | `MultiExitCallbackTest` 在旧实现 (机器级字段) 下**必然失败**: 关连接 1 会摘掉出口 B 的回调 |
 
 ### P1
 - [ ] AppIdentity
