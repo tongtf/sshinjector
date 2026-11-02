@@ -14,6 +14,7 @@ import cn.srv0.sshinjector.domain.model.VpnState
 import cn.srv0.sshinjector.domain.obs.AppMetrics
 import cn.srv0.sshinjector.domain.vpn.AdBlocker
 import cn.srv0.sshinjector.domain.vpn.CidrRoute
+import cn.srv0.sshinjector.domain.vpn.ConnectionBudgetHolder
 import cn.srv0.sshinjector.domain.vpn.DNS_MODE_WHITELIST
 import cn.srv0.sshinjector.domain.vpn.DataPlaneSnapshot
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
@@ -80,6 +81,7 @@ class VpnController
         private val settingsDataStore: cn.srv0.sshinjector.data.local.preferences.SettingsDataStore,
         private val domainListManager: DomainListManager,
         private val adBlockManager: cn.srv0.sshinjector.data.local.AdBlockManager,
+        private val connectionBudgetHolder: ConnectionBudgetHolder,
         @ApplicationContext private val context: Context,
     ) : CoroutineScope by CoroutineScope(Dispatchers.IO + SupervisorJob()) {
         @Volatile private var vpnInterface: FileDescriptor? = null
@@ -441,6 +443,10 @@ class VpnController
             }
 
             return try {
+                // 0. 新会话新建全出口共享连接预算 (512 = 改造前 MAX_CONNECTIONS, 行为等价)。
+                //    必须每会话新建: 复用会让上一会话泄漏的 permit 永久吃掉新会话容量。
+                connectionBudgetHolder.startSession()
+
                 // 1. 启动隧道插件 (内含 SSH TCP+握手, 连接流程中最慢阶段)
                 val tunnelConfig = TunnelConfig.forSocks5(server, password)
                 updateState { it.copy(connectStage = ConnectStage.TUNNEL) }
@@ -630,6 +636,9 @@ class VpnController
             } catch (e: Exception) {
                 addLog("隧道断开错误: ${e.message}", LogLevel.ERROR)
             }
+            // 会话结束: 预算置空 (下次 connect 新建)。放在 stopAll 之后 ——
+            // 关闭中的连接仍要走 onClosed 归还 permit, 但 budget 对象本身已无用。
+            connectionBudgetHolder.clearSession()
 
             // 关闭输入输出流
             try {
@@ -755,6 +764,8 @@ class VpnController
             } catch (e: Exception) {
                 addLog("隧道断开错误: ${e.message}", LogLevel.ERROR)
             }
+            // forceReset 绕过 disconnect 的整条链, 必须自己清预算 (否则跨会话残留)
+            connectionBudgetHolder.clearSession()
             try {
                 inputStream?.close()
                 closeTunWriter()

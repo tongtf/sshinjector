@@ -18,19 +18,23 @@ import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 private val IS_DEBUG = Log.isLoggable("Socks5Proxy", Log.DEBUG)
 private const val TIMEOUT_CHECK_INTERVAL_MS = 5000L
 
 /** 并发连接上限: 超限的新连接立即关闭 (防同设备恶意 app 灌连接的本地 DoS)。 */
-private const val MAX_CONNECTIONS = 512
+private const val MAX_CONNECTIONS = ConnectionBudget.DEFAULT_LIMIT
 
 /** 握手期 (未进 Relaying) 空闲超时: 未认证连接 3s 即回收, 不给 10s 的资源占用窗口。 */
 private const val UNAUTHENTICATED_TIMEOUT_MS = 3000L
 
 /** 连接数超限的节流日志键。 */
 private const val THROTTLE_KEY_CONN_LIMIT = "本地代理连接数超限"
+
+/** 全出口共享预算耗尽的节流日志键。 */
+private const val THROTTLE_KEY_CONN_BUDGET = "本地代理连接预算已满"
 
 /** 回程写入 TUN 超过此时长就告警: 它会把 JSch 读线程拖住 (管道 32KB→1MB 后仍是会话级风险)。 */
 private const val SLOW_TUN_WRITE_WARN_MS = 300L
@@ -57,12 +61,24 @@ class Socks5ProxyServer
         private val sshChannelFactory: SshChannelFactory,
         private val dnsInterceptor: DnsInterceptor,
         private val sshIoDispatcher: SshIoDispatcher,
+        /**
+         * 全出口共享连接预算 (设计 §10 I-8)。null = 不限额 (测试/旧路径), 行为与改造前一致。
+         * 由插件从 [ConnectionBudgetHolder] 取**当前会话**的那一个传进来 —— 每会话新建,
+         * 不跨会话复用 (复用会让泄漏的 permit 永久吃掉新会话容量)。
+         */
+        private val budget: ConnectionBudget? = null,
     ) {
         private var serverChannel: ServerSocketChannel? = null
         private var selector: Selector? = null
         private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         private val connections = ConcurrentHashMap<Int, Socks5Connection>()
         private val connectionIdCounter = AtomicLong(0)
+
+        /** 当前活跃连接数 (瞬时值)。多出口软上限的唯一真相源, 不另记一份计数 (I-19)。 */
+        val activeConnections: Int get() = connections.size
+
+        /** 本会话累计接受的连接数 (含已关闭)。 */
+        val totalConnections: Long get() = connectionIdCounter.get()
 
         /**
          * 隧道数据面诊断快照 (周期日志): 上行/下行累计字节对比可立即判断卡在哪一侧,
@@ -284,6 +300,7 @@ class Socks5ProxyServer
                     (it as? java.net.InetSocketAddress)?.port
                 } ?: 0
 
+            val budgetHeld = AtomicBoolean(false)
             val connection =
                 Socks5Connection(
                     id = connectionId,
@@ -294,6 +311,9 @@ class Socks5ProxyServer
                         connections.remove(connectionId.toInt())
                         removeTunCallback(clientPort)
                         removeTargetEofCallback(clientPort)
+                        // 预算**恰好**在这里归还一次: close() 有 state==Closed 占位, onClosed 只会跑一次。
+                        // budgetHeld 兜住"没 acquire 就关闭"的路径 (预算拒绝), 否则会凭空放大容量。
+                        if (budgetHeld.compareAndSet(true, false)) budget?.release()
                     },
                     ipToDomainLookup = { dnsInterceptor.lookupDomain(it) },
                     expectedAuth = expectedAuth,
@@ -304,12 +324,33 @@ class Socks5ProxyServer
             connection.pendingTunCallbacksRef = pendingTunCallbacks
             connection.pendingTargetEofCallbacksRef = pendingTargetEofCallbacks
 
-            connections[connectionId.toInt()] = connection
+            // I-18: acquire 必须在**构造之后** (构造异常不漏 permit)、注册/超时协程**之前**
+            // (晚于 start 时连接可能已关闭, 永远不 release → 预算耗尽后全拒)。
+            if (budget != null && !budget.tryAcquire()) {
+                // 回明确拒绝码 0x01 (通用失败) 而不是静默 EOF: 客户端能立刻放弃而不是等超时
+                connection.rejectAndClose(0x01)
+                VpnController.appLogThrottled(
+                    "本地代理连接预算已满 · 已拒绝新连接 (全出口共享上限 ${budget.limit})",
+                    level = LogLevel.WARNING,
+                    throttleKey = THROTTLE_KEY_CONN_BUDGET,
+                )
+                return
+            }
+            budgetHeld.set(true)
 
-            connection.startTimeoutChecker()
+            try {
+                connections[connectionId.toInt()] = connection
 
-            val selectionKey = clientChannel.register(selector!!, SelectionKey.OP_READ, connection)
-            connection.selectionKey = selectionKey
+                connection.startTimeoutChecker()
+
+                val selectionKey = clientChannel.register(selector!!, SelectionKey.OP_READ, connection)
+                connection.selectionKey = selectionKey
+            } catch (e: Exception) {
+                // 注册失败 (对端已关掉 channel): 必须走 close() 让 onClosed 归还 permit,
+                // 否则连接表与预算双泄漏, 后续新连接会被预算全拒
+                Log.w("Socks5Proxy", "register connection $connectionId failed: ${e.message}")
+                connection.close()
+            }
         }
 
         private fun handleRead(key: SelectionKey) {
@@ -1002,6 +1043,16 @@ private class Socks5Connection(
     private fun sendErrorReplyAndClose(rep: Int) {
         val reply = byteArrayOf(0x05, rep.toByte(), 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
         sendReplyAndClose(reply)
+    }
+
+    /**
+     * 建连前就被拒绝 (例如全出口连接预算已满): 同步回拒绝码后关闭。
+     *
+     * 与 [sendErrorReplyAndClose] 同一条写路径 (writeLock 直写), 客户端能立刻拿到 0x01 放弃,
+     * 而不是对着半开的 socket 等到自己的超时。
+     */
+    internal fun rejectAndClose(rep: Int) {
+        sendErrorReplyAndClose(rep)
     }
 
     private fun sendReply(reply: ByteArray) {

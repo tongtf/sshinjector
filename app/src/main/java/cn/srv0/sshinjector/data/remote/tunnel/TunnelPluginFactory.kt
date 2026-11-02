@@ -4,6 +4,7 @@ import cn.srv0.sshinjector.data.local.dao.ServerDao
 import cn.srv0.sshinjector.data.remote.ssh.JschSshClient
 import cn.srv0.sshinjector.data.remote.ssh.KnownHostsManager
 import cn.srv0.sshinjector.data.remote.ssh.SshKeyManager
+import cn.srv0.sshinjector.domain.vpn.ConnectionBudgetHolder
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
 import cn.srv0.sshinjector.domain.vpn.SshIoDispatcher
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelPlugin
@@ -44,6 +45,7 @@ class Socks5TunnelPluginFactory
         private val serverDao: ServerDao,
         private val dnsInterceptor: DnsInterceptor,
         private val sshIoDispatcher: SshIoDispatcher,
+        private val budgetHolder: ConnectionBudgetHolder,
     ) : TunnelPluginFactory {
         override val protocolId = "socks5"
 
@@ -63,6 +65,7 @@ class Socks5TunnelPluginFactory
                 client = client,
                 dnsInterceptor = dnsInterceptor,
                 sshIoDispatcher = sshIoDispatcher,
+                budgetHolder = budgetHolder,
                 exitId = exitId,
                 label = label,
             )

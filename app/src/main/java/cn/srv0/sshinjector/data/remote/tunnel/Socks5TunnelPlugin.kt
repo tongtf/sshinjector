@@ -17,11 +17,16 @@ class Socks5TunnelPlugin(
     private val client: JschSshClient,
     private val dnsInterceptor: DnsInterceptor,
     private val sshIoDispatcher: cn.srv0.sshinjector.domain.vpn.SshIoDispatcher,
+    private val budgetHolder: cn.srv0.sshinjector.domain.vpn.ConnectionBudgetHolder,
     override val exitId: String,
     private val label: String,
 ) : TunnelPlugin {
     override val id = "socks5"
     private var socksServer: Socks5ProxyServer? = null
+
+    /** 活跃连接数单一真相源 = 本地代理的连接表 (I-19), 不另记一份计数。 */
+    override val activeConnections: Int
+        get() = socksServer?.activeConnections ?: 0
 
     private var _socksAuth: Pair<String, String>? = null
     override val socksAuth: Pair<String, String>? get() = _socksAuth
@@ -66,7 +71,14 @@ class Socks5TunnelPlugin(
             val result = client.connect(sshConfig)
             if (!result.success) throw Exception(result.error ?: "SSH connection failed")
 
-            val proxy = Socks5ProxyServer(client, dnsInterceptor, sshIoDispatcher)
+            val proxy =
+                Socks5ProxyServer(
+                    client,
+                    dnsInterceptor,
+                    sshIoDispatcher,
+                    // 全出口共享预算: 取**当前会话**的那一个 (holder 为空 = 不限额, 与改造前一致)
+                    budget = budgetHolder.current,
+                )
             // 每次连接生成新凭据 (RFC 1929); 必须在 start() 前设置, 否则先到的连接会 fail-closed 被拒
             val auth = generateSocksAuth()
             proxy.setExpectedAuth(auth.first, auth.second)
