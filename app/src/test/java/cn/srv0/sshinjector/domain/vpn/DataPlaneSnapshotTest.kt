@@ -94,6 +94,18 @@ class DataPlaneSnapshotTest {
     }
 
     @Test
+    fun `bytes text is stable across locales and units`() {
+        assertEquals("0B", DataPlaneSnapshot.bytesText(0))
+        assertEquals("0B", DataPlaneSnapshot.bytesText(-1))
+        assertEquals("999B", DataPlaneSnapshot.bytesText(999))
+        assertEquals("1.0KB", DataPlaneSnapshot.bytesText(1024))
+        assertEquals("1.5KB", DataPlaneSnapshot.bytesText(1536))
+        assertEquals("1.0MB", DataPlaneSnapshot.bytesText(1024L * 1024))
+        assertEquals("1.2MB", DataPlaneSnapshot.bytesText(1258291))
+        assertEquals("1.0GB", DataPlaneSnapshot.bytesText(1024L * 1024 * 1024))
+    }
+
+    @Test
     fun `rate text is per second over the window`() {
         // 10s 窗口, 上行 +2000B / 下行 +5000B
         assertEquals("↑200 B/s ↓500 B/s", DataPlaneSnapshot.rateText(10, 3000, 6000, 1000, 1000))

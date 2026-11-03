@@ -4,6 +4,7 @@ import cn.srv0.sshinjector.data.remote.ssh.JschSshClient
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
 import cn.srv0.sshinjector.domain.vpn.Socks5ProxyServer
+import cn.srv0.sshinjector.domain.vpn.tunnel.SessionTraffic
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelConfig
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelPlugin
 
@@ -37,6 +38,17 @@ class Socks5TunnelPlugin(
     /** 端口还在 **且** SSH 池里还有一条活口 (池全死 = 这个出口不可用, 别再把新连接导进来)。 */
     override val isHealthy: Boolean
         get() = localSocksPort > 0 && client.hasLiveSession()
+
+    /** 会话累计流量 (来自本地代理; 断开后为 null)。 */
+    override val sessionTraffic: SessionTraffic?
+        get() =
+            socksServer?.let {
+                SessionTraffic(
+                    upBytes = it.totalUpBytes,
+                    downBytes = it.totalDownBytes,
+                    connections = it.totalConnections,
+                )
+            }
 
     /**
      * 隧道侧资源快照: 代理连接/流量 + SSH 会话池 + SSH IO 线程池。

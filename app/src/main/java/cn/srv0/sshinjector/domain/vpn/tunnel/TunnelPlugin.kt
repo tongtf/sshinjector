@@ -1,5 +1,13 @@
 package cn.srv0.sshinjector.domain.vpn.tunnel
 
+/** 一个出口的会话累计流量 (字节)。 */
+data class SessionTraffic(
+    val upBytes: Long,
+    val downBytes: Long,
+    /** 本会话累计接受的连接数 (含已关闭)。 */
+    val connections: Long,
+)
+
 interface TunnelPlugin {
     val id: String
 
@@ -37,6 +45,14 @@ interface TunnelPlugin {
      * 回答"此刻隧道是否在搬数据、卡在哪一侧"。默认空串 = 该插件不提供。
      */
     fun tunnelDiagnostics(): String = ""
+
+    /**
+     * 本出口的**会话累计**流量 (多出口快照 §12.1 的 `↑↓`)。
+     *
+     * 累计而不是瞬时: 长连接一关闭就从"活跃连接"里消失, 只看瞬时值会让快照看不出
+     * "哪个出口干了多少活"。默认 null = 该插件不提供 (测试替身)。
+     */
+    val sessionTraffic: SessionTraffic? get() = null
 
     /**
      * 本地 SOCKS5 认证凭据 (RFC 1929, 用户名/密码)。

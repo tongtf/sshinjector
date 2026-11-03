@@ -1411,7 +1411,7 @@ holder 为空 (测试 / 单出口早期路径) = 不做全局限额, 行为与�
 在 `数据面快照` 的 `tunnelDiagnostics` 之后追加一节 (**仅多出口启用时**):
 
 ```text
-出口 主(hk.example.com): 12 连 · ↑1.2MB ↓8.4MB · 就绪
+出口 主出口(hk.example.com): 12 连 · ↑1.2MB ↓8.4MB · Ready
  · hk(hk2.example.com): 3 连 · ↑120KB ↓2.1MB · 就绪
  · jp(jp.example.com): 0 连 · ↑0B ↓0B · 降级(隔离 12s, 失败 2 次)
 应用 · 命中 37/41 · 超时 4 · 无归属 0 · 映射 23 条 · 软上限回退 0

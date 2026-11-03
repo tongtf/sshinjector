@@ -80,7 +80,8 @@ private val IS_DEBUG = Log.isLoggable("VpnController", Log.DEBUG)
  * 协调隧道插件、DNS 拦截、数据包处理
  */
 @Singleton
-@Suppress("TooManyFunctions") // 编排 + TUN 读写 + DNS 投递 + 统计 + 健康; 待按 F-03 拆 StatsPublisher/DnsDelivery
+// 编排 + TUN 读写 + DNS 投递 + 统计 + 健康 + 多出口装配都在这里; 拆分是独立重构 (F-03), 不在功能分支做
+@Suppress("TooManyFunctions", "LargeClass")
 class VpnController
     @Inject
     @Suppress("LongParameterList") // 会话装配点: 各协作者都是单例, 拆 holder 只会把参数换个地方堆
@@ -1549,7 +1550,13 @@ class VpnController
                                 if (exit.failTotal > 0) append(" · 失败 ${exit.failTotal}")
                                 if (exit.degradeTotal > 0) append(" · 降级 ${exit.degradeTotal}")
                             }
-                        "$label(${exit.serverHost}): ${exit.plugin.activeConnections} 连 · ${exit.health}$extra"
+                        val traffic =
+                            exit.plugin.sessionTraffic?.let {
+                                val up = DataPlaneSnapshot.bytesText(it.upBytes)
+                                val down = DataPlaneSnapshot.bytesText(it.downBytes)
+                                " · ↑$up ↓$down"
+                            } ?: ""
+                        "$label(${exit.serverHost}): ${exit.plugin.activeConnections} 连$traffic · ${exit.health}$extra"
                     }
                 }
             // 引用了不存在/未启动出口的规则数是"配了没反应"的另一个直接判据 (UI 有行内提示,

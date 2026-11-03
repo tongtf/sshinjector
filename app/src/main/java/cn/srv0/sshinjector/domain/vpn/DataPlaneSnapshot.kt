@@ -64,6 +64,32 @@ internal data class DataPlaneSnapshot(
     }
 
     companion object {
+        private const val KB = 1024L
+        private const val MB = KB * 1024
+        private const val GB = MB * 1024
+
+        /**
+         * 字节数的人类可读形式 (出口段的 `↑1.2MB ↓8.4MB`)。
+         *
+         * 固定 `Locale.ROOT`: 俄语等locale的小数分隔符是逗号, 用默认 locale 会让同一条快照
+         * 在不同语言下出现 `1,2MB` / `1.2MB` 两种形态, 日志判读与正则匹配都会受影响。
+         */
+        fun bytesText(bytes: Long): String {
+            if (bytes <= 0) return "0B"
+            return when {
+                bytes < KB -> "${bytes}B"
+                bytes < MB -> decimal(bytes, KB, "KB")
+                bytes < GB -> decimal(bytes, MB, "MB")
+                else -> decimal(bytes, GB, "GB")
+            }
+        }
+
+        private fun decimal(
+            value: Long,
+            unit: Long,
+            suffix: String,
+        ): String = String.format(java.util.Locale.ROOT, "%.1f%s", value.toDouble() / unit, suffix)
+
         /**
          * 本窗口速率文案。
          *

@@ -74,6 +74,18 @@ class Socks5ProxyServer
         private val connections = ConcurrentHashMap<Int, Socks5Connection>()
         private val connectionIdCounter = AtomicLong(0)
 
+        // 会话累计 (多出口快照 §12.1): 关闭时把该连接的上/下行字节累加进来。
+        // 用"关闭时累加"而不是"实时求和": 后者每次快照都要遍历连接, 而且长连接关闭后
+        // 从快照里消失, 看不到"哪个出口干了多少活"。
+        private val totalUpCounter = AtomicLong(0)
+        private val totalDownCounter = AtomicLong(0)
+
+        /** 本会话累计上行字节 (客户端 → 隧道)。 */
+        val totalUpBytes: Long get() = totalUpCounter.get()
+
+        /** 本会话累计下行字节 (隧道 → 客户端)。 */
+        val totalDownBytes: Long get() = totalDownCounter.get()
+
         /** 当前活跃连接数 (瞬时值)。多出口软上限的唯一真相源, 不另记一份计数 (I-19)。 */
         val activeConnections: Int get() = connections.size
 
@@ -307,13 +319,15 @@ class Socks5ProxyServer
                     channel = clientChannel,
                     sshChannelFactory = sshChannelFactory,
                     sshIoDispatcher = sshIoDispatcher,
-                    onClosed = {
+                    onClosed = { upBytes, downBytes ->
                         connections.remove(connectionId.toInt())
                         removeTunCallback(clientPort)
                         removeTargetEofCallback(clientPort)
                         // 预算**恰好**在这里归还一次: close() 有 state==Closed 占位, onClosed 只会跑一次。
                         // budgetHeld 兜住"没 acquire 就关闭"的路径 (预算拒绝), 否则会凭空放大容量。
                         if (budgetHeld.compareAndSet(true, false)) budget?.release()
+                        totalUpCounter.addAndGet(upBytes)
+                        totalDownCounter.addAndGet(downBytes)
                     },
                     ipToDomainLookup = { dnsInterceptor.lookupDomain(it) },
                     expectedAuth = expectedAuth,
@@ -380,7 +394,7 @@ private class Socks5Connection(
     val channel: SocketChannel,
     private val sshChannelFactory: SshChannelFactory?,
     private val sshIoDispatcher: SshIoDispatcher,
-    private val onClosed: () -> Unit,
+    private val onClosed: (upBytes: Long, downBytes: Long) -> Unit,
     private val ipToDomainLookup: ((String) -> String?)? = null,
     private val expectedAuth: Pair<String, String>? = null,
 ) {
@@ -1396,6 +1410,7 @@ private class Socks5Connection(
         // 拿到 null = 对面 (relay EOF / TSM 自己) 已上报过, 幂等靠 CHM.remove 保证。
         pendingTargetEofCallbacksRef?.remove(tunCallbackKey)?.invoke(false)
 
-        onClosed()
+        // 交给服务端累加会话总量 (多出口快照的每出口 ↑↓)
+        onClosed(toTunnelTotal.get(), fromTunnelTotal.get())
     }
 }

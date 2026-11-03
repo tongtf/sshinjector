@@ -2129,6 +2129,7 @@ class TcpStateMachine(
      */
     fun routingDiagnostics(): String =
         "应用分流 等待 ${appRuleWaits.get()} · 拿到 uid ${appRuleUids.get()} · " +
+            "${appIdentity?.diagnostics() ?: "应用映射 —"} · " +
             "软上限回退 ${exitSoftCapTotal.get()} · 快速重试 ${exitRetryTotal.get()}"
 
     /** 统计键 = 域名 (无映射时 `ip:port` 字面量); 与 [closeTcpConnection] 里那次反查同口径。 */

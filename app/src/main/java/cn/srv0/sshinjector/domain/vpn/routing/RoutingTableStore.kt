@@ -3,9 +3,6 @@ package cn.srv0.sshinjector.domain.vpn.routing
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
 import cn.srv0.sshinjector.domain.usecase.ProxyExitRepository
 import cn.srv0.sshinjector.domain.vpn.exit.ProxyExit
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -77,11 +74,6 @@ class RoutingTableStore
         private val settingsDataStore: SettingsDataStore,
         private val proxyExitRepository: ProxyExitRepository,
     ) : RoutingSnapshotSource {
-        private val mutableSnapshot = MutableStateFlow(RoutingSnapshot.DISABLED)
-
-        /** UI 观察入口 (规则/出口变化后可重新 [refresh] 推送)。 */
-        val snapshots: StateFlow<RoutingSnapshot> = mutableSnapshot.asStateFlow()
-
         @Volatile
         private var current: RoutingSnapshot = RoutingSnapshot.DISABLED
 
@@ -100,13 +92,11 @@ class RoutingTableStore
                 val exits = proxyExitRepository.getEnabled()
                 val snapshot = RoutingSnapshot.build(enabled, failover, rules, exits)
                 current = snapshot
-                mutableSnapshot.value = snapshot
                 snapshot
             }
 
         /** 断开/回滚到关闭态 (之后所有连接走 default, 与改造前一致)。 */
         fun reset() {
             current = RoutingSnapshot.DISABLED
-            mutableSnapshot.value = RoutingSnapshot.DISABLED
         }
     }
