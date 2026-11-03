@@ -243,6 +243,28 @@ class RoutingTableTest {
     }
 
     @Test
+    fun `has app rule decides whether the data plane pays the uid wait`() {
+        assertFalse("没有 app 规则时不该等 uid (50ms 只付给能命中的连接)", table("example.com -> hk").hasAppRule)
+        assertTrue(table("app:com.example.bank -> jp").hasAppRule)
+        assertFalse(
+            "引用不存在出口的 app 规则是惰性的, 不该让数据面白等",
+            table("app:com.example.bank -> nope", exits = setOf("hk")).hasAppRule,
+        )
+    }
+
+    @Test
+    fun `a hostname in a cidr rule is rejected without resolving dns`() {
+        // 旧实现把整段交给 CidrRoute.parse → InetAddress.getByName 会**真的解析 example.com**,
+        // 于是"用户笔误的一行"变成解析器里的秒级 DNS 阻塞。现在必须是纯语法拒绝。
+        val parsed = ExitRuleParser.parse("example.com/24 -> hk")
+        assertTrue(parsed.rules.isEmpty())
+        assertTrue(parsed.issues.any { it.issue == RuleIssue.INVALID_CIDR })
+
+        assertTrue(ExitRuleParser.parse("203.0.113.0/33 -> hk").issues.any { it.issue == RuleIssue.INVALID_CIDR })
+        assertTrue(ExitRuleParser.parse("2001:db8::/129 -> hk").issues.any { it.issue == RuleIssue.INVALID_CIDR })
+    }
+
+    @Test
     fun `empty text yields an empty table`() {
         val t = table("")
 

@@ -18,6 +18,14 @@ class RoutingTable private constructor(
 ) {
     val isEmpty: Boolean get() = rules.isEmpty()
 
+    /**
+     * 是否存在**生效的** `app:` 规则。
+     *
+     * 没有就不必等 uid —— 50ms 预算只有在"有应用规则能命中"时才值得付 (规则里删掉所有 `app:`
+     * 行 = 应用分流关掉, 数据面不该为此变慢)。未知出口的 app 规则是惰性的, 不算。
+     */
+    val hasAppRule: Boolean get() = rules.any { it is ExitRule.App && isResolved(it) }
+
     /** 引用了不存在出口的规则 (UI 黄标 + 汇总 WARNING 用)。 */
     val unresolvedRules: List<ExitRule> get() = rules.filterNot { isResolved(it) }
 

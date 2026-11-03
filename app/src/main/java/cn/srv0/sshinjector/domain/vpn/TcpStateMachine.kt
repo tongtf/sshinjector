@@ -891,7 +891,13 @@ class TcpStateMachine(
         val routing = routingTableStore?.current() ?: return null
         if (!routing.enabled || routing.table.isEmpty) return null
 
-        val uid = conn.uidRequest?.await(UidRequest.UID_WAIT_TIMEOUT_MS) ?: AppUidResolver.NO_UID
+        // 没有生效的 app 规则就不等 uid: 50ms 只该付给"能命中应用规则"的连接
+        val uid =
+            if (routing.table.hasAppRule) {
+                conn.uidRequest?.await(UidRequest.UID_WAIT_TIMEOUT_MS) ?: AppUidResolver.NO_UID
+            } else {
+                AppUidResolver.NO_UID
+            }
         if (uid >= 0) conn.appUid = uid
         val pkg = if (uid >= 0) appIdentity?.packageOf(uid) else null
         val ip = conn.dstIp

@@ -113,7 +113,8 @@ fun MultiExitScreen(
                 title = stringResource(R.string.multi_exit_enable),
                 subtitle = stringResource(R.string.multi_exit_enable_desc),
                 checked = state.enabled,
-                enabled = state.supported,
+                // 不支持时仍要允许**关掉**已有配置: 否则切到 SYSTEM DNS 后就再也关不掉了
+                enabled = state.supported || state.enabled,
                 onCheckedChange = viewModel::setEnabled,
             )
             HorizontalDivider()
@@ -121,7 +122,7 @@ fun MultiExitScreen(
                 title = stringResource(R.string.multi_exit_failover),
                 subtitle = stringResource(R.string.multi_exit_failover_desc),
                 checked = state.failoverEnabled,
-                enabled = state.enabled && state.supported,
+                enabled = state.enabled,
                 onCheckedChange = viewModel::setFailoverEnabled,
             )
             HorizontalDivider()

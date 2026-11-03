@@ -225,16 +225,32 @@ object ExitRuleParser {
         return TargetParse.Ok(ExitRule.Network(exitId, CidrRoute(ip, 128), port, lineNo))
     }
 
+    /**
+     * `a.b.c.d/n` / `2001:db8::/n`。
+     *
+     * **不能直接把整段交给 `CidrRoute.parse`**: 它内部用 `InetAddress.getByName`, 而目标是用户
+     * 手打的文本 —— `example.com/24` 这种笔误会触发**真实 DNS 解析**, 解析器跑在编辑器每次按键
+     * 与连接建立路径上, 于是表现为"输入几秒卡死"或连接超时。这里先用 [parseIpLiteral] 的字面量
+     * 预检 (只放行数字/十六进制/点/冒号), 非字面量直接判 CIDR 非法。
+     */
     private fun parseCidrTarget(
         target: String,
         exitId: String,
         lineNo: Int,
     ): TargetParse {
-        val route = CidrRoute.parse(target) ?: return TargetParse.Bad(RuleIssue.INVALID_CIDR, "CIDR 非法")
-        if (route.prefixLength == 0) {
-            return TargetParse.Bad(RuleIssue.DEFAULT_ROUTE_REJECTED, "请改用 default -> <出口>")
+        val slash = target.indexOf('/')
+        val ip = parseIpLiteral(target.substring(0, slash))
+        if (ip == null) {
+            return TargetParse.Bad(RuleIssue.INVALID_CIDR, "CIDR 必须由 IP 字面量开头 (如 203.0.113.0/24)")
         }
-        return TargetParse.Ok(ExitRule.Network(exitId, route, null, lineNo))
+        val prefix = target.substring(slash + 1).toIntOrNull()
+        if (prefix == null) return TargetParse.Bad(RuleIssue.INVALID_CIDR, "前缀长度非法")
+        if (prefix == 0) return TargetParse.Bad(RuleIssue.DEFAULT_ROUTE_REJECTED, "请改用 default -> <出口>")
+        val maxPrefix = if (ip is Inet6Address) 128 else 32
+        if (prefix !in 1..maxPrefix) {
+            return TargetParse.Bad(RuleIssue.INVALID_CIDR, "前缀长度需为 1-$maxPrefix")
+        }
+        return TargetParse.Ok(ExitRule.Network(exitId, CidrRoute(ip, prefix), null, lineNo))
     }
 
     private fun parseHostTarget(

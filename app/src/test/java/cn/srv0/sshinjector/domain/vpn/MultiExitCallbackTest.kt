@@ -47,21 +47,31 @@ class MultiExitCallbackTest {
             assertTrue("出口 B 必须收到回调注册", awaitUntil { exitB.tunCallback != null })
             assertTrue("两条连接都必须走到 CONNECT", awaitUntil { server.accepted.get() == 2 })
 
-            // 关掉**第一条**连接 (它属于出口 A)
+            // 关掉**第一条**连接。
+            //
+            // 这里不能假设"连接 1 一定落在出口 A": 两条连接的插件都是在各自的
+            // `forwardSynToTunnel` 协程里取的, 谁先调用 `getActiveOrFallback` 由调度决定。
+            // 断言改成"谁被摘除"而不是"谁应该是谁" —— 要锁的不变量是**按连接摘除**,
+            // 旧实现 (机器级字段) 无论谁先谁后都会把另一条出口的回调一起摘掉。
             sendFinAck(sm, srcPort = 41000)
 
-            assertTrue("关闭连接 1 必须摘掉出口 A 的回调", awaitUntil { exitA.removedPorts.isNotEmpty() })
-            assertNull("出口 A 的回调必须被清掉", exitA.tunCallback)
-            assertNotNull(
-                "出口 B 的回调**不得**被连接 1 的关闭摘掉 (旧实现会误删)",
-                exitB.tunCallback,
+            assertTrue(
+                "关闭连接 1 必须摘掉它自己那条出口的回调",
+                awaitUntil { exitA.removedPorts.isNotEmpty() || exitB.removedPorts.isNotEmpty() },
             )
-            assertTrue("出口 B 不应收到任何摘除调用", exitB.removedPorts.isEmpty())
+            val firstExit = if (exitA.removedPorts.isNotEmpty()) exitA else exitB
+            val otherExit = if (firstExit === exitA) exitB else exitA
+            assertNull("被关闭连接所属出口的回调必须清掉", firstExit.tunCallback)
+            assertNotNull(
+                "另一条出口的回调**不得**被这条连接的关闭摘掉 (旧实现会误删)",
+                otherExit.tunCallback,
+            )
+            assertTrue("另一条出口不应收到任何摘除调用", otherExit.removedPorts.isEmpty())
 
-            // 再关掉第二条: 这次才轮到出口 B
+            // 再关掉第二条: 这次才轮到另一条出口
             sendFinAck(sm, srcPort = 41001)
-            assertTrue("关闭连接 2 必须摘掉出口 B 的回调", awaitUntil { exitB.removedPorts.isNotEmpty() })
-            assertNull(exitB.tunCallback)
+            assertTrue("关闭连接 2 必须摘掉另一条出口的回调", awaitUntil { otherExit.removedPorts.isNotEmpty() })
+            assertNull(otherExit.tunCallback)
         } finally {
             server.close()
         }

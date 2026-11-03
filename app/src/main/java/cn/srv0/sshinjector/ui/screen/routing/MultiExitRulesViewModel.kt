@@ -59,16 +59,15 @@ class MultiExitRulesViewModel
         val state: StateFlow<MultiExitRulesUiState> = mutableState.asStateFlow()
 
         init {
+            // 顺序执行而不是两个 launch: 并行时"加载应用列表"可能先完成, 随后被
+            // 规则分析里那份 `mutableState.value.apps` (还是空表) 覆盖 —— 应用选择器会永久空着
             viewModelScope.launch {
                 val saved = settingsDataStore.multiExitRules.first()
                 val exits = proxyExitRepository.getEnabled().map { it.name }
-                mutableState.value =
-                    analyze(saved, saved, exits, mutableState.value.apps, appsLoading = true)
-            }
-            viewModelScope.launch {
+                mutableState.value = analyze(saved, saved, exits, emptyList(), appsLoading = true)
+
                 val apps = installedAppsSource.load()
-                mutableState.value =
-                    mutableState.value.copy(apps = apps, appsLoading = false)
+                mutableState.value = mutableState.value.copy(apps = apps, appsLoading = false)
             }
         }
 
