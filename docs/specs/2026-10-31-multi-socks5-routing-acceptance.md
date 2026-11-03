@@ -160,7 +160,7 @@ diff -u before.snapshot after.snapshot
 
 ---
 
-## 5. L4 真机验收 (S17–S26)
+## 5. L4 真机验收 (S17–S30)
 
 > 追加到 `docs/specs/2026-10-18-device-verification-checklist.md`。
 > 每条都写成"你做什么 → 日志里必须 / 不得出现什么"。
@@ -190,6 +190,11 @@ diff -u before.snapshot after.snapshot
 
 **UI 文案边界 (不是故障)**: 会话中途打开总开关会提示「附加出口在下次连接时启动」; 这是刻意行为
 (不在 UI 操作里建 SSH 池), 别当成"没生效"上报。
+
+**真机进展 (2026-11-03, 第一轮)**: 已完成"连接 + 全部出口就绪 + 快照出口段"这一小段
+(3 个附加出口同时 `Ready`, 见 `2026-11-03-multi-exit-device-round1.md`); **S17 关闭态基线 diff 与
+S19–S30 全部未跑**。本轮顺带修掉两条与出口无关但会伪装成"多出口坏了"的缺陷:
+出口 kex 白名单缺 ECDH (`0e149a4`)、已连接时点另一台服务器静默 no-op (`fbd581b`)。
 
 ---
 

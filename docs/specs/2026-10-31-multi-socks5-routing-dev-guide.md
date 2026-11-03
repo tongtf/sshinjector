@@ -464,7 +464,7 @@ class ConnectionBudgetHolder @Inject constructor() {
 | 路由接线 | `TcpStateMachine.selectExit(conn)`: 关闭/空表 **立刻 null** → 主出口; 否则 uid → 包名 → 域名 → `RoutingTable.select` | 位置在 **bypass 判定之后** (直连不为 uid 等 50ms), 在 SYN-ACK 之前完成 (客户端只看到 SYN 重传) |
 | 出口可用性 | `exitId != default` 时必须 `tunnelManager.exit(id)` 存在、`health == Ready`、`localSocksPort > 0` | 任一不满足 → **回主出口** (失败不阻断连接); 这是 P2 阶段的故障回退基线 |
 | 生命周期 | `VpnController.connect`: `routingTableStore.refresh()` → `startAdditionalExits(snapshot)` | 附加出口 `TunnelConfig.forSocks5(server).copy(socksPort = 0)` —— **必须 0 (ephemeral)**, 否则第二个出口与主出口抢 1080 必 bind 失败 |
-| 快照 | `exitDiagnostics()`: `主出口(host): N 连 · Ready · 出口 hk(host): M 连 · Degraded` | `enabled=false` 返回空串 → `render()` 不追加 (关闭态逐字节不变), 单测 `DataPlaneSnapshotTest` 两条用例锁住 |
+| 快照 | `exitDiagnostics()`: `主出口(host): N 连 · ↑1.2MB ↓8.4MB · Ready · 失败 2 · 降级 1 · 出口 hk(host): M 连 · ↑… ↓… · Degraded · 未解析规则 N` | `enabled=false` 返回空串 → `render()` 不追加 (关闭态逐字节不变), 单测 `DataPlaneSnapshotTest` 锁住; `bytesText` 固定 `Locale.ROOT` |
 
 **已补 (review 后, 2026-11-03)**
 
@@ -493,7 +493,7 @@ class ConnectionBudgetHolder @Inject constructor() {
 | 禁用/删除出口 | 新连接立即停派发; 已有连接保留, 空闲后回收资源 |
 | 改名/删除出口 | 弹窗默认勾选"同时更新/删除引用它的规则" → `ef55cf7` |
 | 共享 uid | 选择器显示 `共享 uid` 角标 + 说明 → `ef55cf7` |
-| 快照出口段 | 单行 ` · ` 拼接 (与设计 §12.1 一致); **流量/失败计数未做** —— 每出口 ↑↓ 需要 `Socks5ProxyServer` 的会话累计 API, 当前只有 `N 连` + 健康 + `未解析规则` + 应用分流计数 |
+| 快照出口段 | 单行 ` · ` 拼接 (与设计 §12.1 一致); 已含 `N 连 · ↑↓ · 健康 · 失败/降级` —— 每出口 ↑↓ 由 `Socks5ProxyServer` 在连接关闭时累加会话总量 (`TunnelPlugin.sessionTraffic`), 集成测试 `Socks5TrafficTotalsTest` 用真实 socket + 假隧道验证双向计数 |
 | 合并时机 | **真机 S17–S30 通过后再合并 main** |
 | 版本号 | 1.3.0 (versionCode 21) → `ef55cf7` |
 
@@ -515,7 +515,18 @@ class ConnectionBudgetHolder @Inject constructor() {
 | 快照只有"连接数", 看不出每个出口干了多少活 (§12.1) | `Socks5ProxyServer` 关闭连接时累加会话总量 → `TunnelPlugin.sessionTraffic` → 快照 `↑1.2MB ↓8.4MB`; `DataPlaneSnapshot.bytesText` 固定 `Locale.ROOT`(俄语小数点是逗号); 集成测试跑真实 socket + 假隧道验证双向计数 |
 | `ExitHealth.Starting` 不可观测; 启动中途断开时 SSH 池残留; `ActiveExit` 计数是死字段 | `TunnelManager.startExit` **先登记 (health=Starting) 再 connect**: `stopAll/stopExit` 能回收"正在建池"的出口; 启动中的重复调用明确失败; 新增 `noteConnection/noteHandshakeFailure/noteDegraded/noteRecovered` 填四个计数, 快照显示 `失败 N · 降级 N` |
 
+#### 真机第一轮 (2026-11-03)
+
+详见 `2026-11-03-multi-exit-device-round1.md`。**多出口运行时本身正常** (三个附加出口可同时就绪),
+但暴露两条会让用户误判成"多出口坏了"的缺陷, 均已修复:
+
+| 现象 | 根因 | 修复 |
+|---|---|---|
+| 出口 `jz` 永久 `SSH 会话创建失败 — Algorithm negotiation fail: kex`, 其它出口正常 | 白名单里的 `curve25519-sha256` 在 Android 上被 JSch **静默过滤** (`DHXEC` 反射加载 XDH provider 不可用), 只剩 DH-GEX/group14; 新 OpenSSH 只开 PQ/curve25519/ecdh → 交集为空 | `KEX_ALGORITHMS` 补 `ecdh-sha2-nistp256/384/521` + `group16-sha512`; 回归用例按"curve25519 全不可用"算交集 (`0e149a4`) |
+| 已连接时点另一台服务器"点了没反应", 该行永久转圈 | `SshVpnService.connect()` 在 `isVpnRunning()` 时静默 `return` (只有 logcat), 而 UI 已乐观置成 `Connecting`, 不会再有事件改回来 | 抽 `connectIntent()` 纯函数: 同一台 → INFO 不重连; 另一台 → `switchServer()` 走 `autoReconnect` + 写 `lastServerId`/`setActiveServer` (`fbd581b`) |
+
 **仍未做**
 
 1. **`Failed` 终态** (按决策不做)。
-2. **S17–S30 真机**: 本机无 adb, 全部未验 —— 这是合并前的唯一门禁。其余开发项已全部完成。
+2. **S17–S30 真机全量**: 目前只完成"连接 + 出口就绪 + 快照观察"; S17 关闭态逐字节 diff、S19–S30 全部未跑 ——
+   这是合并前的唯一门禁 (其余开发项已全部完成, 单测 524)。
