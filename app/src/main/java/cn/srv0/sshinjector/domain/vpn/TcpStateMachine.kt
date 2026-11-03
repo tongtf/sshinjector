@@ -986,6 +986,7 @@ class TcpStateMachine(
             return if (atCap || routing.failoverEnabled) ExitChoice.Primary else ExitChoice.Reject
         }
         conn.exitId = exitId
+        tunnelManager.noteConnection(exitId)
         return ExitChoice.Selected(active.plugin)
     }
 
@@ -1010,6 +1011,7 @@ class TcpStateMachine(
         // 先摘掉失败出口上已注册的回程回调: 端口会被下一次连接复用, 留着就是把回程写进死连接
         releaseHandshakeResources(conn)
         val failedExit = conn.exitId
+        tunnelManager.noteHandshakeFailure(failedExit, "握手 ${elapsed}ms 即失败 (回退 default)")
         conn.exitRetried = true
         conn.exitId = ExitId.DEFAULT
         exitRetryTotal.incrementAndGet()

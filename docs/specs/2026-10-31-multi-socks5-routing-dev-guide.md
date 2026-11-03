@@ -512,14 +512,10 @@ class ConnectionBudgetHolder @Inject constructor() {
 | 全数字目标 (`1.2.3.4.5`) 被当作域名规则接受 | `isValidDomain` 拒绝全数字标签 (多打一个点的笔误) |
 | `RoutingTableStore.refresh` 两次写非原子 / 并发 refresh 交错 | 加 `Mutex` 串行化 |
 | 出口列表页在主线程按"出口×规则行"算引用数 | 组合流 `flowOn(Dispatchers.Default)` |
+| `ExitHealth.Starting` 不可观测; 启动中途断开时 SSH 池残留; `ActiveExit` 计数是死字段 | `TunnelManager.startExit` **先登记 (health=Starting) 再 connect**: `stopAll/stopExit` 能回收"正在建池"的出口; 启动中的重复调用明确失败; 新增 `noteConnection/noteHandshakeFailure/noteDegraded/noteRecovered` 填四个计数, 快照显示 `失败 N · 降级 N` |
 
 **仍未做 (已评估, 低风险)**
 
 1. **`Failed` 终态** (按决策不做)。
 2. **每出口 ↑↓ 流量计数** (§12.1 要求): 需要 `Socks5ProxyServer` 暴露会话累计字节; 当前快照只有连接数。
-3. **`ExitHealth.Starting` 不可观测** + `ActiveExit.connTotal/failTotal/degradeTotal/lastError` 是保留字段:
-   只有在"connect 之前就把出口登记进注册表"的重构里才有意义 (顺带能覆盖"启动中途断开"的池回收);
-   当前中途取消靠 `sessionGeneration` 只覆盖"启动完成后"。
-4. **`startExit` 的幂等只有 `containsKey`**: 注册发生在 connect 之后, 并发对同一 id 调两次会起两个池
-   (现有调用路径不会触发, 属 API 层防御)。
-5. **S17–S30 真机**: 本机无 adb, 全部未验 —— 这是合并前的唯一门禁。
+3. **S17–S30 真机**: 本机无 adb, 全部未验 —— 这是合并前的唯一门禁。

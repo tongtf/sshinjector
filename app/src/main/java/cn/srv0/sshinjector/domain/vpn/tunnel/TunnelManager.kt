@@ -6,6 +6,7 @@ import cn.srv0.sshinjector.domain.usecase.VpnController
 import cn.srv0.sshinjector.domain.vpn.exit.ExitHealth
 import cn.srv0.sshinjector.domain.vpn.exit.ExitId
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -85,7 +86,14 @@ class TunnelManager
             serverHost: String,
             config: TunnelConfig,
         ): Result<Unit> {
-            if (exits.containsKey(id)) return Result.success(Unit)
+            exits[id]?.let { existing ->
+                // 已经**在启动中**: 不能回 "success"(调用方会以为出口可用), 也不能再起一个池
+                return if (existing.health == ExitHealth.Starting) {
+                    Result.failure(IllegalStateException("Exit $id is still starting"))
+                } else {
+                    Result.success(Unit)
+                }
+            }
 
             val factory =
                 factories[protocolId]
@@ -94,34 +102,57 @@ class TunnelManager
             val gen = sessionGeneration
             Log.d(TAG, "Starting plugin: $protocolId (exit=$id)")
             val plugin = factory.create(id, label)
-            val result = plugin.connect(config)
-
-            if (gen != sessionGeneration) {
-                // 断开已经发生: 这次启动属于上一会话, 立刻回收, 绝不登记
-                runCatching { plugin.disconnect() }
-                Log.d(TAG, "Discarding exit $id started after session change")
-                return Result.failure(IllegalStateException("Session changed while starting exit $id"))
-            }
-
-            if (result.isSuccess) {
-                exits[id] =
-                    ActiveExit(
-                        id = id,
-                        label = label,
-                        serverHost = serverHost,
-                        plugin = plugin,
-                        startedAt = System.currentTimeMillis(),
-                    )
-                activePlugin.value = exits[ExitId.DEFAULT]?.plugin
-            } else {
-                Log.e(TAG, "Failed to start $protocolId: ${result.exceptionOrNull()?.message}")
-                VpnController.appLogThrottled(
-                    "隧道插件启动失败 · $protocolId — ${result.exceptionOrNull()?.message}",
-                    level = LogLevel.ERROR,
-                    throttleKey = "隧道插件启动失败",
+            // **先登记 (health=Starting) 再 connect**: 否则 `stopAll()`/`stopExit()` 看不到
+            // "正在建池"的出口, 中途断开时那套 SSH 会话池会残留到进程结束 (sessionGeneration
+            // 只兜住"启动完成之后"的那一半)。Starting 也让快照能区分"起来了"和"还在连"。
+            val entry =
+                ActiveExit(
+                    id = id,
+                    label = label,
+                    serverHost = serverHost,
+                    plugin = plugin,
+                    startedAt = System.currentTimeMillis(),
+                    health = ExitHealth.Starting,
                 )
+            exits[id] = entry
+
+            return try {
+                val result = plugin.connect(config)
+                when {
+                    gen != sessionGeneration -> {
+                        // 断开已经发生 (stopAll 可能已经把它摘掉并 disconnect 过了)
+                        exits.remove(id, entry)
+                        runCatching { plugin.disconnect() }
+                        Log.d(TAG, "Discarding exit $id started after session change")
+                        Result.failure(IllegalStateException("Session changed while starting exit $id"))
+                    }
+                    result.isSuccess -> {
+                        entry.health = ExitHealth.Ready
+                        activePlugin.value = exits[ExitId.DEFAULT]?.plugin
+                        Result.success(Unit)
+                    }
+                    else -> {
+                        exits.remove(id, entry)
+                        runCatching { plugin.disconnect() }
+                        Log.e(TAG, "Failed to start $protocolId: ${result.exceptionOrNull()?.message}")
+                        VpnController.appLogThrottled(
+                            "隧道插件启动失败 · $protocolId — ${result.exceptionOrNull()?.message}",
+                            level = LogLevel.ERROR,
+                            throttleKey = "隧道插件启动失败",
+                        )
+                        result
+                    }
+                }
+            } catch (e: CancellationException) {
+                // 启动被取消 (连接中途断开): 必须自己把池收掉, 否则没人再看得见它
+                exits.remove(id, entry)
+                runCatching { plugin.disconnect() }
+                throw e
+            } catch (e: Exception) {
+                exits.remove(id, entry)
+                runCatching { plugin.disconnect() }
+                throw e
             }
-            return result
         }
 
         /** 停止并移除单个出口 (断开/禁用/降级后回收)。不存在的 id 是 no-op。 */
@@ -133,6 +164,42 @@ class TunnelManager
         }
 
         fun exit(id: String): ActiveExit? = exits[id]
+
+        /** 该出口又接了一条新连接 (快照 `累计` 口径); 出口不存在时静默忽略。 */
+        @Synchronized
+        fun noteConnection(exitId: String) {
+            exits[exitId]?.let { it.connTotal++ }
+        }
+
+        /** 握手阶段失败 (§9.5 快速重试的判据来源); 出口不存在时静默忽略。 */
+        @Synchronized
+        fun noteHandshakeFailure(
+            exitId: String,
+            detail: String,
+        ) {
+            exits[exitId]?.let {
+                it.failTotal++
+                it.lastError = detail
+            }
+        }
+
+        /** 健康巡检判定降级。 */
+        @Synchronized
+        fun noteDegraded(
+            exitId: String,
+            reason: String,
+        ) {
+            exits[exitId]?.let {
+                it.degradeTotal++
+                it.lastError = reason
+            }
+        }
+
+        /** 健康巡检判定恢复 (清掉最后一次失败原因)。 */
+        @Synchronized
+        fun noteRecovered(exitId: String) {
+            exits[exitId]?.let { it.lastError = "" }
+        }
 
         fun exitsSnapshot(): List<ActiveExit> = exits.values.toList()
 

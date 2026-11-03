@@ -1544,7 +1544,12 @@ class VpnController
                 } else {
                     exits.joinToString(" · ") { exit ->
                         val label = if (exit.id == ExitId.DEFAULT) "主出口" else "出口 ${exit.id}"
-                        "$label(${exit.serverHost}): ${exit.plugin.activeConnections} 连 · ${exit.health}"
+                        val extra =
+                            buildString {
+                                if (exit.failTotal > 0) append(" · 失败 ${exit.failTotal}")
+                                if (exit.degradeTotal > 0) append(" · 降级 ${exit.degradeTotal}")
+                            }
+                        "$label(${exit.serverHost}): ${exit.plugin.activeConnections} 连 · ${exit.health}$extra"
                     }
                 }
             // 引用了不存在/未启动出口的规则数是"配了没反应"的另一个直接判据 (UI 有行内提示,
@@ -1853,10 +1858,14 @@ class VpnController
                     exit.degradedSince = if (decision.health == ExitHealth.Degraded) now else 0L
                 }
                 when (decision.change) {
-                    ExitHealthChange.DEGRADED ->
+                    ExitHealthChange.DEGRADED -> {
+                        tunnelManager.noteDegraded(exit.id, "SSH 池无活口")
                         addLog("出口 ${exit.id} 不可用 · 已降级, 新连接回退主出口", LogLevel.WARNING)
-                    ExitHealthChange.RECOVERED ->
+                    }
+                    ExitHealthChange.RECOVERED -> {
+                        tunnelManager.noteRecovered(exit.id)
                         addLog("出口 ${exit.id} 已恢复 · 新连接重新按规则派发", LogLevel.SUCCESS)
+                    }
                     ExitHealthChange.NONE -> Unit
                 }
             }

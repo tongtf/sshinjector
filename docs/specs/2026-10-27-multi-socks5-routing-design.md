@@ -1149,7 +1149,7 @@ Starting ─────────► Ready ◄──────────�
 
 | 状态 | 新连接 | 说明 |
 |---|---|---|
-| `Starting` | 不接 (resolve 视为不可用) | 建池中 |
+| `Starting` | 不接 (resolve 视为不可用) | 建池中。**出口在 connect 之前就登记**, 所以 `stopAll/stopExit` 能回收"正在建池"的池; 同 id 重复启动返回失败 |
 | `Ready` | ✅ | 唯一可服务的状态 |
 | `Degraded` | ❌ → 回退 default | 会话级失败; 隔离 30s 后按 15s 探活节拍恢复 |
 | `Failed` | ❌ | 本次会话不再自动恢复 (用户重连才重试) |
