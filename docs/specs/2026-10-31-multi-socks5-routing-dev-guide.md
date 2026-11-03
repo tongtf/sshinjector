@@ -497,6 +497,19 @@ class ConnectionBudgetHolder @Inject constructor() {
 | 合并时机 | **真机 S17–S30 通过后再合并 main** |
 | 版本号 | 1.3.0 (versionCode 21) → `ef55cf7` |
 
+#### Review 第二轮修复 (2026-11-03)
+
+| 问题 | 修法 |
+|---|---|
+| `appendAppRule` 追加到末尾 → app 规则优先级最低, 且会把 `default` 挤到非末行被丢弃 | `ExitRuleText.prependAppRule`: 插到规则区最前面 (跳过开头注释), `default` 恒在最后 |
+| `onExitDisabled` 等待窗口内用户重新启用出口 → 仍会被停掉且本会话不重启 | 轮询里复查快照, 重新启用则取消回收 |
+| `startAdditionalExits` 单个出口异常会取消其余并让 `connect()` 失败 | 每个 `async` 内部 try/catch (`CancellationException` 除外) |
+| 启用多出口但一个出口都没起来 → 快照没有 `出口` 段, 看起来像功能没开 | 输出 `无运行中的出口` |
+| 两条 `default` + 第一条不在末尾 → 两条都被丢 | default 单独收集, 只保留"最后一条且在末尾" |
+| 握手期重试绕过 `failoverEnabled=false` | 关闭时**不重试**, 直接 RST (与 UI 文案一致) |
+| D-5 在出口未就绪时也提升域名 → 本应直连的域名绕进主出口 | 提升要求目标出口 `Ready` 且 `isHealthy`; 指向 `default` 的规则仍直接提升 |
+| IP/CIDR 规则在 REMOTE 假 IP 下不生效 (设计 §6.4 表格写错) | 设计表已改为"只对字面量 IP"; 规则页加提示文案 |
+
 **仍未做**
 
 1. **`Failed` 终态** (按决策不做)。

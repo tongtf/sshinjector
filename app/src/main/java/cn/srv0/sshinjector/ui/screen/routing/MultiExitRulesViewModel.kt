@@ -4,7 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
 import cn.srv0.sshinjector.domain.usecase.ProxyExitRepository
+import cn.srv0.sshinjector.domain.vpn.routing.ExitRule
 import cn.srv0.sshinjector.domain.vpn.routing.ExitRuleParser
+import cn.srv0.sshinjector.domain.vpn.routing.ExitRuleText
 import cn.srv0.sshinjector.domain.vpn.routing.RoutingProbe
 import cn.srv0.sshinjector.domain.vpn.routing.RoutingTable
 import cn.srv0.sshinjector.domain.vpn.routing.RoutingTableStore
@@ -31,6 +33,8 @@ data class MultiExitRulesUiState(
     /** 未知出口不算语法错, 但要单独提示 (否则用户以为规则坏了)。 */
     val tooManyRules: Boolean = false,
     val knownExits: List<String> = emptyList(),
+    /** 规则里是否含 IP/CIDR 目标 (REMOTE 假 IP 模式下它们只对字面量 IP 连接生效, 需要提示)。 */
+    val hasNetworkRule: Boolean = false,
     val apps: List<InstalledApp> = emptyList(),
     val appsLoading: Boolean = true,
 ) {
@@ -97,11 +101,10 @@ class MultiExitRulesViewModel
             packageName: String,
             exitId: String,
         ) {
-            val line = "app:$packageName -> $exitId"
-            val text = mutableState.value.text
-            if (text.lineSequence().any { it.substringBefore('#').trim() == line }) return
-            val base = if (text.isEmpty() || text.endsWith("\n")) text else "$text\n"
-            updateText(base + line + "\n")
+            // 必须插到**规则区最前面**: 行序即优先级, append 会让 app 规则输给域名规则;
+            // 而且文本以 `default -> x` 结尾时 append 会把 default 挤到非末行 → 被解析器丢弃。
+            val updated = ExitRuleText.prependAppRule(mutableState.value.text, packageName, exitId)
+            if (updated != mutableState.value.text) updateText(updated)
         }
 
         /** 测试框: 用当前**未保存**的文本评估 (用户改一行就能立刻验证, 不必先保存)。 */
@@ -134,6 +137,7 @@ class MultiExitRulesViewModel
                 unresolvedExits = unresolved,
                 tooManyRules = !parsed.ok,
                 knownExits = knownExits,
+                hasNetworkRule = parsed.rules.any { it is ExitRule.Network },
                 apps = apps,
                 appsLoading = appsLoading,
             )

@@ -1003,6 +1003,9 @@ class TcpStateMachine(
     ): Boolean {
         if (conn.exitRetried) return false
         if (conn.exitId == ExitId.DEFAULT) return false
+        // 用户明确关掉了故障回退 → 不许在这里"静默换出口" (否则这个开关名不副实)
+        val routing = routingSnapshotSource?.current()
+        if (routing == null || !routing.enabled || !routing.failoverEnabled) return false
         if (conn.synAckWritten) return false
         if (conn.state == TcpConnection.TcpState.Closed) return false
         if (conn.forwardedBytes > 0) return false

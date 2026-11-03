@@ -79,6 +79,51 @@ class ExitRuleTextTest {
     }
 
     @Test
+    fun `prepend puts the app rule before existing rules so it wins`() {
+        val text = "example.com -> hk\ndefault -> hk\n"
+
+        assertEquals(
+            "app:com.example.bank -> jp\nexample.com -> hk\ndefault -> hk\n",
+            ExitRuleText.prependAppRule(text, "com.example.bank", "jp"),
+        )
+    }
+
+    @Test
+    fun `prepend keeps default as the last line`() {
+        val text = "default -> hk"
+
+        val result = ExitRuleText.prependAppRule(text, "com.example.bank", "jp")
+
+        assertEquals("app:com.example.bank -> jp\ndefault -> hk", result)
+        assertEquals("default 必须仍在最后, 否则解析时整行被丢", "default -> hk", result.lines().last())
+    }
+
+    @Test
+    fun `prepend goes after a leading comment block`() {
+        val text = "# ---- 应用分流 ----\n\nexample.com -> hk\n"
+
+        assertEquals(
+            "# ---- 应用分流 ----\n\napp:com.example.bank -> jp\nexample.com -> hk\n",
+            ExitRuleText.prependAppRule(text, "com.example.bank", "jp"),
+        )
+    }
+
+    @Test
+    fun `prepend on empty text creates the first rule`() {
+        assertEquals(
+            "app:com.example.bank -> jp\n",
+            ExitRuleText.prependAppRule("", "com.example.bank", "jp"),
+        )
+    }
+
+    @Test
+    fun `prepend is idempotent`() {
+        val once = ExitRuleText.prependAppRule("example.com -> hk", "com.example.bank", "jp")
+
+        assertEquals(once, ExitRuleText.prependAppRule(once, "com.example.bank", "jp"))
+    }
+
+    @Test
     fun `remove without matches changes nothing`() {
         val text = "example.com -> jp"
         val (result, removed) = ExitRuleText.removeExitRules(text, "hk")

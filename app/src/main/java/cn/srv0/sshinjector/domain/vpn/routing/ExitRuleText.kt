@@ -65,6 +65,39 @@ object ExitRuleText {
         rewritten: String,
     ): String = if (original.endsWith("\n") && !rewritten.endsWith("\n")) rewritten + "\n" else rewritten
 
+    /**
+     * 把一条 `app:` 规则插到**规则区最前面**（应用分流优先），同时保证 `default` 仍在最后。
+     *
+     * 为什么不能直接 append 到末尾:
+     * - 行序即优先级 —— 追加到末尾的 app 规则会被前面的域名规则覆盖, 用户点了 `app:X -> hk`
+     *   却仍然走域名规则;
+     * - 若文本以 `default -> x` 结尾, 追加后 default 不再是最后一行 → 解析时**整行被丢弃**
+     *   (用户的兜底规则静默消失)。
+     *
+     * @return 新文本; 已存在完全相同的一行时原样返回
+     */
+    fun prependAppRule(
+        text: String,
+        packageName: String,
+        exitId: String,
+    ): String {
+        val line = "app:$packageName -> $exitId"
+        if (text.lineSequence().any { it.substringBefore('#').trim() == line }) return text
+        val lines = text.split("\n").toMutableList()
+        // 跳过开头的注释/空行 (用户常写 `# ---- 应用分流 ----` 这种分区标题)
+        var insertAt = 0
+        while (insertAt < lines.size) {
+            val l = lines[insertAt]
+            if (l.isBlank() || l.trimStart().startsWith("#")) insertAt++ else break
+        }
+        // 全是注释/空行时不要追加到末尾的空行之后 (会凭空多出一行)
+        if (insertAt == lines.size) {
+            while (insertAt > 0 && lines[insertAt - 1].isBlank()) insertAt--
+        }
+        lines.add(insertAt, line)
+        return preserveTrailingNewline(text, lines.joinToString("\n"))
+    }
+
     /** 把一行拆成"内容"与"行尾注释" (`#` 之后原样保留, 含 `#`)。 */
     private fun splitLine(line: String): Pair<String, String> {
         val idx = line.indexOf('#')

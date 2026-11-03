@@ -108,6 +108,15 @@ fun MultiExitRulesScreen(
                 placeholder = { Text(stringResource(R.string.multi_exit_rules_placeholder)) },
             )
 
+            if (state.hasNetworkRule) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    stringResource(R.string.multi_exit_ip_rule_note),
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
             if (state.issues.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
                 Text(

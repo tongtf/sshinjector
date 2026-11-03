@@ -76,6 +76,27 @@ class TcpExitSelectionTest {
     }
 
     @Test
+    fun `a pre-connect exit failure does not retry when failover is off`() {
+        val primaryServer = FakeSocksServer()
+        val deadPort = java.net.ServerSocket(0).use { it.localPort }
+        val sm =
+            newStateMachine(
+                primary = FakeSocksPlugin(primaryServer.port),
+                additional = FakeSocksPlugin(deadPort),
+                failover = false,
+            )
+
+        try {
+            sendSyn(sm, srcPort = 41000)
+
+            assertTrue("必须等到重试判定走完", awaitUntil(timeoutMs = 1500) { false }.not())
+            assertEquals("关掉回退后不许静默换出口", 0, primaryServer.accepted.get())
+        } finally {
+            primaryServer.close()
+        }
+    }
+
+    @Test
     fun `a pre-connect exit failure retries once on the primary exit`() {
         val primaryServer = FakeSocksServer()
         // 已经关闭的端口: 插件 isHealthy 仍为 true (端口号 > 0), 但 loopback 连接会失败 ——

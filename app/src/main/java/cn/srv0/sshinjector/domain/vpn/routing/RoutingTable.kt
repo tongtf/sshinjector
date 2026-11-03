@@ -50,10 +50,20 @@ class RoutingTable private constructor(
      * **忽略端口、忽略 app 规则**: `example.com:443 -> hk` 也必须能把 `example.com` 提升进隧道,
      * 否则 DNS 阶段会直连解析、拿到真实 IP, 而真实 IP 在分流模式下根本不进 TUN —— 规则永远匹配不上。
      */
-    fun hasDomainRule(domain: String): Boolean {
+    fun hasDomainRule(domain: String): Boolean = domainExitFor(domain) != null
+
+    /**
+     * 命中该域名的出口 id (`default` = 主出口); null = 没有生效的域名规则命中。
+     *
+     * D-5 隧道提升用它拿到**具体出口**: 只有该出口真的可用时才值得把域名提升进隧道,
+     * 否则提升只会把本应直连的流量绕进主出口。
+     */
+    fun domainExitFor(domain: String): String? {
         val d = domain.trimEnd('.').lowercase()
-        if (d.isEmpty()) return false
-        return rules.any { it is ExitRule.Domain && isResolved(it) && domainSuffixMatch(d, it.suffix) }
+        if (d.isEmpty()) return null
+        return rules
+            .firstOrNull { it is ExitRule.Domain && isResolved(it) && domainSuffixMatch(d, it.suffix) }
+            ?.exitId
     }
 
     /** 出口集合变化 (增删/改名/启停) 后重建快照; 规则与解析问题原样保留。 */

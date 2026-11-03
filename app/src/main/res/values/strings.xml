@@ -475,4 +475,5 @@ SOFTWARE.</string>
     <string name="multi_exit_reconnect_required">已保存 · 附加出口在下次连接时启动</string>
     <string name="multi_exit_shared_uid">共享 uid</string>
     <string name="multi_exit_shared_uid_desc">多个应用共用同一个 uid, 规则会影响同组全部应用</string>
+    <string name="multi_exit_ip_rule_note">提示: 远端解析模式下域名连接使用假 IP, IP / 网段规则只对"直接连接 IP"的请求生效。</string>
 </resources>

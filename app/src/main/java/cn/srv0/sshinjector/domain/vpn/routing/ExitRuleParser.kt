@@ -78,6 +78,9 @@ object ExitRuleParser {
         val seenTargets = HashSet<String>()
         var ruleCount = 0
         var overflow = false
+        // default 单独收集: 只有"文件中最后一条规则"才生效, 且多条 default 时**最后一条**胜出
+        // (逐行 insert 再事后删会把"第一条不在末尾"变成"两条都没了")
+        var lastDefault: ExitRule.Default? = null
 
         text.lineSequence().forEachIndexed { index, rawLine ->
             val lineNo = index + 1
@@ -107,10 +110,13 @@ object ExitRuleParser {
                 is TargetParse.Bad ->
                     issues += RuleIssueInfo(lineNo, outcome.issue, outcome.detail)
                 is TargetParse.Ok -> {
-                    if (!seenTargets.add(targetKey(outcome.rule))) {
+                    val rule = outcome.rule
+                    if (rule is ExitRule.Default) {
+                        lastDefault = rule
+                    } else if (!seenTargets.add(targetKey(rule))) {
                         issues += RuleIssueInfo(lineNo, RuleIssue.DUPLICATE_TARGET, "重复目标, 保留首次出现的行")
                     } else {
-                        rules += outcome.rule
+                        rules += rule
                     }
                 }
             }
@@ -121,11 +127,17 @@ object ExitRuleParser {
             return RuleParseResult(emptyList(), issues)
         }
 
-        // default 必须是最后一行: 之后的规则永远不可达, 丢掉 default 行本身 (其余照常生效)
-        val defaultIndex = rules.indexOfFirst { it is ExitRule.Default }
-        if (defaultIndex >= 0 && defaultIndex != rules.lastIndex) {
-            val dropped = rules.removeAt(defaultIndex)
-            issues += RuleIssueInfo(dropped.lineNo, RuleIssue.DEFAULT_NOT_LAST, "default 必须是最后一行, 已忽略")
+        // default 必须是最后一行: 它之后的规则永远不可达, 所以只保留"最后一条 default",
+        // 且仅当它确实排在所有保留规则之后; 否则丢弃并给出明确提示。
+        val default = lastDefault
+        if (default != null) {
+            val lastRuleLine = rules.lastOrNull()?.lineNo ?: 0
+            if (default.lineNo > lastRuleLine) {
+                rules += default
+            } else {
+                issues +=
+                    RuleIssueInfo(default.lineNo, RuleIssue.DEFAULT_NOT_LAST, "default 必须是最后一行, 已忽略")
+            }
         }
 
         return RuleParseResult(rules, issues)

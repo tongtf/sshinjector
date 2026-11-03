@@ -473,7 +473,7 @@ fun select(t: RouteTarget): String? {
 
 | 模式 | 进 TUN 的目标 | 域名可得? | 域名规则 | IP/CIDR 规则 | 应用规则 | 多出口可用? |
 |---|---|---|---|---|---|---|
-| REMOTE (默认, 假 IP) | 全部 (`0.0.0.0/0`, `::/0`) | ✅ 假 IP | ✅ | ✅ | ✅ | ✅ |
+| REMOTE (默认, 假 IP) | 全部 (`0.0.0.0/0`, `::/0`) | ✅ 假 IP | ✅ | ✅ | ⚠️ **只对字面量 IP 生效** | ✅ |
 | WHITELIST (非空名单) | 白名单应用的全部 | ✅ 假 IP | ✅ | ✅ | ✅ | ✅ |
 | WHITELIST (空名单 → SYSTEM) | **无路由, 不进 TUN** | — | ❌ | ❌ | ❌ | ❌ 功能不可用 |
 | DOMAIN_SPLIT (名单命中) | 假 IP 段 (`FAKE_V4_ROUTE`) | ✅ 假 IP | ✅ | ⚠️ 只能匹配到假 IP 字面, 无实际意义 | ✅ | ✅ |
@@ -482,6 +482,9 @@ fun select(t: RouteTarget): String? {
 
 由此得到五条硬约束:
 
+0. **REMOTE（假 IP）模式下 IP/CIDR 规则只对"直接连接字面量 IP"的请求生效**: 域名连接的
+   `conn.dstIp` 是 `198.18.x.x` 假 IP, IP 规则按它匹配永远不命中 (真实 IP 只有远端解析时才知道)。
+   这不是实现 bug 而是假 IP 架构的必然结果 —— UI 必须给出提示 (规则页已加)。
 1. **SYSTEM 模式与"白名单空名单"下没有任何 TUN 流量** (这不是"DNS 不劫持", 是连 TCP 都不进 TUN),
    多出口在这种模式下**整体不可用** —— UI 必须显示"当前 DNS 模式不支持多出口", 而不是让用户
    配了半天规则却毫无反应。
@@ -1179,7 +1182,7 @@ Starting ─────────► Ready ◄──────────�
 |---|---|---|
 | `EXIT_ISOLATION_MS` | 30_000 | 降级后 30s 内不重试 (避免重试风暴) |
 | `EXIT_CONSECUTIVE_PRE_FAILURES` | 3 | 连续几次 **CONNECT 之前**的失败才降级 (§9.2); 单次可能是瞬时 |
-| `EXIT_CONN_SOFT_CAP` | 128 | **非 default** 出口的活跃连接软上限 (= `SshIoDispatcher` 线程墙, I-19); default 不设 |
+| `EXIT_CONN_SOFT_CAP` | 128 | **非 default** 出口的活跃连接软上限; default 不设。**注意它不保护线程墙**: `SshIoDispatcher` 是全局 128 线程, 两个出口各 100 连接仍会撞 `isSaturated()` → 0x05。软上限只防"一个出口独吞" |
 | `EXIT_RECOVERY_PROBE_MS` | 15_000 | 隔离期后**搭既有 15s 探活节拍** (不新增定时器) |
 | `EXIT_RECOVERY_SUCCESSES` | 2 | 连续 2 次成功才回 Ready |
 | 探测内容 | `ConnectivityProber(exit.plugin.localSocksPort, exit.plugin.socksAuth, probeUrl).probe()` | 与主探活同构, 走 loopback 不经 TUN; `socksAuth` 从插件接口取 (不要自己猜凭据) |

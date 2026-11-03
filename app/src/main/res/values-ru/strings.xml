@@ -454,4 +454,5 @@
     <string name="multi_exit_reconnect_required">Сохранено · дополнительные выходы запустятся при следующем подключении</string>
     <string name="multi_exit_shared_uid">Общий uid</string>
     <string name="multi_exit_shared_uid_desc">Несколько приложений используют один uid; правило затронет все</string>
+    <string name="multi_exit_ip_rule_note">Примечание: в режиме удалённого DNS доменные подключения используют поддельные IP, поэтому правила IP/CIDR действуют только при прямом подключении к IP.</string>
 </resources>

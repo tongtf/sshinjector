@@ -243,6 +243,28 @@ class RoutingTableTest {
     }
 
     @Test
+    fun `two defaults keep the last one and drop it when it is not last`() {
+        // 逐行 insert 再事后删的旧写法在这里会把**两条都丢**: 第二条按重复删掉, 第一条按非末行删掉
+        val parsed = ExitRuleParser.parse("default -> hk\nexample.com -> jp\ndefault -> jp")
+        assertEquals(2, parsed.rules.size)
+        assertEquals("jp", parsed.rules.last().exitId)
+        assertTrue(parsed.rules.last() is ExitRule.Default)
+
+        val notLast = ExitRuleParser.parse("default -> hk\ndefault -> jp\nexample.com -> hk")
+        assertTrue(notLast.rules.none { it is ExitRule.Default })
+        assertTrue(notLast.issues.any { it.issue == RuleIssue.DEFAULT_NOT_LAST })
+    }
+
+    @Test
+    fun `domain exit resolves the specific exit for D-5 promotion`() {
+        val t = table("example.com -> hk\nexample.co.jp -> jp")
+
+        assertEquals("hk", t.domainExitFor("a.example.com"))
+        assertEquals("jp", t.domainExitFor("example.co.jp"))
+        assertNull(t.domainExitFor("other.com"))
+    }
+
+    @Test
     fun `has app rule decides whether the data plane pays the uid wait`() {
         assertFalse("没有 app 规则时不该等 uid (50ms 只付给能命中的连接)", table("example.com -> hk").hasAppRule)
         assertTrue(table("app:com.example.bank -> jp").hasAppRule)

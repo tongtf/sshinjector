@@ -490,10 +490,22 @@ class VpnController
                 val routing = routingTableStore.refresh()
                 // D-5: DOMAIN_SPLIT 下"有出口规则的域名"也必须进隧道 (假 IP), 否则真实 IP 没有
                 // TUN 路由 → 连接根本不进 TUN → 规则永远匹配不到。关闭多出口时闭包恒 false。
-                dnsInterceptor.setExitDomainRulePredicate { domain ->
+                val promotesDomain: (String) -> Boolean = { domain ->
                     val snapshot = routingTableStore.current()
-                    snapshot.enabled && snapshot.table.hasDomainRule(domain)
+                    val exitId = if (snapshot.enabled) snapshot.table.domainExitFor(domain) else null
+                    when {
+                        exitId == null -> false
+                        // 规则指向主出口 = 用户就是要它走隧道 (原本可能是直连的域名)
+                        exitId == ExitId.DEFAULT -> true
+                        else -> {
+                            // 指向附加出口但该出口没起来/不健康 → **不提升**: 提升只会让本应
+                            // 直连的域名绕进主出口, 与用户的意图相反 (等出口就绪再提升)。
+                            val active = tunnelManager.exit(exitId)
+                            active != null && active.health == ExitHealth.Ready && active.plugin.isHealthy
+                        }
+                    }
                 }
+                dnsInterceptor.setExitDomainRulePredicate(promotesDomain)
                 if (routing.enabled) startAdditionalExits(routing)
 
                 // 3. 设置 DNS 拦截器
@@ -640,7 +652,19 @@ class VpnController
             // **并行启动**: 每个出口都是一次完整的 SSH 建池 (可达数秒), 串行会把
             // `connect()` 拉长到 N×数秒 —— 用户在这段时间里看到的就是"点连接没反应"。
             coroutineScope {
-                snapshot.exits.map { exit -> async { startAdditionalExit(exit) } }.awaitAll()
+                snapshot.exits.map { exit ->
+                    async {
+                        // 单个出口的异常不能冒泡出 coroutineScope: 那会取消其余出口并让整个
+                        // connect() 失败 —— 一个坏出口不该拖死整个会话。
+                        try {
+                            startAdditionalExit(exit)
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            addLog("出口 ${exit.name} 启动异常 · ${e.message}", LogLevel.WARNING)
+                        }
+                    }
+                }.awaitAll()
             }
         }
 
@@ -696,6 +720,12 @@ class VpnController
                 val deadline = System.currentTimeMillis() + EXIT_RECLAIM_TIMEOUT_MS
                 while (System.currentTimeMillis() < deadline) {
                     val exit = tunnelManager.exit(exitId) ?: return@launch
+                    // 等待窗口内用户又启用了它 → 立刻放弃回收 (否则"启用"2s 后又被停掉,
+                    // 而且本会话不会再拉起, 用户看到的是"开关自己弹回去了")
+                    if (routingTableStore.current().exits.any { it.name == exitId }) {
+                        addLog("出口 $exitId 已重新启用 · 取消回收", LogLevel.INFO)
+                        return@launch
+                    }
                     if (exit.plugin.activeConnections == 0) {
                         tunnelManager.stopExit(exitId)
                         addLog("出口 $exitId 已停止 (规则在下次连接生效)", LogLevel.INFO)
@@ -1504,11 +1534,16 @@ class VpnController
             val routing = routingTableStore.current()
             if (!routing.enabled) return ""
             val exits = tunnelManager.exitsSnapshot()
-            if (exits.isEmpty()) return ""
+            // 启用但一个出口都没起来 (全部启动失败/尚未重连) 恰恰是最需要诊断的场景:
+            // 不能返回空串, 否则日志看起来和"功能没开"一模一样。
             val exitText =
-                exits.joinToString(" · ") { exit ->
-                    val label = if (exit.id == ExitId.DEFAULT) "主出口" else "出口 ${exit.id}"
-                    "$label(${exit.serverHost}): ${exit.plugin.activeConnections} 连 · ${exit.health}"
+                if (exits.isEmpty()) {
+                    "无运行中的出口"
+                } else {
+                    exits.joinToString(" · ") { exit ->
+                        val label = if (exit.id == ExitId.DEFAULT) "主出口" else "出口 ${exit.id}"
+                        "$label(${exit.serverHost}): ${exit.plugin.activeConnections} 连 · ${exit.health}"
+                    }
                 }
             // 引用了不存在/未启动出口的规则数是"配了没反应"的另一个直接判据 (UI 有行内提示,
             // 但无 adb 现场只有导出的日志 —— 快照必须带上它)
