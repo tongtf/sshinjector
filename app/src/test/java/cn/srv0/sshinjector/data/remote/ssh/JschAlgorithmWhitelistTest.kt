@@ -40,6 +40,36 @@ class JschAlgorithmWhitelistTest {
         assertNamesKnown("mac.c2s", JschSshClient.MAC_ALGORITHMS)
     }
 
+    /**
+     * 2026-11-03 真机回归: 出口 jz 的 sshd 只提供 PQ / curve25519 / ECDH 三类 kex。
+     *
+     * Android 上 JSch 的 X25519 (`DHXEC` 反射加载 XDH provider) 不可用 → 被静默过滤, 于是
+     * 客户端提案只剩 `dh-group-exchange-sha256, group14-sha256`, 一个都不匹配 → 该出口永久
+     * 建连失败。这条用例按"curve25519 全部不可用"的真实条件算交集, 白名单里必须还有别的路。
+     */
+    @Test
+    fun `kex whitelist still negotiates a modern OpenSSH server without curve25519`() {
+        val serverProposal =
+            "mlkem768x25519-sha256,sntrup761x25519-sha512,sntrup761x25519-sha512@openssh.com," +
+                "curve25519-sha256,curve25519-sha256@libssh.org," +
+                "ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521," +
+                "ext-info-s,kex-strict-s-v00@openssh.com"
+        val withoutCurve25519 =
+            JschSshClient.KEX_ALGORITHMS
+                .split(",")
+                .filterNot { it.contains("curve25519") }
+                .toSet()
+        val common =
+            serverProposal
+                .split(",")
+                .filterNot { it.startsWith("ext-info") || it.startsWith("kex-strict") }
+                .filter { it in withoutCurve25519 }
+        assertTrue(
+            "curve25519 不可用时白名单必须还能与只开 PQ/curve25519/ecdh 的服务器协商, 实际交集: $common",
+            common.isNotEmpty(),
+        )
+    }
+
     private fun assertEqualsToWhitelist(
         key: String,
         expected: String,

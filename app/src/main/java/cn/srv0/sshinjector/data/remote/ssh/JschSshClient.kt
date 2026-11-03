@@ -586,8 +586,13 @@ class JschSshClient
 
             // S7 算法白名单。注意 JSch 0.2.x 的 session 配置键是 kex/server_host_key/cipher.c2s/mac.c2s,
             // 写 KexAlgorithms/HostKeyAlgorithms/Cipher/MAC 不会被 Session 读取 (静默 no-op)。
+            // ECDH 三档**必须有**: Android 上 JSch 的 X25519 走反射加载 XDH provider, 不可用时会被
+            // 静默过滤 (2026-11-03 真机: 客户端提案只剩 DH-GEX/group14, 对只开 PQ/curve25519/ecdh 的
+            // 新 OpenSSH 直接 `Algorithm negotiation fail: kex`)。ECDH 在 Android 的 JCE 上可用。
             internal const val KEX_ALGORITHMS =
                 "curve25519-sha256,curve25519-sha256@libssh.org," +
+                    "ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521," +
+                    "diffie-hellman-group16-sha512," +
                     "diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256"
             internal const val HOST_KEY_ALGORITHMS =
                 "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521," +
