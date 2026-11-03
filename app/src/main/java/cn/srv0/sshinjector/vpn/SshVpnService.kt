@@ -230,6 +230,8 @@ class SshVpnService : VpnService() {
             // 分阶段健康在探测**之后**取样: 先取会让结论恒滞后一个周期 (探测耗时数秒,
             // 期间的 TUN/DNS/转发故障要等下个 15s 才反映; 降级又要求连续 2 窗口 = 体感 30s+)
             stageStep = vpnController.evaluateStageHealth()
+            // 附加出口健康 (只改状态/日志, 不影响已建立的连接)
+            vpnController.evaluateExitHealth()
             // SSH 池已知不健康是直接事实: 首败即降级并归因到 SSH, 不必等探测连败凑次数
             val sshOk = jschSshClient.isConnected() && !jschSshClient.hasUnhealthySession()
             when (result) {

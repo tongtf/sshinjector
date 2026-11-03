@@ -50,6 +50,11 @@ class TcpStateMachine(
     // uid → 包名 (规则按包名写, uid 只是设备事实)。默认 null = 应用规则不参与匹配。
     private val appIdentity: AppIdentity? = null,
 ) {
+    /** 多出口按应用分流的可观测计数 (只增不减; `reset()` 归零)。 */
+    private val appRuleWaits = AtomicLong(0)
+
+    private val appRuleUids = AtomicLong(0)
+
     companion object {
         private const val TAG = "PacketProcessor"
         private const val RELAY_BUFFER_SIZE = 65535
@@ -910,7 +915,10 @@ class TcpStateMachine(
         // 没有生效的 app 规则就不等 uid: 50ms 只该付给"能命中应用规则"的连接
         val uid =
             if (routing.table.hasAppRule) {
-                conn.uidRequest?.await(UidRequest.UID_WAIT_TIMEOUT_MS) ?: AppUidResolver.NO_UID
+                appRuleWaits.incrementAndGet()
+                val resolved = conn.uidRequest?.await(UidRequest.UID_WAIT_TIMEOUT_MS) ?: AppUidResolver.NO_UID
+                if (resolved >= 0) appRuleUids.incrementAndGet()
+                resolved
             } else {
                 AppUidResolver.NO_UID
             }
@@ -1987,6 +1995,14 @@ class TcpStateMachine(
         }
     }
 
+    /**
+     * 多出口按应用分流的诊断 (快照 `出口 …` 段追加)。
+     *
+     * `等待` 与 `拿到 uid` 分开计: 两者差距大 = uid 反查跟不上 (50ms 预算不够 / 平台拒绝),
+     * 于是"应用规则配了却不生效"; 等待为 0 = 规则里压根没有 `app:` 行。这是该现象唯一的可见判据。
+     */
+    fun routingDiagnostics(): String = "应用分流 等待 ${appRuleWaits.get()} · 拿到 uid ${appRuleUids.get()}"
+
     /** 统计键 = 域名 (无映射时 `ip:port` 字面量); 与 [closeTcpConnection] 里那次反查同口径。 */
     private fun statsKey(conn: TcpConnection): String {
         val ip = conn.dstIp.hostAddress ?: "-"
@@ -2272,6 +2288,8 @@ class TcpStateMachine(
         tunnelBlackHoleDelayed.set(0)
         handshakeCount.set(0)
         slowHandshakeCount.set(0)
+        appRuleWaits.set(0)
+        appRuleUids.set(0)
         // 两个 gauge: 所有连接已被关闭, 此刻在途应为 0 (清掉是为了不把上一会话的残值当现状)
         flowWaiters.set(0)
     }

@@ -27,6 +27,9 @@ import cn.srv0.sshinjector.domain.vpn.StageHealthEvaluator
 import cn.srv0.sshinjector.domain.vpn.TunWriter
 import cn.srv0.sshinjector.domain.vpn.VpnNetwork
 import cn.srv0.sshinjector.domain.vpn.dnsTransportFor
+import cn.srv0.sshinjector.domain.vpn.exit.ExitHealth
+import cn.srv0.sshinjector.domain.vpn.exit.ExitHealthChange
+import cn.srv0.sshinjector.domain.vpn.exit.ExitHealthEvaluator
 import cn.srv0.sshinjector.domain.vpn.exit.ExitId
 import cn.srv0.sshinjector.domain.vpn.exit.ProxyExit
 import cn.srv0.sshinjector.domain.vpn.routing.RoutingSnapshot
@@ -1504,7 +1507,8 @@ class VpnController
             // 引用了不存在/未启动出口的规则数是"配了没反应"的另一个直接判据 (UI 有行内提示,
             // 但无 adb 现场只有导出的日志 —— 快照必须带上它)
             val unresolved = routing.table.unresolvedRules.size
-            return if (unresolved == 0) exitText else "$exitText · 未解析规则 $unresolved"
+            val withUnresolved = if (unresolved == 0) exitText else "$exitText · 未解析规则 $unresolved"
+            return "$withUnresolved · ${packetProcessor.routingDiagnostics()}"
         }
 
         /**
@@ -1779,6 +1783,41 @@ class VpnController
                     dnsQueries = dnsInterceptor.queriesIntercepted.get(),
                 ),
             )
+
+        /**
+         * 附加出口健康巡检 (15s 一次, 与 `runHealthProbe` 同节拍)。
+         *
+         * 只改 `ActiveExit.health` 与日志: 新连接的选择**已经**按 `plugin.isHealthy` 判定
+         * (见 `TcpStateMachine.selectExit`), 所以这里不会改变任何连接的走向 —— 它负责的是
+         * "让状态可见 + 恢复有节拍", 否则快照里永远只有 `Ready`。
+         */
+        fun evaluateExitHealth() {
+            val routing = routingTableStore.current()
+            if (!routing.enabled) return
+            val now = System.currentTimeMillis()
+            for (exit in tunnelManager.exitsSnapshot()) {
+                if (exit.id == ExitId.DEFAULT) continue
+                val decision =
+                    ExitHealthEvaluator.decide(
+                        current = exit.health,
+                        healthy = exit.plugin.isHealthy,
+                        lastProbeOkAt = exit.lastProbeOkAt,
+                        now = now,
+                    )
+                exit.lastProbeOkAt = decision.lastProbeOkAt
+                if (decision.health != exit.health) {
+                    exit.health = decision.health
+                    exit.degradedSince = if (decision.health == ExitHealth.Degraded) now else 0L
+                }
+                when (decision.change) {
+                    ExitHealthChange.DEGRADED ->
+                        addLog("出口 ${exit.id} 不可用 · 已降级, 新连接回退主出口", LogLevel.WARNING)
+                    ExitHealthChange.RECOVERED ->
+                        addLog("出口 ${exit.id} 已恢复 · 新连接重新按规则派发", LogLevel.SUCCESS)
+                    ExitHealthChange.NONE -> Unit
+                }
+            }
+        }
 
         /** 上报隧道出口 IP (探测成功后经 IP 回显取回); UI 断开时自行降级为占位符。 */
         fun reportExitIp(exitIp: String?) {

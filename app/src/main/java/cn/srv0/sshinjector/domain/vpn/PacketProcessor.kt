@@ -59,6 +59,9 @@ class PacketProcessor
         private val udpRelay = UdpRelay(stats)
         private val icmpv6Responder = Icmpv6Responder({ tunSink })
 
+        /** 多出口按应用分流的计数 (`等待` / `拿到 uid`), 进数据面快照。 */
+        fun routingDiagnostics(): String = tcpStateMachine.routingDiagnostics()
+
         val errors: StateFlow<Long> = stats.errors
 
         init {
