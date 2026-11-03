@@ -488,6 +488,12 @@ class VpnController
                 // 再按快照启动附加出口。启动失败只降级该出口 (规则在匹配时跳过), 绝不阻断主出口。
                 appIdentity.clear()
                 val routing = routingTableStore.refresh()
+                // D-5: DOMAIN_SPLIT 下"有出口规则的域名"也必须进隧道 (假 IP), 否则真实 IP 没有
+                // TUN 路由 → 连接根本不进 TUN → 规则永远匹配不到。关闭多出口时闭包恒 false。
+                dnsInterceptor.setExitDomainRulePredicate { domain ->
+                    val snapshot = routingTableStore.current()
+                    snapshot.enabled && snapshot.table.hasDomainRule(domain)
+                }
                 if (routing.enabled) startAdditionalExits(routing)
 
                 // 3. 设置 DNS 拦截器

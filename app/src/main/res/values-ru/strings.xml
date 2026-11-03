@@ -445,5 +445,5 @@
     <string name="multi_exit_issue_duplicate">Дублирующаяся цель; оставлено первое правило</string>
     <string name="multi_exit_issue_default_route">Используйте default -&gt; &lt;выход&gt;</string>
     <string name="multi_exit_issue_too_many">Слишком много правил</string>
-    <string name="multi_exit_unsupported_domain_split">В режиме разделения DNS домены вне списка не попадают в туннель, поэтому правила пока не действуют. Используйте удалённый режим DNS.</string>
+    <string name="multi_exit_unsupported_domain_split">Режим разделения DNS: действуют только правила для доменов (правила IP/приложений игнорируются). Домены, попавшие под правило, направляются в туннель.</string>
 </resources>

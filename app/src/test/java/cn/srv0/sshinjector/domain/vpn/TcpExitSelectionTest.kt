@@ -76,6 +76,54 @@ class TcpExitSelectionTest {
     }
 
     @Test
+    fun `a pre-connect exit failure retries once on the primary exit`() {
+        val primaryServer = FakeSocksServer()
+        // 已经关闭的端口: 插件 isHealthy 仍为 true (端口号 > 0), 但 loopback 连接会失败 ——
+        // 正是"出口在握手瞬间死掉"的形态 (设计 §9.5)
+        val deadPort = java.net.ServerSocket(0).use { it.localPort }
+        val sm =
+            newStateMachine(
+                primary = FakeSocksPlugin(primaryServer.port),
+                additional = FakeSocksPlugin(deadPort),
+                failover = true,
+            )
+
+        try {
+            sendSyn(sm, srcPort = 41000)
+
+            assertTrue(
+                "握手阶段秒失败必须换主出口重试一次, 而不是让客户端白等",
+                awaitUntil { primaryServer.accepted.get() == 1 },
+            )
+        } finally {
+            primaryServer.close()
+        }
+    }
+
+    @Test
+    fun `a saturated exit falls back to the primary exit even with failover off`() {
+        val primaryServer = FakeSocksServer()
+        val sm =
+            newStateMachine(
+                primary = FakeSocksPlugin(primaryServer.port),
+                // 活跃连接数已达软上限 128
+                additional = FakeSocksPlugin(0, activeConnections = 128),
+                failover = false,
+            )
+
+        try {
+            sendSyn(sm, srcPort = 41000)
+
+            assertTrue(
+                "软上限不是失败: 超限必须回主出口 (连 failover=false 也不该 RST)",
+                awaitUntil { primaryServer.accepted.get() == 1 },
+            )
+        } finally {
+            primaryServer.close()
+        }
+    }
+
+    @Test
     fun `an unhealthy exit rejects the connection when failover is off`() {
         val primaryServer = FakeSocksServer()
         val tunPackets = CopyOnWriteArrayList<ByteArray>()

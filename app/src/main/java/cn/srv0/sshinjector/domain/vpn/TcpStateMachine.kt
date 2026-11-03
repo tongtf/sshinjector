@@ -55,6 +55,12 @@ class TcpStateMachine(
 
     private val appRuleUids = AtomicLong(0)
 
+    /** 因出口软上限而回退主出口的次数 (进快照; >0 = 该出口已被打满)。 */
+    private val exitSoftCapTotal = AtomicLong(0)
+
+    /** 建连前快速失败重试次数 (进快照)。 */
+    private val exitRetryTotal = AtomicLong(0)
+
     companion object {
         private const val TAG = "PacketProcessor"
         private const val RELAY_BUFFER_SIZE = 65535
@@ -64,6 +70,23 @@ class TcpStateMachine(
         private const val MAX_TCP_SEGMENT_V6 = 1440 // MTU1500 - IPv6 头40 - TCP 头20
         private const val UINT32_MASK = 0xFFFFFFFFL
         private const val TUN_CONNECT_TIMEOUT_MS = 5000
+
+        /**
+         * 非 default 出口的活跃连接软上限 (设计 §10 I-19)。
+         *
+         * 一个出口打满下载后再往里导新连接, 只会把 `SshIoDispatcher` (128 线程) 和该出口的
+         * SSH 通道一起拖死; 超限的新连接改走主出口 (连接仍然可用, 且不拒绝)。
+         * **default 自己不受此限** (与改造前语义一致, 由既有的 `isSaturated()` 路径处理)。
+         */
+        private const val EXIT_CONN_SOFT_CAP = 128
+
+        /**
+         * 建连前重试的最大耗时 (设计 §9.5 条件 5)。
+         *
+         * 慢失败不重试: 客户端 SYN 预算有限, 而且慢失败更像**目标侧**问题 —— 换个出口也一样慢,
+         * 只会把 SYN_SENT 拖得更久。
+         */
+        private const val RETRY_MAX_ELAPSED_MS = 3000
 
         /**
          * loopback 连接 + SOCKS 协商的预算。纯本地操作, 正常是µs 级 —— 2s 只用来兜死。
@@ -269,6 +292,12 @@ class TcpStateMachine(
          * 仅用于日志/快照归因; 真正的插件实例在 [tunnelPlugin] (回程回调按它摘除)。
          */
         @Volatile var exitId: String = ExitId.DEFAULT
+
+        /**
+         * 是否已经做过"建连前快速失败重试" (设计 §9.5: **只重试一次**)。
+         * 放类体内以免影响 data class 的 equals/hashCode。
+         */
+        @Volatile var exitRetried: Boolean = false
 
         /**
          * 本连接回程回调注册到**哪个插件** (多出口后不能再用机器级字段, C-2)。
@@ -590,6 +619,8 @@ class TcpStateMachine(
      */
     private fun forwardSynToTunnel(conn: TcpConnection) {
         scope.launch {
+            // 重试预算从这里起算 (含出口选择/uid 等待): 慢失败本来就不该换出口重试
+            val attemptStartedAt = System.currentTimeMillis()
             try {
                 // F1: 排除路由/域名分流未命中 → 用户态直连 (包已进 TUN, 回注是黑洞, 只能本地直连)
                 // 分流决策每连接一条 (非每包): 0% 下载失败排查时用于确认下载主机是否绕过隧道
@@ -634,7 +665,16 @@ class TcpStateMachine(
                 }
                 val socksPort = plugin.localSocksPort
                 if (socksPort > 0) {
-                    forwardThroughLocalSocks(conn, plugin, socksPort)
+                    val outcome = forwardThroughLocalSocks(conn, plugin, socksPort)
+                    if (outcome != ForwardOutcome.ESTABLISHED) {
+                        // 出口侧在握手阶段就死了: SYN-ACK 还没发, 客户端仍在 SYN_SENT —— 天然的
+                        // 重试安全区, 换 default 再试一次 (只一次, 且仅限 EXIT_UNAVAILABLE)。
+                        val retried =
+                            outcome == ForwardOutcome.EXIT_UNAVAILABLE &&
+                                retryOnPrimaryIfAllowed(conn, attemptStartedAt)
+                        if (!retried) closeTcpConnection(conn.key, conn)
+                        return@launch
+                    }
                 } else {
                     // 唯一插件 socks5 连接成功后 boundPort>0 恒成立; 走到这里 = 隧道未就绪/已拆除
                     Log.e(TAG, "Plugin ${plugin.id} has no local SOCKS port (tunnel not ready?)")
@@ -937,13 +977,68 @@ class TcpStateMachine(
         if (exitId == ExitId.DEFAULT) return ExitChoice.Primary
 
         val active = tunnelManager.exit(exitId)
-        if (active == null || active.health != ExitHealth.Ready || !active.plugin.isHealthy) {
-            // 命中了一个不可用的出口: failover 开 → 回主出口 (连接仍然能用);
-            // 关 → 直接断开, 让客户端重试 (设计 §9.5; 悄悄换出口会让用户以为分流生效了)
-            return if (routing.failoverEnabled) ExitChoice.Primary else ExitChoice.Reject
+        val atCap = active != null && active.plugin.activeConnections >= EXIT_CONN_SOFT_CAP
+        val unusable = active == null || active.health != ExitHealth.Ready || !active.plugin.isHealthy
+        if (atCap || unusable) {
+            // 软上限**不是失败** (永远回主出口, 与 failover 开关无关);
+            // 真不可用才看设置: 开 → 回主出口, 关 → 直接断开让客户端重试 (设计 §9.5)。
+            if (atCap) exitSoftCapTotal.incrementAndGet()
+            return if (atCap || routing.failoverEnabled) ExitChoice.Primary else ExitChoice.Reject
         }
         conn.exitId = exitId
         return ExitChoice.Selected(active.plugin)
+    }
+
+    /**
+     * 建连前快速失败重试 (设计 §9.5), 八个条件缺一不可。
+     *
+     * 只在这种情况下重试: 选中的**非 default** 出口在"本地代理不可达 / SOCKS 协商 / 认证"阶段
+     * 就失败, 且 SYN-ACK 未写出、没有任何上行被转出、3s 内、尚未重试过、default 可用。
+     *
+     * @return true = 已经重试并把后续收尾做完 (调用方不要再 close)
+     */
+    private suspend fun retryOnPrimaryIfAllowed(
+        conn: TcpConnection,
+        attemptStartedAt: Long,
+    ): Boolean {
+        if (conn.exitRetried) return false
+        if (conn.exitId == ExitId.DEFAULT) return false
+        if (conn.synAckWritten) return false
+        if (conn.state == TcpConnection.TcpState.Closed) return false
+        if (conn.forwardedBytes > 0) return false
+        val elapsed = System.currentTimeMillis() - attemptStartedAt
+        if (elapsed > RETRY_MAX_ELAPSED_MS) return false
+
+        val primary = tunnelManager.exit(ExitId.DEFAULT)
+        val primaryPlugin = primary?.plugin ?: tunnelManager.getActiveOrFallback() ?: return false
+        if (primary?.health == ExitHealth.Failed || !primaryPlugin.isHealthy) return false
+
+        // 先摘掉失败出口上已注册的回程回调: 端口会被下一次连接复用, 留着就是把回程写进死连接
+        releaseHandshakeResources(conn)
+        val failedExit = conn.exitId
+        conn.exitRetried = true
+        conn.exitId = ExitId.DEFAULT
+        exitRetryTotal.incrementAndGet()
+        VpnController.appLogThrottled(
+            "出口快速失败重试 · ${target(conn)} — $failedExit → default (${elapsed}ms 即失败)",
+            level = LogLevel.INFO,
+            throttleKey = "出口快速失败重试",
+        )
+        val retryOutcome = forwardThroughLocalSocks(conn, primaryPlugin, primaryPlugin.localSocksPort)
+        if (retryOutcome != ForwardOutcome.ESTABLISHED) closeTcpConnection(conn.key, conn)
+        return true
+    }
+
+    /** 释放握手期在某个出口上注册的回调/端口 (重试前必须做, 否则旧回调写进同一个 conn)。 */
+    private fun releaseHandshakeResources(conn: TcpConnection) {
+        val port = conn.socksLocalPort
+        val plugin = conn.tunnelPlugin
+        if (plugin != null && port > 0) {
+            runCatching { plugin.removeTunCallback(port) }
+            runCatching { plugin.removeTargetEofCallback(port) }
+        }
+        conn.tunnelPlugin = null
+        conn.socksLocalPort = 0
     }
 
     /** 出口选择结果 (三态: 明确出口 / 回主出口 / 按设置拒绝)。 */
@@ -967,7 +1062,7 @@ class TcpStateMachine(
         conn: TcpConnection,
         plugin: TunnelPlugin,
         socksPort: Int,
-    ) {
+    ): ForwardOutcome {
         // 分阶段健康: 进入隧道转发路径计数 (成功建立在 CONNECT 应答通过后计)
         StageCounters.onForwardAttempt()
         val connKey = conn.key
@@ -975,15 +1070,24 @@ class TcpStateMachine(
         // 握手期非阻塞: readFully/writeFully 靠各阶段自己的 deadline 兜底 (见其 KDoc)。
         // 握手完成后 forwardToSocks/回程中继同样依赖非阻塞 write 的 write()==0 背压语义。
         sock.configureBlocking(false)
-        if (!awaitLoopbackConnect(sock, socksPort, System.currentTimeMillis() + SOCKS_LOCAL_TIMEOUT_MS)) {
+        // 连接被拒 (端口已关/监听未起) 会抛 ConnectException 而不是返回 false —— 必须在这里
+        // 收敛成"出口不可用", 否则它会冒到 forwardSynToTunnel 的通用 catch, 既打错日志
+        // (`隧道转发失败`) 也让 §9.5 的快速重试失去判据。
+        val connected =
+            try {
+                awaitLoopbackConnect(sock, socksPort, System.currentTimeMillis() + SOCKS_LOCAL_TIMEOUT_MS)
+            } catch (e: IOException) {
+                Log.w(TAG, "loopback connect failed for socks port $socksPort: ${e.message}")
+                false
+            }
+        if (!connected) {
             VpnController.appLogThrottled(
                 "本地代理无响应 · 连接本地 SOCKS 端口超时 (${conn.dstIp.hostAddress}:${conn.dstPort})",
                 level = LogLevel.WARNING,
                 throttleKey = "本地代理无响应",
             )
             sock.close()
-            closeTcpConnection(connKey, conn)
-            return
+            return ForwardOutcome.EXIT_UNAVAILABLE
         }
 
         // SYN-ACK **必须等到通道就绪后再发** (1.0.6 的行为, 后被 early-SYN-ACK 改错):
@@ -1033,15 +1137,13 @@ class TcpStateMachine(
                 throttleKey = "本地代理配置错误",
             )
             sock.close()
-            closeTcpConnection(connKey, conn)
-            return
+            return ForwardOutcome.FAILED
         }
         // 握手 + 认证合成一步: 方法协商 (RFC 1928) 与用户名/密码 (RFC 1929) 失败都是
         // "本地代理不可用", 拆出去让 forwardThroughLocalSocks 回到可读的长度。
         if (!socksNegotiate(sock, creds, conn, deadline = System.currentTimeMillis() + SOCKS_LOCAL_TIMEOUT_MS)) {
             sock.close()
-            closeTcpConnection(connKey, conn)
-            return
+            return ForwardOutcome.EXIT_UNAVAILABLE
         }
 
         // SOCKS5 CONNECT 请求
@@ -1064,8 +1166,7 @@ class TcpStateMachine(
                 throttleKey = "本地代理无响应",
             )
             sock.close()
-            closeTcpConnection(connKey, conn)
-            return
+            return ForwardOutcome.FAILED
         }
 
         // 服务端 CONNECT 响应为定长 (VER REP RSV ATYP BND.ADDR BND.PORT)，IPv4/错误均为 10 字节；
@@ -1085,8 +1186,7 @@ class TcpStateMachine(
                 throttleKey = "SSH 通道建立超时",
             )
             sock.close()
-            closeTcpConnection(connKey, conn)
-            return
+            return ForwardOutcome.FAILED
         }
         connectResp.flip()
         val repVer2 = connectResp.get().toInt() and 0xFF
@@ -1109,8 +1209,7 @@ class TcpStateMachine(
                 throttleKey = "SOCKS 连接被拒",
             )
             sock.close()
-            closeTcpConnection(connKey, conn)
-            return
+            return ForwardOutcome.FAILED
         }
 
         // 跳过 BND.ADDR + BND.PORT
@@ -1126,7 +1225,7 @@ class TcpStateMachine(
         // 置 Established + acquire 假 IP 走唯一入口 [markEstablished] (内含与 closeTcpConnection
         // 同锁的 Closed 复查 + 就地关通道): 握手期间客户端 RST 时这里直接返回, 不会出现
         // "已移除的连接继续跑 relay"或"计数只增不减 → 假 IP 池打满 → 后续 CONNECT 全 0x03"。
-        if (!markEstablished(conn, sock)) return
+        if (!markEstablished(conn, sock)) return ForwardOutcome.FAILED
         // 握手耗时告警: SYN-ACK 是等到这里才发的, 客户端全程在 SYN_SENT 里干等。
         // 分页一次开 6-10 条连接时, 建连耗时直接叠加成"点安装无反应"。
         val handshakeMs = System.currentTimeMillis() - handshakeStartedAt
@@ -1187,6 +1286,18 @@ class TcpStateMachine(
             startRelayFromSocks(conn, connKey)
         }
         if (IS_DEBUG) Log.d(TAG, "TCP established via SOCKS5 to ${conn.dstIp}:${conn.dstPort}")
+        return ForwardOutcome.ESTABLISHED
+    }
+
+    /** SOCKS 建连结果: 区分"出口不可用 (可重试)" 与"目标/其它失败 (不重试)" (设计 §9.5)。 */
+    private enum class ForwardOutcome {
+        ESTABLISHED,
+
+        /** 本地 SOCKS 不可用 / 协商 / 认证失败 —— 出口侧问题, SYN-ACK 未发时可换 default 重试一次。 */
+        EXIT_UNAVAILABLE,
+
+        /** CONNECT 阶段失败或其它错误 —— **不重试** (用 rep 判"出口坏了"会让 NXDOMAIN 也换出口)。 */
+        FAILED,
     }
 
     /**
@@ -2001,7 +2112,9 @@ class TcpStateMachine(
      * `等待` 与 `拿到 uid` 分开计: 两者差距大 = uid 反查跟不上 (50ms 预算不够 / 平台拒绝),
      * 于是"应用规则配了却不生效"; 等待为 0 = 规则里压根没有 `app:` 行。这是该现象唯一的可见判据。
      */
-    fun routingDiagnostics(): String = "应用分流 等待 ${appRuleWaits.get()} · 拿到 uid ${appRuleUids.get()}"
+    fun routingDiagnostics(): String =
+        "应用分流 等待 ${appRuleWaits.get()} · 拿到 uid ${appRuleUids.get()} · " +
+            "软上限回退 ${exitSoftCapTotal.get()} · 快速重试 ${exitRetryTotal.get()}"
 
     /** 统计键 = 域名 (无映射时 `ip:port` 字面量); 与 [closeTcpConnection] 里那次反查同口径。 */
     private fun statsKey(conn: TcpConnection): String {
@@ -2290,6 +2403,8 @@ class TcpStateMachine(
         slowHandshakeCount.set(0)
         appRuleWaits.set(0)
         appRuleUids.set(0)
+        exitSoftCapTotal.set(0)
+        exitRetryTotal.set(0)
         // 两个 gauge: 所有连接已被关闭, 此刻在途应为 0 (清掉是为了不把上一会话的残值当现状)
         flowWaiters.set(0)
     }

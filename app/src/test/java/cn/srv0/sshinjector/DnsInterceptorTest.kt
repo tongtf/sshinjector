@@ -4,6 +4,7 @@ import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
 import cn.srv0.sshinjector.domain.vpn.VpnNetwork
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -40,6 +41,28 @@ class DnsInterceptorTest {
         }
         dns.setSystemDnsServers(listOf(VpnNetwork.TUN_IP))
         assertTrue(dns.resolveLocally("example.com", timeoutMs = 50).isEmpty())
+    }
+
+    /**
+     * D-5: 域名命中**出口规则**时, 即使不在域名分流名单里也必须走隧道 (假 IP)。
+     *
+     * 漏了这一步的现场: `DOMAIN_SPLIT` 下域名解析成真实 IP → 真实 IP 没有 TUN 路由 → 连接根本
+     * 不进 TUN → 出口规则一条都不生效 (UI 里规则配得好好的, 数据面毫无反应)。
+     */
+    @Test
+    fun `an exit rule promotes a domain into the tunnel in split mode`() {
+        val dns = DnsInterceptor()
+
+        assertFalse("未接线时保持改造前判定", dns.domainRoutesToTunnel("example.com"))
+
+        // 生产实现是 `RoutingTable.hasDomainRule` (内部小写化); 这里用等价谓词
+        dns.setExitDomainRulePredicate { it.lowercase() == "example.com" }
+        assertTrue(dns.domainRoutesToTunnel("example.com"))
+        assertTrue("匹配走 hasDomainRule 的后缀语义", dns.domainRoutesToTunnel("Example.COM"))
+        assertFalse(dns.domainRoutesToTunnel("other.com"))
+
+        dns.setExitDomainRulePredicate(null)
+        assertFalse("关闭多出口必须回到原判定", dns.domainRoutesToTunnel("example.com"))
     }
 
     @Test

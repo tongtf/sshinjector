@@ -100,8 +100,8 @@ class MultiExitViewModel
                     config.dnsMode == DNS_MODE_SYSTEM -> MultiExitUiState.UnsupportedReason.SYSTEM_DNS
                     config.dnsMode == DNS_MODE_WHITELIST && data.whitelistPackages.isEmpty() ->
                         MultiExitUiState.UnsupportedReason.EMPTY_WHITELIST
-                    // 域名分流: 未命中名单的域名根本不进 TUN, 而"域名规则把目标提升进隧道" (D-5)
-                    // 还没实现 —— 该模式下规则实际一条都生效不了, 不能让 UI 显示"可用"。
+                    // 域名分流: 只有域名规则能生效 (IP/应用规则在 DNS 阶段不可见);
+                    // 命中规则的域名会被 D-5 提升进隧道 —— 可用, 但必须说清边界
                     config.dnsMode == DNS_MODE_DOMAIN_SPLIT -> MultiExitUiState.UnsupportedReason.DOMAIN_SPLIT
                     else -> null
                 }
@@ -110,7 +110,8 @@ class MultiExitViewModel
                 loading = false,
                 enabled = config.enabled,
                 failoverEnabled = config.failoverEnabled,
-                supported = reason == null,
+                // DOMAIN_SPLIT 可用但有限制 (提示而非禁用); SYSTEM / 空白名单才真的不可用
+                supported = reason == null || reason == MultiExitUiState.UnsupportedReason.DOMAIN_SPLIT,
                 unsupportedReason = reason,
                 exits =
                     data.exits.map { exit ->

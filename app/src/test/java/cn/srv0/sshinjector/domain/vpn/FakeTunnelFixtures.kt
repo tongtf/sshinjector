@@ -92,6 +92,7 @@ internal class FakeSocksServer : AutoCloseable {
 
 internal class FakeSocksPlugin(
     override val localSocksPort: Int,
+    override val activeConnections: Int = 0,
 ) : TunnelPlugin {
     @Volatile var tunCallback: ((ByteArray, Int, Int) -> Unit)? = null
 

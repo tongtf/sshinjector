@@ -146,6 +146,31 @@ class DnsInterceptor
             domainListManager = manager
         }
 
+        /**
+         * D-5: 域名有**出口规则**时, 即使不在域名分流名单里也强制走隧道 (假 IP)。
+         *
+         * 为什么需要: `DOMAIN_SPLIT` 下未命中名单的域名走系统 DNS → 拿到真实 IP → 真实 IP 没有
+         * TUN 路由 → **根本不进 TUN**, 于是出口规则永远匹配不到 (设计 §6.4 约束 3)。
+         * 只有域名规则能触发这个提升 (IP 规则在 DNS 阶段不可见)。
+         *
+         * 由 `VpnController.connect` 接线 (闭包读路由快照); null = 不提升 = 改造前行为。
+         */
+        @Volatile private var exitDomainRulePredicate: ((String) -> Boolean)? = null
+
+        fun setExitDomainRulePredicate(predicate: ((String) -> Boolean)?) {
+            exitDomainRulePredicate = predicate
+        }
+
+        /**
+         * 该域名是否应走隧道: 域名分流名单命中 **或** 命中出口规则 (D-5 提升)。
+         *
+         * 只看名单以外的提升, 不改 REMOTE/WHITELIST 的判定 (它们的 `cachePolicyTag` 恒为 tunnel)。
+         */
+        internal fun domainRoutesToTunnel(name: String): Boolean {
+            if (domainListManager?.matches(name) == true) return true
+            return exitDomainRulePredicate?.invoke(name) == true
+        }
+
         // S5: IPv6 总开关 (connect 时注入); 关闭时 AAAA 回空应答, TUN 侧丢弃 v6 包
         @Volatile private var enableIPv6 = true
 
@@ -191,7 +216,7 @@ class DnsInterceptor
             when (transportMode) {
                 DnsTransport.SYSTEM -> CACHE_TAG_DIRECT
                 DnsTransport.DOMAIN_SPLIT ->
-                    if (domainListManager?.matches(question.name.toString(true)) == true) {
+                    if (domainRoutesToTunnel(question.name.toString(true))) {
                         CACHE_TAG_TUNNEL
                     } else {
                         CACHE_TAG_DIRECT
@@ -671,9 +696,9 @@ class DnsInterceptor
                         DnsTransport.SYSTEM -> true
                         DnsTransport.DOMAIN_SPLIT -> {
                             val qname = question.name.toString(true)
-                            val inList = domainListManager?.matches(qname) == true
-                            Log.d(TAG, "DOMAIN_SPLIT: $qname -> ${if (inList) "tunnel" else "direct"}")
-                            !inList
+                            val toTunnel = domainRoutesToTunnel(qname)
+                            Log.d(TAG, "DOMAIN_SPLIT: $qname -> ${if (toTunnel) "tunnel" else "direct"}")
+                            !toTunnel
                         }
                         else -> false
                     }
