@@ -423,12 +423,27 @@ class ConnectionBudgetHolder @Inject constructor() {
 | 全局 | 新增单测: `ExitIdTest`(5) / `TunnelManagerExitTest`(4) / `MultiExitCallbackTest`(1) / `ConnectionBudgetTest`(7) | `MultiExitCallbackTest` 在旧实现 (机器级字段) 下**必然失败**: 关连接 1 会摘掉出口 B 的回调 |
 
 ### P1
-- [ ] AppIdentity
-- [ ] 规则解析/匹配 + 单测
-- [ ] Room v5 + 迁移
-- [ ] DataStore 键
-- [ ] UI (入口/列表/编辑器/应用选择器)
-- [ ] 快照占位
+- [x] AppIdentity — `19a6d8a`
+- [x] 规则解析/匹配 + 单测 — `96b6ba7`
+- [x] Room v5 + 迁移 — `19a6d8a`
+- [x] DataStore 键 — `19a6d8a`
+- [x] UI (入口/列表/编辑器/应用选择器) — `ddf731a`
+- [x] 快照占位 — `19a6d8a`
+
+#### P1 实施结果与偏差 (2026-11-03)
+
+| 项 | 实际落地 | 与文档的差异 / 原因 |
+|---|---|---|
+| 规则层 | `domain/vpn/routing/`: `ExitRule` / `ExitRuleParser` / `RoutingTable` / `RoutingSnapshot`+`RoutingTableStore` / `RoutingProbe` | 解析器按形态拆成 `parseAppTarget`/`parseBracketedTarget`/`parseCidrTarget`/`parseHostTarget` 等子函数 —— detekt `ReturnCount` 上限 5, 单个 `parseTarget` 有 17 个 `return` |
+| IPv6 语法 | 同时支持 `[2001:db8::]/32` (设计 §6.2 示例) 与 `2001:db8::/32` | 附录 A 的 EBNF 只写了前者之外的形式; 设计示例是用户最先抄的写法, 不支持就是"照文档配了没反应" |
+| IPv4 + 端口 | 支持 `1.2.3.4:443` | EBNF 里 IPv4 不带端口; 但用户一定会写。若按域名解析会得到永不命中的规则 (静默失效), 故按 IP + 端口处理 |
+| 规则表 | `RoutingTable(rules, issues, knownExits)`; 未知出口**保留**并跳过, `withKnownExits` 重建 | 出口在 Room、规则在 DataStore, 没有事务; 改名/导入时序不一致时删行 = 永久丢配置 |
+| Room | `proxy_exits` + `ProxyExitDao` + `MIGRATION_4_5`, schema 导出 `5.json` | **迁移 DDL 不含 `DEFAULT`** (设计 §7.1 示例带 DEFAULT 是笔误): Room 用 `TableInfo` 比对, 多一个默认值就 `Migration didn't properly handle`。`ProxyExitSchemaTest` 逐字比对 `5.json` 兜底 (androidTest 的 MigrationTestHelper 不跑 CI) |
+| DataStore | `multi_exit_enabled`(false) / `multi_exit_rules`("") / `multi_exit_failover_enabled`(true) | 关闭时 `RoutingSnapshot.build` **不解析规则文本** —— 关闭态不产生解析成本与解析告警 |
+| AppIdentity | `@Singleton class AppIdentity(lookup: (Int) -> String?)` + `AppModule` 提供 `fromPackageManager` | 不用 `@Inject constructor(context)` + 默认参数: Dagger 不认默认值, `(Int) -> String?` 会变成未绑定依赖 |
+| UI | `ui/screen/routing/`: 列表页 (开关/出口/引用计数/删除提示) + 规则编辑器 (实时校验/测试框/应用选择器); 设置 → 网络 入口 | 应用列表抽成 `InstalledAppsSource` 单例 (白名单页也改用它) —— 两份 5 分钟缓存会让两个页面看到不同快照 |
+| 快照 | `DataPlaneSnapshot.exitDiagnostics = ""`, 仅在非空时追加 | 关闭多出口时快照与改造前逐字节一致 |
+| 新增单测 | `RoutingTableTest`(22) / `RoutingSnapshotTest`(4) / `RoutingProbeTest`(9) / `AppIdentityTest`(5) / `ProxyExitRepositoryTest`(6) / `ProxyExitSchemaTest`(2) | 解析器与匹配的关键不变量都锁在纯 JVM 测试里 (无 Robolectric) |
 
 ### P2
 - [ ] AppUidResolver 句柄
