@@ -448,10 +448,10 @@ class ConnectionBudgetHolder @Inject constructor() {
 ### P2
 - [x] AppUidResolver 句柄 — `7c1234d`
 - [x] forwardSynToTunnel 接线 (bypass 先行) — `7c1234d`
-- [ ] ForwardOutcome + 重试 (**未做**)
-- [x] 附加出口生命周期 (**启动/停用**; **探活/降级未做**) — `7c1234d`
-- [ ] DNS 谓词 (D-5 隧道提升, **未做**)
-- [x] 观测面 (每出口 连接数 + 健康, 关闭时空串) — `7c1234d`
+- [ ] ForwardOutcome + 重试 (**未做**; `failoverEnabled=false` 的 RST 已做 — `3baebc5`)
+- [x] 附加出口生命周期 + 探活/降级 — `7c1234d` / `3baebc5` / `58a4c88`
+- [ ] DNS 谓词 (D-5 隧道提升, **未做**; UI 已明确提示该模式不可用 — `3baebc5`)
+- [x] 观测面 (每出口 连接数 + 健康 + 未解析规则 + 应用分流计数) — `7c1234d` / `486e794` / `58a4c88`
 - [ ] S17–S26 真机 (**未做**, 本机无 adb)
 
 #### P2 实施结果与偏差 (2026-11-03)
@@ -466,15 +466,23 @@ class ConnectionBudgetHolder @Inject constructor() {
 | 生命周期 | `VpnController.connect`: `routingTableStore.refresh()` → `startAdditionalExits(snapshot)` | 附加出口 `TunnelConfig.forSocks5(server).copy(socksPort = 0)` —— **必须 0 (ephemeral)**, 否则第二个出口与主出口抢 1080 必 bind 失败 |
 | 快照 | `exitDiagnostics()`: `主出口(host): N 连 · Ready · 出口 hk(host): M 连 · Degraded` | `enabled=false` 返回空串 → `render()` 不追加 (关闭态逐字节不变), 单测 `DataPlaneSnapshotTest` 两条用例锁住 |
 
-**未做 (按设计文档原样留给后续, 不是"忘了")**
+**已补 (review 后, 2026-11-03)**
 
-1. **`ForwardOutcome` + 建连前快速失败重试** (§9.5 的 8 个条件): 现在附加出口建连失败就是该连接失败 (客户端重试)。
-   `failoverEnabled=false` 的 RST 语义也一并未实现 —— 当前一律回主出口。
-2. **出口探活 / 降级状态机** (§9.1–§9.3): `ExitHealth` 字段已在 `ActiveExit` 上, 但**没有任何东西把它置成
-   `Degraded`/`Failed`** —— 于是 `selectExit` 的 `health == Ready` 判定目前恒真。附加出口的 SSH 池失败
-   (`JschSshClient` 的池健康检测) 不会自动降级并回退。
-3. **D-5 域名规则隧道提升** (§6.5): `DOMAIN_SPLIT` 下未命中名单的域名仍走直连 —— 域名规则在该模式不生效。
-   `RoutingTable.hasDomainRule` 已实现并单测, 但 `DnsInterceptor` 尚未调用它。
-4. **应用规则在"uid 拿不到"时的日志/计数** (`uidTimeoutTotal` 等): 目前超时静默走 default, 只能从
-   `出口 …` 快照没有命中看出。
-5. **S17–S26 真机**: 本机无 adb, 全部未验。
+| 项 | 落地 | 提交 |
+|---|---|---|
+| 选路测试缝 | `RoutingSnapshotSource` 接口 + `TcpExitSelectionTest`(3): 命中→附加出口 / 不可用→主出口 / failover 关→RST | `3baebc5` |
+| `failoverEnabled=false` | 命中不可用出口 → 直接 RST (不再悄悄换出口) | `3baebc5` |
+| 出口可用性 | `TunnelPlugin.isHealthy` (端口在 + SSH 池有活口), 池全死不再被选中 | `486e794` |
+| 禁用出口 | 会话中途禁用: 新连接立即停派发, **空闲后**回收 SSH 池 + 监听 (有连接时保留, 最长等 120s) | `3baebc5` |
+| 并行启动 | `startAdditionalExits` 改 `async/awaitAll`; 每个出口打建连耗时 | `3baebc5` |
+| DOMAIN_SPLIT | UI 明确提示"该模式规则暂不生效" (D-5 未实现前不误导) | `3baebc5` |
+| 健康巡检 | `ExitHealthEvaluator` (纯逻辑, 6 例单测): 失健康立即 Degraded / 连续 2 次健康才恢复 / 终态不复活; 15s 节拍 | `58a4c88` |
+| 应用分流计数 | 快照追加 `应用分流 等待 N · 拿到 uid M` (会话级清零) | `58a4c88` |
+| 未解析规则 | 快照追加 `未解析规则 N` | `486e794` |
+
+**仍未做**
+
+1. **`ForwardOutcome` + 建连前快速失败重试** (§9.5 八条件): 附加出口在 CONNECT 阶段失败 = 该连接失败 (客户端重试)。
+2. **D-5 域名规则隧道提升** (§6.5): `RoutingTable.hasDomainRule` 已实现并单测, 但 `DnsInterceptor` 尚未调用它。
+3. **`Failed` 终态**: 巡检只做 `Ready ↔ Degraded`, 不置 `Failed` (需要"本次会话不再恢复"的判定标准)。
+4. **S17–S26 真机**: 本机无 adb, 全部未验。
