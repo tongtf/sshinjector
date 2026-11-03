@@ -74,7 +74,7 @@ class RoutingTableStore
     constructor(
         private val settingsDataStore: SettingsDataStore,
         private val proxyExitRepository: ProxyExitRepository,
-    ) {
+    ) : RoutingSnapshotSource {
         private val mutableSnapshot = MutableStateFlow(RoutingSnapshot.DISABLED)
 
         /** UI 观察入口 (规则/出口变化后可重新 [refresh] 推送)。 */
@@ -84,7 +84,7 @@ class RoutingTableStore
         private var current: RoutingSnapshot = RoutingSnapshot.DISABLED
 
         /** 数据面无锁读入口 (每次新建连接调一次)。 */
-        fun current(): RoutingSnapshot = current
+        override fun current(): RoutingSnapshot = current
 
         /** 从 DataStore + Room 重新解析。连接前/规则变更后调用。 */
         suspend fun refresh(): RoutingSnapshot {

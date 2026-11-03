@@ -445,4 +445,5 @@
     <string name="multi_exit_issue_duplicate">重复目标, 保留首行</string>
     <string name="multi_exit_issue_default_route">请改用 default -&gt; &lt;出口&gt;</string>
     <string name="multi_exit_issue_too_many">规则过多</string>
+    <string name="multi_exit_unsupported_domain_split">域名分流模式下, 未命中名单的域名不进隧道, 规则暂不生效 (隧道提升未实现)。请改用远端解析模式。</string>
 </resources>

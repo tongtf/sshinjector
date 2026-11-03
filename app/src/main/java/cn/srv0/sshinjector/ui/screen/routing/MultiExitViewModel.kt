@@ -7,10 +7,10 @@ import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.usecase.ProxyExitRepository
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
+import cn.srv0.sshinjector.domain.usecase.VpnController
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_DOMAIN_SPLIT
 import cn.srv0.sshinjector.domain.vpn.DNS_MODE_SYSTEM
 import cn.srv0.sshinjector.domain.vpn.DNS_MODE_WHITELIST
-import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
-import cn.srv0.sshinjector.domain.vpn.dnsTransportFor
 import cn.srv0.sshinjector.domain.vpn.exit.ProxyExit
 import cn.srv0.sshinjector.domain.vpn.routing.RoutingTableStore
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -43,6 +43,7 @@ data class MultiExitUiState(
     enum class UnsupportedReason {
         SYSTEM_DNS,
         EMPTY_WHITELIST,
+        DOMAIN_SPLIT,
     }
 }
 
@@ -60,6 +61,7 @@ class MultiExitViewModel
         private val proxyExitRepository: ProxyExitRepository,
         private val serverRepository: ServerRepository,
         private val routingTableStore: RoutingTableStore,
+        private val vpnController: VpnController,
         whitelistDao: WhitelistDao,
     ) : ViewModel() {
         private val mutableState = MutableStateFlow(MultiExitUiState())
@@ -93,12 +95,14 @@ class MultiExitViewModel
             data: Data,
         ): MultiExitUiState {
             rulesText = config.rules
-            val transport = dnsTransportFor(config.dnsMode, data.whitelistPackages)
             val reason =
                 when {
                     config.dnsMode == DNS_MODE_SYSTEM -> MultiExitUiState.UnsupportedReason.SYSTEM_DNS
                     config.dnsMode == DNS_MODE_WHITELIST && data.whitelistPackages.isEmpty() ->
                         MultiExitUiState.UnsupportedReason.EMPTY_WHITELIST
+                    // 域名分流: 未命中名单的域名根本不进 TUN, 而"域名规则把目标提升进隧道" (D-5)
+                    // 还没实现 —— 该模式下规则实际一条都生效不了, 不能让 UI 显示"可用"。
+                    config.dnsMode == DNS_MODE_DOMAIN_SPLIT -> MultiExitUiState.UnsupportedReason.DOMAIN_SPLIT
                     else -> null
                 }
             val names = data.servers.associateBy { it.id }
@@ -106,7 +110,7 @@ class MultiExitViewModel
                 loading = false,
                 enabled = config.enabled,
                 failoverEnabled = config.failoverEnabled,
-                supported = transport != DnsInterceptor.DnsTransport.SYSTEM,
+                supported = reason == null,
                 unsupportedReason = reason,
                 exits =
                     data.exits.map { exit ->
@@ -160,9 +164,18 @@ class MultiExitViewModel
             id: Long,
             enabled: Boolean,
         ) {
+            val name =
+                mutableState.value.exits
+                    .firstOrNull { it.exit.id == id }
+                    ?.exit
+                    ?.name
             viewModelScope.launch {
                 proxyExitRepository.setEnabled(id, enabled)
                 routingTableStore.refresh()
+                // 禁用: 新连接立即不再派发 (快照已重算); 已建立的连接保留, 空闲后回收资源。
+                // 启用: 本次会话不自动拉起 (下次连接生效) —— 中途新建 SSH 池会让 UI 卡住且
+                // 与 connect/disconnect 共享状态, 收益不值这个风险。
+                if (!enabled && name != null) vpnController.onExitDisabled(name)
             }
         }
 

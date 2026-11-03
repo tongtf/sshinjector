@@ -5,7 +5,7 @@ import cn.srv0.sshinjector.domain.usecase.VpnController
 import cn.srv0.sshinjector.domain.vpn.exit.ExitHealth
 import cn.srv0.sshinjector.domain.vpn.exit.ExitId
 import cn.srv0.sshinjector.domain.vpn.routing.RouteTarget
-import cn.srv0.sshinjector.domain.vpn.routing.RoutingTableStore
+import cn.srv0.sshinjector.domain.vpn.routing.RoutingSnapshotSource
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelPlugin
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
@@ -46,7 +46,7 @@ class TcpStateMachine(
     // 生产由 PacketProcessor 显式传入单例。
     private val appUidResolver: AppUidResolver = AppUidResolver.NONE,
     // 多出口路由快照 (P2)。默认 null = 不存在这个维度: 决策路径与改造前逐字节一致。
-    private val routingTableStore: RoutingTableStore? = null,
+    private val routingSnapshotSource: RoutingSnapshotSource? = null,
     // uid → 包名 (规则按包名写, uid 只是设备事实)。默认 null = 应用规则不参与匹配。
     private val appIdentity: AppIdentity? = null,
 ) {
@@ -597,9 +597,25 @@ class TcpStateMachine(
                     return@launch
                 }
 
-                // 多出口: 先按路由快照选出口 (关闭/未命中 → null = 主出口, 与改造前完全一致)。
+                // 多出口: 先按路由快照选出口 (关闭/未命中 → 主出口, 与改造前完全一致)。
                 // **必须在 bypass 之后**: 直连连接不该为 uid 等 50ms。
-                val plugin = selectExit(conn) ?: tunnelManager.getActiveOrFallback()
+                val choice = selectExit(conn)
+                if (choice == ExitChoice.Reject) {
+                    // failover 关闭 + 命中的出口不可用: 按用户设置直接断开 (客户端自行重试)
+                    VpnController.appLogThrottled(
+                        "出口不可用 · 已按设置直接断开 (failover 关闭) ${conn.dstIp.hostAddress}:${conn.dstPort}",
+                        level = LogLevel.WARNING,
+                        throttleKey = "出口不可用",
+                    )
+                    closeTcpConnection(conn.key, conn, graceful = false)
+                    return@launch
+                }
+                val plugin =
+                    if (choice is ExitChoice.Selected) {
+                        choice.plugin
+                    } else {
+                        tunnelManager.getActiveOrFallback()
+                    }
                 if (plugin == null) {
                     // 插件由工厂按出口创建, 不再有"未连接实例"兜底; 正常只在隧道未就绪时出现
                     Log.e(TAG, "No active tunnel plugin for conn ${conn.id} (tunnel not ready?)")
@@ -887,9 +903,9 @@ class TcpStateMachine(
      * - 出口未就绪 (`Starting`/`Degraded`/`Failed`) 视为不可用 → 回主出口 (P2 的故障回退基线;
      *   `failoverEnabled=false` 时的 RST 语义留待 P2-3 重试/健康接线一并实现)。
      */
-    private suspend fun selectExit(conn: TcpConnection): TunnelPlugin? {
-        val routing = routingTableStore?.current() ?: return null
-        if (!routing.enabled || routing.table.isEmpty) return null
+    private suspend fun selectExit(conn: TcpConnection): ExitChoice {
+        val routing = routingSnapshotSource?.current()
+        if (routing == null || !routing.enabled || routing.table.isEmpty) return ExitChoice.Primary
 
         // 没有生效的 app 规则就不等 uid: 50ms 只该付给"能命中应用规则"的连接
         val uid =
@@ -909,13 +925,30 @@ class TcpStateMachine(
                 ip = ip,
                 port = conn.dstPort,
             )
-        val exitId = routing.table.select(target) ?: return null
-        if (exitId == ExitId.DEFAULT) return null
+        val exitId = routing.table.select(target) ?: return ExitChoice.Primary
+        if (exitId == ExitId.DEFAULT) return ExitChoice.Primary
 
-        val active = tunnelManager.exit(exitId) ?: return null
-        if (active.health != ExitHealth.Ready || !active.plugin.isHealthy) return null
+        val active = tunnelManager.exit(exitId)
+        if (active == null || active.health != ExitHealth.Ready || !active.plugin.isHealthy) {
+            // 命中了一个不可用的出口: failover 开 → 回主出口 (连接仍然能用);
+            // 关 → 直接断开, 让客户端重试 (设计 §9.5; 悄悄换出口会让用户以为分流生效了)
+            return if (routing.failoverEnabled) ExitChoice.Primary else ExitChoice.Reject
+        }
         conn.exitId = exitId
-        return active.plugin
+        return ExitChoice.Selected(active.plugin)
+    }
+
+    /** 出口选择结果 (三态: 明确出口 / 回主出口 / 按设置拒绝)。 */
+    private sealed interface ExitChoice {
+        data class Selected(
+            val plugin: TunnelPlugin,
+        ) : ExitChoice
+
+        /** 回主出口 (功能关闭 / 未命中 / 出口不可用且允许 failover)。 */
+        data object Primary : ExitChoice
+
+        /** `failoverEnabled=false` 且命中的出口不可用 → 直接断开。 */
+        data object Reject : ExitChoice
     }
 
     /**

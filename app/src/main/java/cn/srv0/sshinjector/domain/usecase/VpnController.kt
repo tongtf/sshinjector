@@ -28,6 +28,7 @@ import cn.srv0.sshinjector.domain.vpn.TunWriter
 import cn.srv0.sshinjector.domain.vpn.VpnNetwork
 import cn.srv0.sshinjector.domain.vpn.dnsTransportFor
 import cn.srv0.sshinjector.domain.vpn.exit.ExitId
+import cn.srv0.sshinjector.domain.vpn.exit.ProxyExit
 import cn.srv0.sshinjector.domain.vpn.routing.RoutingSnapshot
 import cn.srv0.sshinjector.domain.vpn.routing.RoutingTableStore
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelConfig
@@ -39,7 +40,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -325,6 +329,10 @@ class VpnController
             private const val IPPROTO_UDP = 17
             private const val DNS_PORT = 53
             private const val SOCKET_TIMEOUT_MS = 5000
+
+            /** 禁用出口后等待连接排空的窗口 (空闲即回收 SSH 池 + 本地监听)。 */
+            private const val EXIT_RECLAIM_TIMEOUT_MS = 120_000L
+            private const val EXIT_RECLAIM_POLL_MS = 2_000L
             private const val CONNECTION_CLEANUP_INTERVAL_MS = 60000L
             private const val STALE_CONNECTION_TIMEOUT_MS = 300000L
             private const val STATS_FLUSH_INTERVAL_MS = 100L
@@ -619,35 +627,74 @@ class VpnController
          *   不能让一个坏出口把整个会话拖死。
          */
         private suspend fun startAdditionalExits(snapshot: RoutingSnapshot) {
-            for (exit in snapshot.exits) {
-                val server =
-                    try {
-                        serverRepository.getServerById(exit.serverId)
-                    } catch (e: Exception) {
-                        addLog("出口 ${exit.name} 跳过 · 读取服务器失败 (${e.message})", LogLevel.WARNING)
-                        null
+            if (snapshot.exits.isEmpty()) return
+            // **并行启动**: 每个出口都是一次完整的 SSH 建池 (可达数秒), 串行会把
+            // `connect()` 拉长到 N×数秒 —— 用户在这段时间里看到的就是"点连接没反应"。
+            coroutineScope {
+                snapshot.exits.map { exit -> async { startAdditionalExit(exit) } }.awaitAll()
+            }
+        }
+
+        private suspend fun startAdditionalExit(exit: ProxyExit) {
+            val server =
+                try {
+                    serverRepository.getServerById(exit.serverId)
+                } catch (e: Exception) {
+                    addLog("出口 ${exit.name} 跳过 · 读取服务器失败 (${e.message})", LogLevel.WARNING)
+                    null
+                }
+            if (server == null) {
+                addLog("出口 ${exit.name} 跳过 · 服务器不存在 (id=${exit.serverId})", LogLevel.WARNING)
+                return
+            }
+            // 本地 SOCKS 端口必须 ephemeral: 每个出口一个监听, 都绑配置里的 socksPort 会互相冲突
+            val config = TunnelConfig.forSocks5(server).copy(socksPort = 0)
+            val startedAt = System.currentTimeMillis()
+            val result =
+                tunnelManager.startExit(
+                    id = exit.name,
+                    protocolId = "socks5",
+                    label = exit.name,
+                    serverHost = server.host,
+                    config = config,
+                )
+            if (result.isFailure) {
+                addLog(
+                    "出口 ${exit.name} 启动失败 · ${result.exceptionOrNull()?.message}",
+                    LogLevel.WARNING,
+                )
+            } else {
+                addLog(
+                    "出口 ${exit.name} 已就绪 (${server.host}) · 建连耗时 ${System.currentTimeMillis() - startedAt}ms",
+                    LogLevel.INFO,
+                )
+            }
+        }
+
+        /**
+         * 会话中途**禁用**某个附加出口 (UI 开关)。
+         *
+         * 两条纪律:
+         * - 已经建立的连接不受影响 (设计 I-1: 出口状态只影响新连接), 所以**有活跃连接时不能立刻
+         *   `stopExit`** —— 那会把正在下载的连接全部 RST;
+         * - 空闲后回收资源 (SSH 会话池 3 条 + 本地监听), 否则"禁用"只是把规则停掉而资源一直占着。
+         *
+         * 最多等 [EXIT_RECLAIM_TIMEOUT_MS]: 超时只记 INFO 留给下次断开, 不在会话中途强杀。
+         */
+        fun onExitDisabled(exitId: String) {
+            if (!isRunning) return
+            launch {
+                val deadline = System.currentTimeMillis() + EXIT_RECLAIM_TIMEOUT_MS
+                while (System.currentTimeMillis() < deadline) {
+                    val exit = tunnelManager.exit(exitId) ?: return@launch
+                    if (exit.plugin.activeConnections == 0) {
+                        tunnelManager.stopExit(exitId)
+                        addLog("出口 $exitId 已停止 (规则在下次连接生效)", LogLevel.INFO)
+                        return@launch
                     }
-                if (server == null) {
-                    addLog("出口 ${exit.name} 跳过 · 服务器不存在 (id=${exit.serverId})", LogLevel.WARNING)
-                    continue
+                    delay(EXIT_RECLAIM_POLL_MS)
                 }
-                val config = TunnelConfig.forSocks5(server).copy(socksPort = 0)
-                val result =
-                    tunnelManager.startExit(
-                        id = exit.name,
-                        protocolId = "socks5",
-                        label = exit.name,
-                        serverHost = server.host,
-                        config = config,
-                    )
-                if (result.isFailure) {
-                    addLog(
-                        "出口 ${exit.name} 启动失败 · ${result.exceptionOrNull()?.message}",
-                        LogLevel.WARNING,
-                    )
-                } else {
-                    addLog("出口 ${exit.name} 已就绪 (${server.host})", LogLevel.INFO)
-                }
+                addLog("出口 $exitId 仍有活跃连接 · 保留到断开 (规则已停止派发)", LogLevel.INFO)
             }
         }
 

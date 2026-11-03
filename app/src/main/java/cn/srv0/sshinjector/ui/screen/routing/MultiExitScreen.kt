@@ -242,6 +242,8 @@ private fun UnsupportedBanner(reason: MultiExitUiState.UnsupportedReason) {
                 stringResource(R.string.multi_exit_unsupported_system)
             MultiExitUiState.UnsupportedReason.EMPTY_WHITELIST ->
                 stringResource(R.string.multi_exit_unsupported_whitelist)
+            MultiExitUiState.UnsupportedReason.DOMAIN_SPLIT ->
+                stringResource(R.string.multi_exit_unsupported_domain_split)
         }
     Card(
         modifier =

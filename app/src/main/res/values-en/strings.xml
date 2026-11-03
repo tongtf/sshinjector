@@ -445,4 +445,5 @@
     <string name="multi_exit_issue_duplicate">Duplicate target; the first rule is kept</string>
     <string name="multi_exit_issue_default_route">Use default -&gt; &lt;exit&gt; instead</string>
     <string name="multi_exit_issue_too_many">Too many rules</string>
+    <string name="multi_exit_unsupported_domain_split">In split-DNS mode, domains not in the list bypass the tunnel, so rules have no effect yet (tunnel promotion is not implemented). Use remote DNS mode instead.</string>
 </resources>
