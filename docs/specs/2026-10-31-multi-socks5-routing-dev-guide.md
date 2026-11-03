@@ -509,9 +509,17 @@ class ConnectionBudgetHolder @Inject constructor() {
 | 握手期重试绕过 `failoverEnabled=false` | 关闭时**不重试**, 直接 RST (与 UI 文案一致) |
 | D-5 在出口未就绪时也提升域名 → 本应直连的域名绕进主出口 | 提升要求目标出口 `Ready` 且 `isHealthy`; 指向 `default` 的规则仍直接提升 |
 | IP/CIDR 规则在 REMOTE 假 IP 下不生效 (设计 §6.4 表格写错) | 设计表已改为"只对字面量 IP"; 规则页加提示文案 |
+| 全数字目标 (`1.2.3.4.5`) 被当作域名规则接受 | `isValidDomain` 拒绝全数字标签 (多打一个点的笔误) |
+| `RoutingTableStore.refresh` 两次写非原子 / 并发 refresh 交错 | 加 `Mutex` 串行化 |
+| 出口列表页在主线程按"出口×规则行"算引用数 | 组合流 `flowOn(Dispatchers.Default)` |
 
-**仍未做**
+**仍未做 (已评估, 低风险)**
 
 1. **`Failed` 终态** (按决策不做)。
 2. **每出口 ↑↓ 流量计数** (§12.1 要求): 需要 `Socks5ProxyServer` 暴露会话累计字节; 当前快照只有连接数。
-3. **S17–S30 真机**: 本机无 adb, 全部未验 —— 这是合并前的唯一门禁。
+3. **`ExitHealth.Starting` 不可观测** + `ActiveExit.connTotal/failTotal/degradeTotal/lastError` 是保留字段:
+   只有在"connect 之前就把出口登记进注册表"的重构里才有意义 (顺带能覆盖"启动中途断开"的池回收);
+   当前中途取消靠 `sessionGeneration` 只覆盖"启动完成后"。
+4. **`startExit` 的幂等只有 `containsKey`**: 注册发生在 connect 之后, 并发对同一 id 调两次会起两个池
+   (现有调用路径不会触发, 属 API 层防御)。
+5. **S17–S30 真机**: 本机无 adb, 全部未验 —— 这是合并前的唯一门禁。

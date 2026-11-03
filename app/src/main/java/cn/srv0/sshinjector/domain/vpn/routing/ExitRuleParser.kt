@@ -334,6 +334,9 @@ object ExitRuleParser {
         if (domain.isEmpty() || domain.length > 253) return false
         val labels = domain.split('.')
         if (labels.size < 2) return false
+        // 全数字标签 (如 `1.2.3.4.5`, 用户多点了一个点) 不是合法域名: 放行只会得到一条
+        // 永不命中的规则 —— 典型的"配了没反应"
+        if (labels.all { label -> label.all { it.isDigit() } }) return false
         return labels.all { DOMAIN_LABEL.matches(it) }
     }
 

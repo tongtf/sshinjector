@@ -15,11 +15,13 @@ import cn.srv0.sshinjector.domain.vpn.exit.ProxyExit
 import cn.srv0.sshinjector.domain.vpn.routing.ExitRuleText
 import cn.srv0.sshinjector.domain.vpn.routing.RoutingTableStore
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -88,7 +90,10 @@ class MultiExitViewModel
                 ) { exits, servers, whitelist -> Data(exits, servers, whitelist.map { it.packageName }) }
 
             viewModelScope.launch {
-                combine(config, data) { c, d -> buildState(c, d) }.collect { mutableState.value = it }
+                combine(config, data) { c, d -> buildState(c, d) }
+                    // 每次开关/规则变化都要按出口数 × 规则行数算引用数: 放主线程会在长规则列表下卡 UI
+                    .flowOn(Dispatchers.Default)
+                    .collect { mutableState.value = it }
             }
         }
 

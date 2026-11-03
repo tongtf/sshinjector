@@ -275,6 +275,15 @@ class RoutingTableTest {
     }
 
     @Test
+    fun `an all numeric target is not accepted as a domain`() {
+        // 用户多打一个点 (1.2.3.4.5) 时旧实现会当成域名规则, 永不命中
+        val parsed = ExitRuleParser.parse("1.2.3.4.5 -> hk")
+
+        assertTrue(parsed.rules.isEmpty())
+        assertTrue(parsed.issues.any { it.issue == RuleIssue.INVALID_TARGET })
+    }
+
+    @Test
     fun `a hostname in a cidr rule is rejected without resolving dns`() {
         // 旧实现把整段交给 CidrRoute.parse → InetAddress.getByName 会**真的解析 example.com**,
         // 于是"用户笔误的一行"变成解析器里的秒级 DNS 阻塞。现在必须是纯语法拒绝。

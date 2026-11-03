@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -83,20 +85,24 @@ class RoutingTableStore
         @Volatile
         private var current: RoutingSnapshot = RoutingSnapshot.DISABLED
 
+        /** 并发 refresh (UI 开关 + connect) 串行化: 两次写 (`current` / StateFlow) 必须成对完成。 */
+        private val refreshMutex = Mutex()
+
         /** 数据面无锁读入口 (每次新建连接调一次)。 */
         override fun current(): RoutingSnapshot = current
 
         /** 从 DataStore + Room 重新解析。连接前/规则变更后调用。 */
-        suspend fun refresh(): RoutingSnapshot {
-            val enabled = settingsDataStore.multiExitEnabled.first()
-            val failover = settingsDataStore.multiExitFailoverEnabled.first()
-            val rules = settingsDataStore.multiExitRules.first()
-            val exits = proxyExitRepository.getEnabled()
-            val snapshot = RoutingSnapshot.build(enabled, failover, rules, exits)
-            current = snapshot
-            mutableSnapshot.value = snapshot
-            return snapshot
-        }
+        suspend fun refresh(): RoutingSnapshot =
+            refreshMutex.withLock {
+                val enabled = settingsDataStore.multiExitEnabled.first()
+                val failover = settingsDataStore.multiExitFailoverEnabled.first()
+                val rules = settingsDataStore.multiExitRules.first()
+                val exits = proxyExitRepository.getEnabled()
+                val snapshot = RoutingSnapshot.build(enabled, failover, rules, exits)
+                current = snapshot
+                mutableSnapshot.value = snapshot
+                snapshot
+            }
 
         /** 断开/回滚到关闭态 (之后所有连接走 default, 与改造前一致)。 */
         fun reset() {
