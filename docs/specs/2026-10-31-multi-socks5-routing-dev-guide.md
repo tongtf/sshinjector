@@ -446,10 +446,35 @@ class ConnectionBudgetHolder @Inject constructor() {
 | 新增单测 | `RoutingTableTest`(22) / `RoutingSnapshotTest`(4) / `RoutingProbeTest`(9) / `AppIdentityTest`(5) / `ProxyExitRepositoryTest`(6) / `ProxyExitSchemaTest`(2) | 解析器与匹配的关键不变量都锁在纯 JVM 测试里 (无 Robolectric) |
 
 ### P2
-- [ ] AppUidResolver 句柄
-- [ ] forwardSynToTunnel 接线 (bypass 先行)
-- [ ] ForwardOutcome + 重试
-- [ ] 附加出口生命周期 + 探活
-- [ ] DNS 谓词
-- [ ] 观测面
-- [ ] S17–S26 真机
+- [x] AppUidResolver 句柄 — `7c1234d`
+- [x] forwardSynToTunnel 接线 (bypass 先行) — `7c1234d`
+- [ ] ForwardOutcome + 重试 (**未做**)
+- [x] 附加出口生命周期 (**启动/停用**; **探活/降级未做**) — `7c1234d`
+- [ ] DNS 谓词 (D-5 隧道提升, **未做**)
+- [x] 观测面 (每出口 连接数 + 健康, 关闭时空串) — `7c1234d`
+- [ ] S17–S26 真机 (**未做**, 本机无 adb)
+
+#### P2 实施结果与偏差 (2026-11-03)
+
+**已接线 (功能可用, 关闭时零行为变化)**
+
+| 项 | 实际落地 | 说明 |
+|---|---|---|
+| uid 句柄 | `AppUidResolver.request(...): UidRequest` (`await(50)` + `onComplete`), `lookup` 变兼容层 | 一次查询两个消费者: 路由等 50ms, 域名统计用完成回调。**句柄一定完成** (无能力/拒绝/队列满/超时都给 `NO_UID`), 这是 `await` 有界的前提 |
+| 路由接线 | `TcpStateMachine.selectExit(conn)`: 关闭/空表 **立刻 null** → 主出口; 否则 uid → 包名 → 域名 → `RoutingTable.select` | 位置在 **bypass 判定之后** (直连不为 uid 等 50ms), 在 SYN-ACK 之前完成 (客户端只看到 SYN 重传) |
+| 出口可用性 | `exitId != default` 时必须 `tunnelManager.exit(id)` 存在、`health == Ready`、`localSocksPort > 0` | 任一不满足 → **回主出口** (失败不阻断连接); 这是 P2 阶段的故障回退基线 |
+| 生命周期 | `VpnController.connect`: `routingTableStore.refresh()` → `startAdditionalExits(snapshot)` | 附加出口 `TunnelConfig.forSocks5(server).copy(socksPort = 0)` —— **必须 0 (ephemeral)**, 否则第二个出口与主出口抢 1080 必 bind 失败 |
+| 快照 | `exitDiagnostics()`: `主出口(host): N 连 · Ready · 出口 hk(host): M 连 · Degraded` | `enabled=false` 返回空串 → `render()` 不追加 (关闭态逐字节不变), 单测 `DataPlaneSnapshotTest` 两条用例锁住 |
+
+**未做 (按设计文档原样留给后续, 不是"忘了")**
+
+1. **`ForwardOutcome` + 建连前快速失败重试** (§9.5 的 8 个条件): 现在附加出口建连失败就是该连接失败 (客户端重试)。
+   `failoverEnabled=false` 的 RST 语义也一并未实现 —— 当前一律回主出口。
+2. **出口探活 / 降级状态机** (§9.1–§9.3): `ExitHealth` 字段已在 `ActiveExit` 上, 但**没有任何东西把它置成
+   `Degraded`/`Failed`** —— 于是 `selectExit` 的 `health == Ready` 判定目前恒真。附加出口的 SSH 池失败
+   (`JschSshClient` 的池健康检测) 不会自动降级并回退。
+3. **D-5 域名规则隧道提升** (§6.5): `DOMAIN_SPLIT` 下未命中名单的域名仍走直连 —— 域名规则在该模式不生效。
+   `RoutingTable.hasDomainRule` 已实现并单测, 但 `DnsInterceptor` 尚未调用它。
+4. **应用规则在"uid 拿不到"时的日志/计数** (`uidTimeoutTotal` 等): 目前超时静默走 default, 只能从
+   `出口 …` 快照没有命中看出。
+5. **S17–S26 真机**: 本机无 adb, 全部未验。
