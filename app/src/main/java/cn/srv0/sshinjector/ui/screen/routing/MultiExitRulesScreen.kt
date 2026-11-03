@@ -216,6 +216,15 @@ private fun AppPickerDialog(
     var query by remember { mutableStateOf("") }
     var exitId by remember { mutableStateOf(exits.firstOrNull() ?: "default") }
     var expanded by remember { mutableStateOf(false) }
+    // 共享 uid: 多个包共用一个 uid 时 getNameForUid 只返回其中一个包名, 规则会命中整组
+    val sharedUids =
+        remember(apps) {
+            apps
+                .filter { it.uid >= 0 }
+                .groupBy { it.uid }
+                .filterValues { it.size > 1 }
+                .keys
+        }
     val filtered =
         remember(apps, query) {
             if (query.isBlank()) {
@@ -261,6 +270,13 @@ private fun AppPickerDialog(
                     singleLine = true,
                     label = { Text(stringResource(R.string.multi_exit_app_search)) },
                 )
+                if (sharedUids.isNotEmpty()) {
+                    Text(
+                        stringResource(R.string.multi_exit_shared_uid_desc),
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Column(
                     modifier =
                         Modifier
@@ -277,7 +293,17 @@ private fun AppPickerDialog(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(app.name, fontSize = 14.sp)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(app.name, fontSize = 14.sp)
+                                    if (app.uid in sharedUids) {
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            stringResource(R.string.multi_exit_shared_uid),
+                                            fontSize = 10.sp,
+                                            color = MaterialTheme.colorScheme.tertiary,
+                                        )
+                                    }
+                                }
                                 Text(
                                     app.packageName,
                                     fontSize = 11.sp,

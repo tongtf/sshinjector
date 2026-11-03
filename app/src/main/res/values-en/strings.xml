@@ -446,4 +446,12 @@
     <string name="multi_exit_issue_default_route">Use default -&gt; &lt;exit&gt; instead</string>
     <string name="multi_exit_issue_too_many">Too many rules</string>
     <string name="multi_exit_unsupported_domain_split">Split-DNS mode: only domain rules apply (IP/app rules are skipped). Domains that match a rule are promoted into the tunnel.</string>
+    <string name="multi_exit_rename">Rename</string>
+    <string name="multi_exit_rename_failed">Rename failed</string>
+    <string name="multi_exit_rename_rules">Also update the rules that reference it</string>
+    <string name="multi_exit_delete_rules">Also delete the %1$d rules that reference it</string>
+    <string name="multi_exit_max_exits">At most 4 additional exits</string>
+    <string name="multi_exit_reconnect_required">Saved · additional exits start on the next connection</string>
+    <string name="multi_exit_shared_uid">Shared uid</string>
+    <string name="multi_exit_shared_uid_desc">Several apps share this uid; the rule affects all of them</string>
 </resources>

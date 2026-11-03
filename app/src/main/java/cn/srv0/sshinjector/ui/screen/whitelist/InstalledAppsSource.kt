@@ -46,6 +46,7 @@ class InstalledAppsSource
                                 packageName = info.packageName,
                                 name = pm.getApplicationLabel(info).toString(),
                                 isSystem = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0,
+                                uid = info.uid,
                             )
                         }.sortedBy { it.name.lowercase() }
                 }

@@ -446,4 +446,12 @@
     <string name="multi_exit_issue_default_route">Используйте default -&gt; &lt;выход&gt;</string>
     <string name="multi_exit_issue_too_many">Слишком много правил</string>
     <string name="multi_exit_unsupported_domain_split">Режим разделения DNS: действуют только правила для доменов (правила IP/приложений игнорируются). Домены, попавшие под правило, направляются в туннель.</string>
+    <string name="multi_exit_rename">Переименовать</string>
+    <string name="multi_exit_rename_failed">Не удалось переименовать</string>
+    <string name="multi_exit_rename_rules">Обновить правила, которые на него ссылаются</string>
+    <string name="multi_exit_delete_rules">Удалить %1$d правил(а), которые на него ссылаются</string>
+    <string name="multi_exit_max_exits">Не более 4 дополнительных выходов</string>
+    <string name="multi_exit_reconnect_required">Сохранено · дополнительные выходы запустятся при следующем подключении</string>
+    <string name="multi_exit_shared_uid">Общий uid</string>
+    <string name="multi_exit_shared_uid_desc">Несколько приложений используют один uid; правило затронет все</string>
 </resources>

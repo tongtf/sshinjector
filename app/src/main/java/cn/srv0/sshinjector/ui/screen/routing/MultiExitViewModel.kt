@@ -12,12 +12,14 @@ import cn.srv0.sshinjector.domain.vpn.DNS_MODE_DOMAIN_SPLIT
 import cn.srv0.sshinjector.domain.vpn.DNS_MODE_SYSTEM
 import cn.srv0.sshinjector.domain.vpn.DNS_MODE_WHITELIST
 import cn.srv0.sshinjector.domain.vpn.exit.ProxyExit
+import cn.srv0.sshinjector.domain.vpn.routing.ExitRuleText
 import cn.srv0.sshinjector.domain.vpn.routing.RoutingTableStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -130,6 +132,11 @@ class MultiExitViewModel
             viewModelScope.launch {
                 settingsDataStore.setMultiExitEnabled(enabled)
                 routingTableStore.refresh()
+                // 会话中途打开: 附加出口不会当场拉起 (那会把 SSH 建池塞进 UI 操作)。
+                // 明确告知"重连后生效", 否则用户会以为规则立刻生效。
+                if (enabled && vpnController.isVpnRunning()) {
+                    mutableState.value = mutableState.value.copy(message = MSG_RECONNECT_REQUIRED)
+                }
             }
         }
 
@@ -144,6 +151,10 @@ class MultiExitViewModel
             name: String,
             serverId: Long,
         ) {
+            if (mutableState.value.exits.size >= MAX_ADDITIONAL_EXITS) {
+                mutableState.value = mutableState.value.copy(message = MSG_MAX_EXITS)
+                return
+            }
             viewModelScope.launch {
                 val result = proxyExitRepository.create(name, serverId)
                 mutableState.value = mutableState.value.copy(message = addFailureMessage(result))
@@ -151,12 +162,29 @@ class MultiExitViewModel
             }
         }
 
+        /**
+         * 改名；[updateRules] = 同时把规则里的旧名改写为新名（否则那些规则会静默失效）。
+         */
         fun renameExit(
             id: Long,
             name: String,
+            updateRules: Boolean,
         ) {
+            val from =
+                mutableState.value.exits
+                    .firstOrNull { it.exit.id == id }
+                    ?.exit
+                    ?.name
+                    ?: return
             viewModelScope.launch {
-                proxyExitRepository.rename(id, name)
+                val result = proxyExitRepository.rename(id, name)
+                if (result.isFailure) {
+                    mutableState.value = mutableState.value.copy(message = MSG_RENAME_FAILED)
+                    return@launch
+                }
+                if (updateRules && from != name) {
+                    rewriteRules { ExitRuleText.renameExit(it, from, name) }
+                }
                 routingTableStore.refresh()
             }
         }
@@ -180,11 +208,28 @@ class MultiExitViewModel
             }
         }
 
-        fun deleteExit(id: Long) {
+        /** 删除出口；[deleteRules] = 同时删掉引用它的规则行（否则那些规则会变成 unresolved）。 */
+        fun deleteExit(
+            id: Long,
+            deleteRules: Boolean,
+        ) {
+            val row = mutableState.value.exits.firstOrNull { it.exit.id == id } ?: return
             viewModelScope.launch {
                 proxyExitRepository.delete(id)
+                if (deleteRules) {
+                    rewriteRules { ExitRuleText.removeExitRules(it, row.exit.name).first }
+                }
                 routingTableStore.refresh()
+                // 该出口可能还握着 SSH 池: 新连接已不再派发, 空闲后回收 (与"禁用"同一条路径)
+                vpnController.onExitDisabled(row.exit.name)
             }
+        }
+
+        /** 规则文本的读-改-写 (只在内容真的变化时写回, 避免无谓的 DataStore 发射)。 */
+        private suspend fun rewriteRules(transform: (String) -> String) {
+            val current = settingsDataStore.multiExitRules.first()
+            val updated = transform(current)
+            if (updated != current) settingsDataStore.setMultiExitRules(updated)
         }
 
         /**
@@ -210,6 +255,15 @@ class MultiExitViewModel
         companion object {
             const val MSG_NAME_TAKEN = "NAME_TAKEN"
             const val MSG_ADD_FAILED = "ADD_FAILED"
+            const val MSG_MAX_EXITS = "MAX_EXITS"
+            const val MSG_RENAME_FAILED = "RENAME_FAILED"
+            const val MSG_RECONNECT_REQUIRED = "RECONNECT_REQUIRED"
+
+            /**
+             * 附加出口数量上限 (每个出口 = 独立 SSH 池 = 3 条会话 + 回程线程)。
+             * 主出口之外最多 4 个: 再多就是 15 条常驻 SSH 会话, 手机侧没有收益只有耗电。
+             */
+            const val MAX_ADDITIONAL_EXITS = 4
         }
 
         private data class Config(

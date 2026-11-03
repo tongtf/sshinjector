@@ -15,9 +15,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -69,9 +71,13 @@ fun MultiExitScreen(
     val snackbar = remember { SnackbarHostState() }
     var showAddDialog by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<MultiExitRow?>(null) }
+    var pendingRename by remember { mutableStateOf<MultiExitRow?>(null) }
     val nameInvalid = stringResource(R.string.multi_exit_name_invalid)
     val nameTaken = stringResource(R.string.multi_exit_name_taken)
     val addFailed = stringResource(R.string.multi_exit_add_failed)
+    val maxExits = stringResource(R.string.multi_exit_max_exits)
+    val renameFailed = stringResource(R.string.multi_exit_rename_failed)
+    val reconnectRequired = stringResource(R.string.multi_exit_reconnect_required)
 
     LaunchedEffect(state.message) {
         val message = state.message ?: return@LaunchedEffect
@@ -79,6 +85,9 @@ fun MultiExitScreen(
             when (message) {
                 MultiExitViewModel.MSG_NAME_TAKEN -> nameTaken
                 MultiExitViewModel.MSG_ADD_FAILED -> addFailed
+                MultiExitViewModel.MSG_MAX_EXITS -> maxExits
+                MultiExitViewModel.MSG_RENAME_FAILED -> renameFailed
+                MultiExitViewModel.MSG_RECONNECT_REQUIRED -> reconnectRequired
                 else -> message
             }
         snackbar.showSnackbar(text)
@@ -140,15 +149,17 @@ fun MultiExitScreen(
                     ExitRow(
                         row = row,
                         onToggle = { viewModel.setExitEnabled(row.exit.id, it) },
+                        onRename = { pendingRename = row },
                         onDelete = { pendingDelete = row },
                     )
                 }
             }
+            val atCap = state.exits.size >= MultiExitViewModel.MAX_ADDITIONAL_EXITS
             Row(
                 modifier =
                     Modifier
                         .fillMaxWidth()
-                        .clickable { showAddDialog = true }
+                        .then(if (atCap) Modifier else Modifier.clickable { showAddDialog = true })
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -159,9 +170,14 @@ fun MultiExitScreen(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    stringResource(R.string.multi_exit_add),
+                    if (atCap) {
+                        stringResource(R.string.multi_exit_max_exits)
+                    } else {
+                        stringResource(R.string.multi_exit_add)
+                    },
                     fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.primary,
+                    color =
+                        if (atCap) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
                 )
             }
 
@@ -204,23 +220,47 @@ fun MultiExitScreen(
         )
     }
 
+    pendingRename?.let { row ->
+        RenameExitDialog(
+            current = row.exit.name,
+            nameInvalid = nameInvalid,
+            onDismiss = { pendingRename = null },
+            onConfirm = { newName, updateRules ->
+                viewModel.renameExit(row.exit.id, newName, updateRules)
+                pendingRename = null
+            },
+        )
+    }
+
     pendingDelete?.let { row ->
+        var deleteRules by remember(row.exit.id) { mutableStateOf(row.referencedRules > 0) }
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
             title = { Text(stringResource(R.string.multi_exit_delete_title, row.exit.name)) },
             text = {
-                Text(
+                Column {
+                    Text(
+                        if (row.referencedRules > 0) {
+                            stringResource(R.string.multi_exit_delete_referenced, row.referencedRules)
+                        } else {
+                            stringResource(R.string.multi_exit_delete_desc)
+                        },
+                    )
                     if (row.referencedRules > 0) {
-                        stringResource(R.string.multi_exit_delete_referenced, row.referencedRules)
-                    } else {
-                        stringResource(R.string.multi_exit_delete_desc)
-                    },
-                )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = deleteRules, onCheckedChange = { deleteRules = it })
+                            Text(
+                                stringResource(R.string.multi_exit_delete_rules, row.referencedRules),
+                                fontSize = 13.sp,
+                            )
+                        }
+                    }
+                }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        viewModel.deleteExit(row.exit.id)
+                        viewModel.deleteExit(row.exit.id, deleteRules)
                         pendingDelete = null
                     },
                 ) { Text(stringResource(R.string.multi_exit_delete)) }
@@ -289,6 +329,7 @@ private fun ToggleRow(
 private fun ExitRow(
     row: MultiExitRow,
     onToggle: (Boolean) -> Unit,
+    onRename: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Row(
@@ -307,6 +348,9 @@ private fun ExitRow(
             )
         }
         Switch(checked = row.exit.enabled, onCheckedChange = onToggle)
+        IconButton(onClick = onRename) {
+            Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.multi_exit_rename))
+        }
         IconButton(onClick = onDelete) {
             Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.multi_exit_delete))
         }
@@ -320,6 +364,52 @@ private fun SectionHeader(text: String) {
         fontSize = 13.sp,
         color = MaterialTheme.colorScheme.primary,
         modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp),
+    )
+}
+
+@Composable
+private fun RenameExitDialog(
+    current: String,
+    nameInvalid: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String, Boolean) -> Unit,
+) {
+    var name by remember { mutableStateOf(current) }
+    var updateRules by remember { mutableStateOf(true) }
+    val nameOk = ExitId.isValid(name) && name != current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.multi_exit_rename)) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text(stringResource(R.string.multi_exit_exit_name)) },
+                    singleLine = true,
+                    isError = name.isNotEmpty() && !nameOk,
+                    supportingText = {
+                        if (name.isNotEmpty() && !nameOk) Text(nameInvalid)
+                    },
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = updateRules, onCheckedChange = { updateRules = it })
+                    Text(
+                        stringResource(R.string.multi_exit_rename_rules),
+                        fontSize = 13.sp,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(name, updateRules) }, enabled = nameOk) {
+                Text(stringResource(R.string.multi_exit_save))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.multi_exit_cancel)) }
+        },
     )
 }
 

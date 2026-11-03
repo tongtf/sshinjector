@@ -446,4 +446,12 @@
     <string name="multi_exit_issue_default_route">请改用 default -&gt; &lt;出口&gt;</string>
     <string name="multi_exit_issue_too_many">规则过多</string>
     <string name="multi_exit_unsupported_domain_split">域名分流模式: 只有域名规则生效 (IP / 应用规则不参与); 命中规则的域名会被提升进隧道。</string>
+    <string name="multi_exit_rename">改名</string>
+    <string name="multi_exit_rename_failed">改名失败</string>
+    <string name="multi_exit_rename_rules">同时更新引用它的规则</string>
+    <string name="multi_exit_delete_rules">同时删除引用它的 %1$d 条规则</string>
+    <string name="multi_exit_max_exits">最多 4 个附加出口</string>
+    <string name="multi_exit_reconnect_required">已保存 · 附加出口在下次连接时启动</string>
+    <string name="multi_exit_shared_uid">共享 uid</string>
+    <string name="multi_exit_shared_uid_desc">多个应用共用同一个 uid, 规则会影响同组全部应用</string>
 </resources>
