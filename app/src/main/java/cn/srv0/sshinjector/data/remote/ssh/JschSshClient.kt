@@ -1421,6 +1421,14 @@ class JschSshClient
         fun hasUnhealthySession(): Boolean = pool.any { !it.healthy }
 
         /**
+         * 池里是否还有一条**可用**会话 (健康且 socket 仍连着)。
+         *
+         * 多出口用它回答"这个出口还能不能接新连接" —— 不做探活/重连, 只看当前状态;
+         * 全池阵亡时返回 false, 调用方回退主出口而不是把连接导进死出口。
+         */
+        fun hasLiveSession(): Boolean = pool.any { it.healthy && it.session.isConnected }
+
+        /**
          * SSH 会话池资源快照 (周期日志用): 连接数 / 健康数 / 在途通道总数。
          *
          * 在途通道总数(= 各会话 `activeChannels` 之和)**持续不下降** = 通道泄漏 (某条关闭路径漏了

@@ -1449,10 +1449,15 @@ class VpnController
             if (!routing.enabled) return ""
             val exits = tunnelManager.exitsSnapshot()
             if (exits.isEmpty()) return ""
-            return exits.joinToString(" · ") { exit ->
-                val label = if (exit.id == ExitId.DEFAULT) "主出口" else "出口 ${exit.id}"
-                "$label(${exit.serverHost}): ${exit.plugin.activeConnections} 连 · ${exit.health}"
-            }
+            val exitText =
+                exits.joinToString(" · ") { exit ->
+                    val label = if (exit.id == ExitId.DEFAULT) "主出口" else "出口 ${exit.id}"
+                    "$label(${exit.serverHost}): ${exit.plugin.activeConnections} 连 · ${exit.health}"
+                }
+            // 引用了不存在/未启动出口的规则数是"配了没反应"的另一个直接判据 (UI 有行内提示,
+            // 但无 adb 现场只有导出的日志 —— 快照必须带上它)
+            val unresolved = routing.table.unresolvedRules.size
+            return if (unresolved == 0) exitText else "$exitText · 未解析规则 $unresolved"
         }
 
         /**

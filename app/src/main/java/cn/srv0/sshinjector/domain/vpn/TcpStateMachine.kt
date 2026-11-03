@@ -913,7 +913,7 @@ class TcpStateMachine(
         if (exitId == ExitId.DEFAULT) return null
 
         val active = tunnelManager.exit(exitId) ?: return null
-        if (active.health != ExitHealth.Ready || active.plugin.localSocksPort <= 0) return null
+        if (active.health != ExitHealth.Ready || !active.plugin.isHealthy) return null
         conn.exitId = exitId
         return active.plugin
     }

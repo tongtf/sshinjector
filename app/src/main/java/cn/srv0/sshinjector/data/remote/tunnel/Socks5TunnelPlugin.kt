@@ -34,6 +34,10 @@ class Socks5TunnelPlugin(
     override val localSocksPort: Int
         get() = socksServer?.boundPort?.value ?: 0
 
+    /** 端口还在 **且** SSH 池里还有一条活口 (池全死 = 这个出口不可用, 别再把新连接导进来)。 */
+    override val isHealthy: Boolean
+        get() = localSocksPort > 0 && client.hasLiveSession()
+
     /**
      * 隧道侧资源快照: 代理连接/流量 + SSH 会话池 + SSH IO 线程池。
      * 三段合起来回答"资源有没有在泄漏" (旧实现只有第一段, 池/线程数不可见)。
