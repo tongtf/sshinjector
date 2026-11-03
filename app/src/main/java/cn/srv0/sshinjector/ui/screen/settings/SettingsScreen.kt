@@ -71,6 +71,7 @@ fun SettingsScreen(
     onNavigateToKeyManagement: () -> Unit = {},
     onNavigateToLogs: () -> Unit = {},
     onNavigateToDomainStats: () -> Unit = {},
+    onNavigateToMultiExit: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val biometricUnlock by viewModel.biometricUnlock.collectAsState()
@@ -350,6 +351,19 @@ fun SettingsScreen(
                         )
                     },
                     onClick = onNavigateToDomainListSettings,
+                )
+
+                SettingsRow(
+                    title = stringResource(R.string.settings_multi_exit),
+                    subtitle = stringResource(R.string.settings_multi_exit_desc),
+                    trailing = {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    onClick = onNavigateToMultiExit,
                 )
             }
 

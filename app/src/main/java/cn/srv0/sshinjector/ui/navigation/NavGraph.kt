@@ -8,6 +8,8 @@ import androidx.navigation.compose.composable
 import cn.srv0.sshinjector.ui.screen.dashboard.DashboardScreen
 import cn.srv0.sshinjector.ui.screen.keymanager.KeyAddScreen
 import cn.srv0.sshinjector.ui.screen.keymanager.KeyManagerScreen
+import cn.srv0.sshinjector.ui.screen.routing.MultiExitRulesScreen
+import cn.srv0.sshinjector.ui.screen.routing.MultiExitScreen
 import cn.srv0.sshinjector.ui.screen.server.ServerEditScreen
 import cn.srv0.sshinjector.ui.screen.server.ServerListScreen
 import cn.srv0.sshinjector.ui.screen.server.ServerWizardScreen
@@ -71,7 +73,17 @@ fun AppNavGraph(
                 onNavigateToKeyManagement = { navController.navigate("keys") },
                 onNavigateToLogs = { navController.navigate("logs") },
                 onNavigateToDomainStats = { navController.navigate("domain_stats") },
+                onNavigateToMultiExit = { navController.navigate("multi_exit") },
             )
+        }
+        composable("multi_exit") {
+            MultiExitScreen(
+                onBack = { navController.popBackStack() },
+                onEditRules = { navController.navigate("multi_exit_rules") },
+            )
+        }
+        composable("multi_exit_rules") {
+            MultiExitRulesScreen(onBack = { navController.popBackStack() })
         }
         composable("domain_stats") {
             DomainStatsScreen(

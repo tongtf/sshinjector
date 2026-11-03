@@ -267,13 +267,16 @@ object ExitRuleParser {
         return TargetParse.Ok(ExitRule.Domain(exitId, suffix, port, lineNo))
     }
 
-    private fun exactRoute(ip: InetAddress): CidrRoute = CidrRoute(ip, if (ip is Inet6Address) 128 else 32)
+    internal fun exactRoute(ip: InetAddress): CidrRoute = CidrRoute(ip, if (ip is Inet6Address) 128 else 32)
+
+    /** `app:` 后面的包名是否合法 (规则编辑器与测试框共用同一判据)。 */
+    internal fun isValidPackage(name: String): Boolean = PACKAGE_REGEX.matches(name)
 
     /**
      * 切出 `name:port`。
      * @return name 与端口 (无端口时 null); null = 端口非法 (调用方报 INVALID_PORT)
      */
-    private fun splitPort(text: String): Pair<String, Int?>? {
+    internal fun splitPort(text: String): Pair<String, Int?>? {
         val idx = text.lastIndexOf(':')
         if (idx < 0) return text to null
         val port = text.substring(idx + 1).toIntOrNull()
@@ -287,7 +290,7 @@ object ExitRuleParser {
      * 只把**字面量**交给 `InetAddress.getByName`:
      * 域名走这里会触发 DNS 解析 (解析器跑在 UI/加载路径上, 卡顿 + 结果不可预测)。
      */
-    private fun parseIpLiteral(text: String): InetAddress? {
+    internal fun parseIpLiteral(text: String): InetAddress? {
         if (text.isEmpty()) return null
         val looksV4 = text.count { it == '.' } == 3 && text.all { it.isDigit() || it == '.' }
         val looksV6 = text.contains(':') && text.all { it.isDigit() || it in "abcdefABCDEF:." }
@@ -299,7 +302,7 @@ object ExitRuleParser {
         }
     }
 
-    private fun isValidDomain(domain: String): Boolean {
+    internal fun isValidDomain(domain: String): Boolean {
         if (domain.isEmpty() || domain.length > 253) return false
         val labels = domain.split('.')
         if (labels.size < 2) return false
