@@ -2,6 +2,7 @@ package cn.srv0.sshinjector.domain.vpn
 
 import android.content.Context
 import android.net.ConnectivityManager
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -85,6 +86,61 @@ class AppUidResolverTest {
         assertFalse("窗口到期必须自动恢复: 断开瞬间的 SecurityException 不能杀死功能", window.isActive())
         assertEquals(0L, window.remainingMs())
         assertTrue("恢复后再次被拒要能重新报告", window.trip("SecurityException"))
+    }
+
+    @Test
+    fun `a request always completes even without platform capability`() =
+        runBlocking {
+            val resolver = ConnectivityAppUidResolver(mock())
+
+            val uid = resolver.request(src, 41000, dst, 443).await(1_000)
+
+            assertEquals("句柄必须完成 (未命中给 NO_UID), 否则 await 的有界性不成立", AppUidResolver.NO_UID, uid)
+        }
+
+    @Test
+    fun `await returns the resolved uid once completed`() =
+        runBlocking {
+            val handle = ConnectivityAppUidResolver.PendingUidRequest()
+            handle.complete(10123)
+
+            assertEquals(10123, handle.await(1_000))
+        }
+
+    @Test
+    fun `await is bounded and yields NO_UID on timeout`() =
+        runBlocking {
+            val handle = ConnectivityAppUidResolver.PendingUidRequest()
+            val startedAt = System.currentTimeMillis()
+
+            val uid = handle.await(30)
+
+            assertEquals(AppUidResolver.NO_UID, uid)
+            val elapsed = System.currentTimeMillis() - startedAt
+            assertTrue("超时必须真的有界返回 (实际 ${elapsed}ms)", elapsed < 2_000)
+        }
+
+    @Test
+    fun `onComplete fires when the request completes later`() {
+        val handle = ConnectivityAppUidResolver.PendingUidRequest()
+        var received: Int? = null
+
+        handle.onComplete { received = it }
+        assertNull("未完成时不得回调", received)
+
+        handle.complete(10100)
+        assertEquals(10100, received)
+    }
+
+    @Test
+    fun `onComplete fires immediately when already completed`() {
+        val handle = ConnectivityAppUidResolver.PendingUidRequest()
+        handle.complete(10101)
+
+        var received: Int? = null
+        handle.onComplete { received = it }
+
+        assertEquals("先完成再注册也必须回调 (统计侧依赖这条)", 10101, received)
     }
 
     private fun contextWith(cm: ConnectivityManager): Context {

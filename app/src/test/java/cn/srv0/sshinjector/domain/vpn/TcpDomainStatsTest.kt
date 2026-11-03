@@ -192,18 +192,17 @@ class TcpDomainStatsTest {
         var dstIp: ByteArray? = null
         var dstPort: Int = -1
 
-        override fun lookup(
+        override fun request(
             srcIp: ByteArray,
             srcPort: Int,
             dstIp: ByteArray,
             dstPort: Int,
-            onResolved: (Int) -> Unit,
-        ) {
+        ): UidRequest {
             this.srcIp = srcIp
             this.srcPort = srcPort
             this.dstIp = dstIp
             this.dstPort = dstPort
-            onResolved(uid)
+            return UidRequest.completed(uid)
         }
 
         override fun diagnostics(): String = "fake"
@@ -213,20 +212,21 @@ class TcpDomainStatsTest {
     private class DeferredUidResolver(
         private val uid: Int,
     ) : AppUidResolver {
-        private var callback: ((Int) -> Unit)? = null
+        private var request: ConnectivityAppUidResolver.PendingUidRequest? = null
 
-        override fun lookup(
+        override fun request(
             srcIp: ByteArray,
             srcPort: Int,
             dstIp: ByteArray,
             dstPort: Int,
-            onResolved: (Int) -> Unit,
-        ) {
-            callback = onResolved
+        ): UidRequest {
+            val handle = ConnectivityAppUidResolver.PendingUidRequest()
+            request = handle
+            return handle
         }
 
         fun complete() {
-            callback?.invoke(uid)
+            request?.complete(uid)
         }
 
         override fun diagnostics(): String = "deferred"

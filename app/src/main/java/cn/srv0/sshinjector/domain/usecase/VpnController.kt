@@ -13,6 +13,7 @@ import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.model.VpnState
 import cn.srv0.sshinjector.domain.obs.AppMetrics
 import cn.srv0.sshinjector.domain.vpn.AdBlocker
+import cn.srv0.sshinjector.domain.vpn.AppIdentity
 import cn.srv0.sshinjector.domain.vpn.CidrRoute
 import cn.srv0.sshinjector.domain.vpn.ConnectionBudgetHolder
 import cn.srv0.sshinjector.domain.vpn.DNS_MODE_WHITELIST
@@ -27,6 +28,8 @@ import cn.srv0.sshinjector.domain.vpn.TunWriter
 import cn.srv0.sshinjector.domain.vpn.VpnNetwork
 import cn.srv0.sshinjector.domain.vpn.dnsTransportFor
 import cn.srv0.sshinjector.domain.vpn.exit.ExitId
+import cn.srv0.sshinjector.domain.vpn.routing.RoutingSnapshot
+import cn.srv0.sshinjector.domain.vpn.routing.RoutingTableStore
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelConfig
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
@@ -73,6 +76,7 @@ private val IS_DEBUG = Log.isLoggable("VpnController", Log.DEBUG)
 @Suppress("TooManyFunctions") // 编排 + TUN 读写 + DNS 投递 + 统计 + 健康; 待按 F-03 拆 StatsPublisher/DnsDelivery
 class VpnController
     @Inject
+    @Suppress("LongParameterList") // 会话装配点: 各协作者都是单例, 拆 holder 只会把参数换个地方堆
     constructor(
         private val tunnelManager: TunnelManager,
         private val packetProcessor: PacketProcessor,
@@ -82,6 +86,9 @@ class VpnController
         private val domainListManager: DomainListManager,
         private val adBlockManager: cn.srv0.sshinjector.data.local.AdBlockManager,
         private val connectionBudgetHolder: ConnectionBudgetHolder,
+        private val serverRepository: ServerRepository,
+        private val routingTableStore: RoutingTableStore,
+        private val appIdentity: AppIdentity,
         @ApplicationContext private val context: Context,
     ) : CoroutineScope by CoroutineScope(Dispatchers.IO + SupervisorJob()) {
         @Volatile private var vpnInterface: FileDescriptor? = null
@@ -466,6 +473,12 @@ class VpnController
                 }
                 addLog("隧道连接成功: socks5", LogLevel.SUCCESS)
 
+                // 多出口: 会话开始解析规则快照 (关闭时 snapshot = DISABLED, 连规则文本都不解析),
+                // 再按快照启动附加出口。启动失败只降级该出口 (规则在匹配时跳过), 绝不阻断主出口。
+                appIdentity.clear()
+                val routing = routingTableStore.refresh()
+                if (routing.enabled) startAdditionalExits(routing)
+
                 // 3. 设置 DNS 拦截器
                 updateState { it.copy(connectStage = ConnectStage.DNS) }
                 packetProcessor.setDnsInterceptor(dnsInterceptor)
@@ -597,6 +610,48 @@ class VpnController
         }
 
         /**
+         * 启动快照里的附加出口 (设计 §8.4 / §9.1)。
+         *
+         * 两条纪律:
+         * - **本地 SOCKS 端口用 0 (ephemeral)**: 每个出口一个 `Socks5ProxyServer`, 都绑配置里的
+         *   `socksPort` (默认 1080) 会互相冲突, 第二个出口必然 bind 失败;
+         * - 单出口失败只记 WARNING 并继续: 该出口的路由在匹配时因插件不存在被跳过 (回主出口),
+         *   不能让一个坏出口把整个会话拖死。
+         */
+        private suspend fun startAdditionalExits(snapshot: RoutingSnapshot) {
+            for (exit in snapshot.exits) {
+                val server =
+                    try {
+                        serverRepository.getServerById(exit.serverId)
+                    } catch (e: Exception) {
+                        addLog("出口 ${exit.name} 跳过 · 读取服务器失败 (${e.message})", LogLevel.WARNING)
+                        null
+                    }
+                if (server == null) {
+                    addLog("出口 ${exit.name} 跳过 · 服务器不存在 (id=${exit.serverId})", LogLevel.WARNING)
+                    continue
+                }
+                val config = TunnelConfig.forSocks5(server).copy(socksPort = 0)
+                val result =
+                    tunnelManager.startExit(
+                        id = exit.name,
+                        protocolId = "socks5",
+                        label = exit.name,
+                        serverHost = server.host,
+                        config = config,
+                    )
+                if (result.isFailure) {
+                    addLog(
+                        "出口 ${exit.name} 启动失败 · ${result.exceptionOrNull()?.message}",
+                        LogLevel.WARNING,
+                    )
+                } else {
+                    addLog("出口 ${exit.name} 已就绪 (${server.host})", LogLevel.INFO)
+                }
+            }
+        }
+
+        /**
          * 断开 VPN 连接
          */
         suspend fun disconnect() {
@@ -636,9 +691,10 @@ class VpnController
             } catch (e: Exception) {
                 addLog("隧道断开错误: ${e.message}", LogLevel.ERROR)
             }
-            // 会话结束: 预算置空 (下次 connect 新建)。放在 stopAll 之后 ——
-            // 关闭中的连接仍要走 onClosed 归还 permit, 但 budget 对象本身已无用。
+            // 会话结束: 预算与路由快照置空 (下次 connect 重建)。
+            // 放在 stopAll 之后 —— 关闭中的连接仍要走 onClosed 归还 permit, 但对象本身已无用。
             connectionBudgetHolder.clearSession()
+            routingTableStore.reset()
 
             // 关闭输入输出流
             try {
@@ -764,8 +820,9 @@ class VpnController
             } catch (e: Exception) {
                 addLog("隧道断开错误: ${e.message}", LogLevel.ERROR)
             }
-            // forceReset 绕过 disconnect 的整条链, 必须自己清预算 (否则跨会话残留)
+            // forceReset 绕过 disconnect 的整条链, 必须自己清预算与路由快照 (否则跨会话残留)
             connectionBudgetHolder.clearSession()
+            routingTableStore.reset()
             try {
                 inputStream?.close()
                 closeTunWriter()
@@ -1372,8 +1429,30 @@ class VpnController
                     // 本会话 WARNING/ERROR 归因 (无故障时空串, 该节整省)。
                     // 断开前那条不吃这一节: 紧接着就是完整的 `故障归因` 行, 不重复。
                     failureSummary = if (force) "" else AppMetrics.summary(),
+                    // 多出口诊断: 关闭时为空串 → 该节整省 (快照与改造前逐字节一致)
+                    exitDiagnostics = exitDiagnostics(),
                 ).render(),
             )
+        }
+
+        /**
+         * 多出口诊断段 (设计 §12.1)。
+         *
+         * 关闭多出口时返回空串 —— `DataPlaneSnapshot.render()` 只在非空时追加, 于是关闭态的
+         * 快照文本与改造前逐字节一致 (这是"零行为变化"的可验证形态)。
+         *
+         * 每条出口带**活跃连接数**(单一真相源 = 插件) 与健康状态: "规则配了但流量没走对出口"
+         * 的第一判据就是这里 —— 目标出口是否真的 Ready、上面有没有连接。
+         */
+        private fun exitDiagnostics(): String {
+            val routing = routingTableStore.current()
+            if (!routing.enabled) return ""
+            val exits = tunnelManager.exitsSnapshot()
+            if (exits.isEmpty()) return ""
+            return exits.joinToString(" · ") { exit ->
+                val label = if (exit.id == ExitId.DEFAULT) "主出口" else "出口 ${exit.id}"
+                "$label(${exit.serverHost}): ${exit.plugin.activeConnections} 连 · ${exit.health}"
+            }
         }
 
         /**

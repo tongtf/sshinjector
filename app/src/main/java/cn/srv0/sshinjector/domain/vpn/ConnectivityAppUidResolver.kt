@@ -5,6 +5,8 @@ import android.net.ConnectivityManager
 import cn.srv0.sshinjector.domain.usecase.VpnController
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.net.InetAddress
@@ -74,41 +76,49 @@ class ConnectivityAppUidResolver
                 ThreadPoolExecutor.DiscardPolicy(),
             ).apply { allowCoreThreadTimeOut(true) }
 
-        override fun lookup(
+        override fun request(
             srcIp: ByteArray,
             srcPort: Int,
             dstIp: ByteArray,
             dstPort: Int,
-            onResolved: (Int) -> Unit,
-        ) {
-            if (method == null || disableWindow.isActive()) return
+        ): UidRequest {
+            val handle = PendingUidRequest()
+            // 每条路径都必须 complete: await 的有界性靠"句柄一定完成"成立
+            if (method == null || disableWindow.isActive()) {
+                handle.complete(AppUidResolver.NO_UID)
+                return handle
+            }
             // 在途上限**远小于**队列容量, 因此 execute 不会触发拒绝 (DiscardPolicy 只是兜底)。
             if (pending.get() >= MAX_PENDING) {
                 dropped.incrementAndGet()
-                return
+                handle.complete(AppUidResolver.NO_UID)
+                return handle
             }
             pending.incrementAndGet()
             queries.incrementAndGet()
             try {
-                executor.execute { resolveAndReport(srcIp, srcPort, dstIp, dstPort, onResolved) }
+                executor.execute { resolveAndComplete(srcIp, srcPort, dstIp, dstPort, handle) }
             } catch (_: RejectedExecutionException) {
                 pending.decrementAndGet()
                 dropped.incrementAndGet()
+                handle.complete(AppUidResolver.NO_UID)
             }
+            return handle
         }
 
-        private fun resolveAndReport(
+        private fun resolveAndComplete(
             srcIp: ByteArray,
             srcPort: Int,
             dstIp: ByteArray,
             dstPort: Int,
-            onResolved: (Int) -> Unit,
+            handle: PendingUidRequest,
         ) {
+            var result = AppUidResolver.NO_UID
             try {
                 val uid = resolveOnce(srcIp, srcPort, dstIp, dstPort)
                 if (uid != null) {
                     hits.incrementAndGet()
-                    onResolved(uid)
+                    result = uid
                 } else {
                     misses.incrementAndGet()
                 }
@@ -122,6 +132,8 @@ class ConnectivityAppUidResolver
             } finally {
                 pending.decrementAndGet()
             }
+            // complete 必须在 finally 之后: 回调 (统计侧) 里可能再触发日志/DB, 不应压在 pending 计数里
+            handle.complete(result)
         }
 
         /**
@@ -177,6 +189,32 @@ class ConnectivityAppUidResolver
                     "UID 归属 命中 ${hits.get()}/${queries.get()} 查询 · 无归属 ${misses.get()}" +
                         (if (deniedCount > 0L) " · 被拒 $deniedCount" else "") +
                         (if (dropped.get() > 0L) " · 队列丢弃 ${dropped.get()}" else "")
+            }
+        }
+
+        /**
+         * 一次反查的句柄 (线程安全, 完成一次)。
+         *
+         * 用 `CompletableDeferred` 而不是自己维护等待队列: `await` 天然挂起 (不占线程),
+         * `invokeOnCompletion` 在已完成时**立即**回调 —— 于是"先完成后注册"的竞态不需要额外分支。
+         */
+        internal class PendingUidRequest : UidRequest {
+            private val deferred = CompletableDeferred<Int>()
+
+            fun complete(uid: Int) {
+                deferred.complete(uid)
+            }
+
+            override suspend fun await(timeoutMs: Long): Int {
+                val uid = withTimeoutOrNull(timeoutMs) { deferred.await() }
+                return uid ?: AppUidResolver.NO_UID
+            }
+
+            override fun onComplete(onDone: (Int) -> Unit) {
+                deferred.invokeOnCompletion { cause ->
+                    val uid = if (cause == null) deferred.getCompleted() else AppUidResolver.NO_UID
+                    runCatching { onDone(uid) }
+                }
             }
         }
 

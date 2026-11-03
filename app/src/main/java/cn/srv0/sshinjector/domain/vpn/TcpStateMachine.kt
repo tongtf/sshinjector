@@ -2,6 +2,10 @@ package cn.srv0.sshinjector.domain.vpn
 
 import android.util.Log
 import cn.srv0.sshinjector.domain.usecase.VpnController
+import cn.srv0.sshinjector.domain.vpn.exit.ExitHealth
+import cn.srv0.sshinjector.domain.vpn.exit.ExitId
+import cn.srv0.sshinjector.domain.vpn.routing.RouteTarget
+import cn.srv0.sshinjector.domain.vpn.routing.RoutingTableStore
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelPlugin
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
@@ -38,9 +42,13 @@ class TcpStateMachine(
     // 域名访问统计 (T-02)。**带默认值**: 既有 6 个测试类按 4 参构造, 不传即用独立实例;
     // 生产由 PacketProcessor 显式传入它的单例, 所以默认值只服务测试。
     private val domainStats: DomainStatsStore = DomainStatsStore(),
-    // 「连接 → uid」反查 (④ 按应用归属)。默认 NONE = 不查询 (测试/无平台能力), 生产由 PacketProcessor
-    // 显式传入单例。**只用来给统计标注应用名**, 绝不参与任何隧道决策。
+    // 「连接 → uid」反查 (④ 按应用归属 + 多出口按应用分流)。默认 NONE = 不查询 (测试/无平台能力),
+    // 生产由 PacketProcessor 显式传入单例。
     private val appUidResolver: AppUidResolver = AppUidResolver.NONE,
+    // 多出口路由快照 (P2)。默认 null = 不存在这个维度: 决策路径与改造前逐字节一致。
+    private val routingTableStore: RoutingTableStore? = null,
+    // uid → 包名 (规则按包名写, uid 只是设备事实)。默认 null = 应用规则不参与匹配。
+    private val appIdentity: AppIdentity? = null,
 ) {
     companion object {
         private const val TAG = "PacketProcessor"
@@ -241,6 +249,21 @@ class TcpStateMachine(
          * 定位靠 equals, 可变构造参数会让定位返回 -1 —— 同类历史坑见 `PooledSession.lastOpenStallAtMs`)。
          */
         @Volatile var appUid: Int = AppUidResolver.NO_UID
+
+        /**
+         * SYN 到达时发起的归属反查句柄 (设计 §8.5.1)。
+         *
+         * 路由与应用统计**共用同一个**句柄: 路由等 [UidRequest.await] (50ms 有界), 统计用
+         * [UidRequest.onComplete] 回写。放类体内 (非构造参数) 以免影响 equals/hashCode。
+         */
+        @Volatile var uidRequest: UidRequest? = null
+
+        /**
+         * 本连接选定的出口 (`default` = 主出口)。只在 SYN 决策一次, 之后不再重算 (设计 §6.1)。
+         *
+         * 仅用于日志/快照归因; 真正的插件实例在 [tunnelPlugin] (回程回调按它摘除)。
+         */
+        @Volatile var exitId: String = ExitId.DEFAULT
 
         /**
          * 本连接回程回调注册到**哪个插件** (多出口后不能再用机器级字段, C-2)。
@@ -574,7 +597,9 @@ class TcpStateMachine(
                     return@launch
                 }
 
-                val plugin = tunnelManager.getActiveOrFallback()
+                // 多出口: 先按路由快照选出口 (关闭/未命中 → null = 主出口, 与改造前完全一致)。
+                // **必须在 bypass 之后**: 直连连接不该为 uid 等 50ms。
+                val plugin = selectExit(conn) ?: tunnelManager.getActiveOrFallback()
                 if (plugin == null) {
                     // 插件由工厂按出口创建, 不再有"未连接实例"兜底; 正常只在隧道未就绪时出现
                     Log.e(TAG, "No active tunnel plugin for conn ${conn.id} (tunnel not ready?)")
@@ -849,6 +874,42 @@ class TcpStateMachine(
             delay(SOCKS_POLL_MS)
         }
         return true
+    }
+
+    /**
+     * 按当前路由快照选定出口插件 (设计 §6.1 / §9.1)。
+     *
+     * @return 附加出口的插件; **null = 走主出口** (功能关闭 / 未命中 / 出口不存在 / 出口未就绪)
+     *
+     * 纪律:
+     * - 功能关闭 (`enabled=false`) 时**立刻返回 null**, 不读 uid、不查域名 —— 关闭态零行为变化;
+     * - uid 有界等待 50ms; 超时/无归属只是"应用规则不参与匹配", 继续匹配域名/IP, 绝不回退直连;
+     * - 出口未就绪 (`Starting`/`Degraded`/`Failed`) 视为不可用 → 回主出口 (P2 的故障回退基线;
+     *   `failoverEnabled=false` 时的 RST 语义留待 P2-3 重试/健康接线一并实现)。
+     */
+    private suspend fun selectExit(conn: TcpConnection): TunnelPlugin? {
+        val routing = routingTableStore?.current() ?: return null
+        if (!routing.enabled || routing.table.isEmpty) return null
+
+        val uid = conn.uidRequest?.await(UidRequest.UID_WAIT_TIMEOUT_MS) ?: AppUidResolver.NO_UID
+        if (uid >= 0) conn.appUid = uid
+        val pkg = if (uid >= 0) appIdentity?.packageOf(uid) else null
+        val ip = conn.dstIp
+        val target =
+            RouteTarget(
+                uid = uid,
+                pkg = pkg,
+                domain = dnsInterceptor?.lookupDomain(ip.hostAddress ?: ""),
+                ip = ip,
+                port = conn.dstPort,
+            )
+        val exitId = routing.table.select(target) ?: return null
+        if (exitId == ExitId.DEFAULT) return null
+
+        val active = tunnelManager.exit(exitId) ?: return null
+        if (active.health != ExitHealth.Ready || active.plugin.localSocksPort <= 0) return null
+        conn.exitId = exitId
+        return active.plugin
     }
 
     /**
@@ -1875,10 +1936,11 @@ class TcpStateMachine(
      * 统计键)。域名此时仍可反查: 假 IP 归零有 60s 摘除宽限 (`DnsInterceptor.releaseFakeIp`)。
      */
     private fun enqueueAppUidLookup(conn: TcpConnection) {
-        appUidResolver.lookup(conn.srcIpBytes, conn.srcPort, conn.dstIpBytes, conn.dstPort) { uid ->
-            // 契约是"只有拿到 ≥0 才回调" (ConnectivityAppUidResolver.resolveOnce 把 -1 归成 miss),
-            // 这里再挡一次: 无论如何都不能把 -1 写进统计条目
-            if (uid < 0) return@lookup
+        val request = appUidResolver.request(conn.srcIpBytes, conn.srcPort, conn.dstIpBytes, conn.dstPort)
+        conn.uidRequest = request
+        request.onComplete { uid ->
+            // 句柄一定会完成 (未命中给 NO_UID): 这里必须挡掉 -1, 绝不能写进统计条目
+            if (uid < 0) return@onComplete
             conn.appUid = uid
             if (conn.state == TcpConnection.TcpState.Closed) {
                 domainStats.attachAppUid(statsKey(conn), uid)

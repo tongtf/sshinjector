@@ -1,5 +1,6 @@
 package cn.srv0.sshinjector.domain.vpn
 
+import cn.srv0.sshinjector.domain.vpn.routing.RoutingTableStore
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -27,6 +28,10 @@ class PacketProcessor
         private val domainStats: DomainStatsStore = DomainStatsStore(),
         // 「连接 → uid」反查 (④ 按应用归属); 同样只带默认值服务测试。
         private val appUidResolver: AppUidResolver = AppUidResolver.NONE,
+        // 多出口路由快照 (P2)。null = 功能维度不存在 (测试/未接线), 决策路径与改造前一致。
+        private val routingTableStore: RoutingTableStore? = null,
+        // uid → 包名; null = 应用规则不参与匹配 (测试)。
+        private val appIdentity: AppIdentity? = null,
     ) {
         companion object {
             const val DEFAULT_CONNECTION_CLEANUP_TIMEOUT_MS = 300000L // 5 分钟默认值
@@ -41,7 +46,16 @@ class PacketProcessor
         @Volatile private var dnsInterceptor: DnsInterceptor? = null
 
         private val tcpStateMachine =
-            TcpStateMachine(tunnelManager, { tunSink }, stats, sshIoDispatcher, domainStats, appUidResolver)
+            TcpStateMachine(
+                tunnelManager,
+                { tunSink },
+                stats,
+                sshIoDispatcher,
+                domainStats,
+                appUidResolver,
+                routingTableStore,
+                appIdentity,
+            )
         private val udpRelay = UdpRelay(stats)
         private val icmpv6Responder = Icmpv6Responder({ tunSink })
 
