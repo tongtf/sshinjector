@@ -6,6 +6,7 @@ import cn.srv0.sshinjector.data.remote.config.ServerProvisioner
 import cn.srv0.sshinjector.data.remote.ssh.JschSshClient
 import cn.srv0.sshinjector.data.remote.ssh.RemoteCommandExecutor
 import cn.srv0.sshinjector.domain.model.ServerProvisionerContract
+import cn.srv0.sshinjector.domain.vpn.AppIdentity
 import cn.srv0.sshinjector.domain.vpn.AppUidResolver
 import cn.srv0.sshinjector.domain.vpn.ConnectivityAppUidResolver
 import cn.srv0.sshinjector.domain.vpn.RemoteDomainResolver
@@ -32,6 +33,16 @@ object AppModule {
     @Provides
     @Singleton
     fun provideWhitelistDao(db: AppDatabase): cn.srv0.sshinjector.data.local.dao.WhitelistDao = db.whitelistDao()
+
+    @Provides
+    @Singleton
+    fun provideProxyExitDao(db: AppDatabase): cn.srv0.sshinjector.data.local.dao.ProxyExitDao = db.proxyExitDao()
+
+    @Provides
+    @Singleton
+    fun provideAppIdentity(
+        @ApplicationContext context: Context,
+    ): AppIdentity = AppIdentity.fromPackageManager(context.packageManager)
 
     @Provides
     @Singleton

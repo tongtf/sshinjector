@@ -16,6 +16,7 @@ class DataPlaneSnapshotTest {
         up: Long = 1000,
         down: Long = 2000,
         failure: String = "",
+        exitDiagnostics: String = "",
     ) = DataPlaneSnapshot(
         upBytes = up,
         downBytes = down,
@@ -32,6 +33,7 @@ class DataPlaneSnapshotTest {
         ipv6Diagnostics = "IPv6 NA=4",
         tunnelDiagnostics = "SA 通道数=2",
         failureSummary = failure,
+        exitDiagnostics = exitDiagnostics,
     )
 
     @Test
@@ -73,6 +75,22 @@ class DataPlaneSnapshotTest {
         assertTrue(text.endsWith(" · 故障归因 · 本会话 1 类 12 次 — 上行背压丢段 ×12"))
         // 归因必须在最后 (与它要解释的计数同屏, 且固定位置便于肉眼扫)
         assertTrue(text.indexOf("故障归因") > text.indexOf("TCP 连接=1"))
+    }
+
+    @Test
+    fun `exit diagnostics are omitted entirely when multi exit is off`() {
+        // 关闭多出口时必须与改造前**逐字节一致** (设计 §10 I-20): 不能留下 `· ` 之类残留
+        assertEquals(snapshot().render(), snapshot(exitDiagnostics = "").render())
+        assertTrue(!snapshot().render().contains("出口"))
+    }
+
+    @Test
+    fun `exit diagnostics are appended after the failure summary`() {
+        val text =
+            snapshot(failure = "故障归因 · 本会话 1 类 2 次 — 示例", exitDiagnostics = "出口 hk(1.2.3.4): 2 连")
+                .render()
+        assertTrue(text.contains("故障归因"))
+        assertTrue("出口诊断必须追加在故障归因之后", text.indexOf("出口 hk") > text.indexOf("故障归因"))
     }
 
     @Test

@@ -6,9 +6,11 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
+import cn.srv0.sshinjector.data.local.entity.ProxyExitEntity
 import cn.srv0.sshinjector.data.local.entity.ServerEntity
 import cn.srv0.sshinjector.data.local.entity.WhitelistAppEntity
 import kotlinx.coroutines.flow.Flow
+import java.util.Date
 
 @Dao
 interface ServerDao {
@@ -107,4 +109,50 @@ interface WhitelistDao {
 
     @Query("SELECT packageName FROM whitelist_apps WHERE isEnabled = 1")
     suspend fun getEnabledPackageNames(): List<String>
+}
+
+/**
+ * 附加出口 DAO (多出口路由, 设计 §8.11)。
+ *
+ * 主出口 (`default`) 不在这张表里: 它恒等于"当前连接的服务器", 由 `TunnelManager` 直接启动。
+ * 排序口径 `priority ASC, name ASC`: priority 是故障转移顺序, name 只做同优先级内的稳定排序
+ * (否则 SQLite 返回顺序不确定 → 每次重建快照出口顺序抖动)。
+ */
+@Dao
+interface ProxyExitDao {
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insert(exit: ProxyExitEntity): Long
+
+    @Update
+    suspend fun update(exit: ProxyExitEntity): Int
+
+    @Query("DELETE FROM proxy_exits WHERE id = :id")
+    suspend fun delete(id: Long): Int
+
+    @Query("SELECT * FROM proxy_exits ORDER BY priority ASC, name ASC")
+    fun observeAll(): Flow<List<ProxyExitEntity>>
+
+    @Query("SELECT * FROM proxy_exits ORDER BY priority ASC, name ASC")
+    suspend fun getAllBlocking(): List<ProxyExitEntity>
+
+    /** 只取启用的 (连接时启动哪些出口的唯一依据)。 */
+    @Query("SELECT * FROM proxy_exits WHERE enabled = 1 ORDER BY priority ASC, name ASC")
+    suspend fun getEnabledBlocking(): List<ProxyExitEntity>
+
+    @Query("SELECT * FROM proxy_exits WHERE name = :name")
+    suspend fun getByName(name: String): ProxyExitEntity?
+
+    @Query("UPDATE proxy_exits SET enabled = :enabled, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun setEnabled(
+        id: Long,
+        enabled: Boolean,
+        updatedAt: Date,
+    ): Int
+
+    @Query("UPDATE proxy_exits SET priority = :priority, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun setPriority(
+        id: Long,
+        priority: Int,
+        updatedAt: Date,
+    ): Int
 }

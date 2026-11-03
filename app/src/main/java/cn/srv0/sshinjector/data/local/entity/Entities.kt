@@ -2,6 +2,8 @@ package cn.srv0.sshinjector.data.local.entity
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.ForeignKey
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import java.util.Date
 
@@ -44,4 +46,35 @@ data class WhitelistAppEntity(
     @ColumnInfo(name = "iconPackage") val iconPackage: String? = null,
     @ColumnInfo(name = "isEnabled") val isEnabled: Boolean = true,
     @ColumnInfo(name = "addedAt") val addedAt: Date = Date(),
+)
+
+/**
+ * 附加出口 (多出口路由, 设计 §7.1)。主出口不在这张表里 —— 它恒等于"当前连接的服务器"。
+ *
+ * 只存**引用** ([serverId]), 绝不复制 host/port/username: 服务器详情是 `servers` 的真相源,
+ * 复制会出现"改了服务器地址, 出口还用旧地址"的分叉。删除服务器由外键级联删掉出口。
+ *
+ * [name] 是规则里引用的名字 (`example.com -> hk` 的 `hk`), 小写唯一; 改名不影响规则文本
+ * (改名前 UI 必须提示"有 N 条规则引用它")。
+ */
+@Entity(
+    tableName = "proxy_exits",
+    foreignKeys = [
+        ForeignKey(
+            entity = ServerEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["serverId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index(value = ["name"], unique = true), Index("serverId")],
+)
+data class ProxyExitEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "name") val name: String,
+    @ColumnInfo(name = "serverId") val serverId: Long,
+    @ColumnInfo(name = "enabled") val enabled: Boolean = true,
+    @ColumnInfo(name = "priority") val priority: Int = 100,
+    @ColumnInfo(name = "createdAt") val createdAt: Date = Date(),
+    @ColumnInfo(name = "updatedAt") val updatedAt: Date = Date(),
 )

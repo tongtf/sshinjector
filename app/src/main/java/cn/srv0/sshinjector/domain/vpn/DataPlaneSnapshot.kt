@@ -29,6 +29,8 @@ package cn.srv0.sshinjector.domain.vpn
  * @param resourceDiagnostics 本栈自己的资源占用 (TUN 写队列深度、DNS 映射表占用) —— 泄漏类问题的判据
  * @param failureSummary [cn.srv0.sshinjector.domain.obs.AppMetrics] 的会话失败归因;
  *   空串 = 本会话无 WARNING/ERROR, 渲染时整节省略 (健康会话不产生噪声, 也不打印"0 次"假数据)
+ * @param exitDiagnostics 多出口诊断 (每出口连接/流量/状态 + 应用命中)。
+ *   空串 = 多出口关闭, 渲染时整节省略 —— 关闭时快照与改造前**逐字节一致** (设计 §10 I-20)
  */
 internal data class DataPlaneSnapshot(
     val upBytes: Long,
@@ -46,6 +48,7 @@ internal data class DataPlaneSnapshot(
     val ipv6Diagnostics: String,
     val tunnelDiagnostics: String,
     val failureSummary: String,
+    val exitDiagnostics: String = "",
 ) {
     fun render(): String {
         val head =
@@ -56,7 +59,8 @@ internal data class DataPlaneSnapshot(
                 "TUN 接口空丢包 $tunNoInterfaceDropped · " +
                 "$resourceDiagnostics · " +
                 "$tcpDiagnostics · $udpDiagnostics · $ipv6Diagnostics · $tunnelDiagnostics"
-        return if (failureSummary.isEmpty()) head else "$head · $failureSummary"
+        val withFailure = if (failureSummary.isEmpty()) head else "$head · $failureSummary"
+        return if (exitDiagnostics.isEmpty()) withFailure else "$withFailure · $exitDiagnostics"
     }
 
     companion object {

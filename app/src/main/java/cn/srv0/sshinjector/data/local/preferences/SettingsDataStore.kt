@@ -58,6 +58,17 @@ class SettingsDataStore
              */
             private val KEY_USE_REMOTE_RESOLVE = booleanPreferencesKey("use_remote_resolve")
 
+            // ---- 多出口路由 (设计 §7.2) ----
+
+            /** 总开关: **默认 false = 零行为变化** (关闭时数据面对象图与快照逐字节不变)。 */
+            private val KEY_MULTI_EXIT_ENABLED = booleanPreferencesKey("multi_exit_enabled")
+
+            /** 规则文本 (§6.2); 应用规则存**包名**, 不存 uid (重装/多用户会变)。 */
+            private val KEY_MULTI_EXIT_RULES = stringPreferencesKey("multi_exit_rules")
+
+            /** 附加出口降级时是否回退 default (false = 命中降级出口的新连接直接 RST, 由客户端重试)。 */
+            private val KEY_MULTI_EXIT_FAILOVER = booleanPreferencesKey("multi_exit_failover_enabled")
+
             const val DEFAULT_DOMAIN_LIST_URL = "https://gitlab.com/gfwlist/gfwlist/raw/master/gfwlist.txt"
 
             // 广告规则远程刷新间隔默认值(分钟); 实际取值由 AdBlockManager 约束在 [MIN, MAX]
@@ -162,6 +173,24 @@ class SettingsDataStore
         val useRemoteResolve: Flow<Boolean> =
             context.dataStore.data
                 .map { it[KEY_USE_REMOTE_RESOLVE] ?: false }
+
+        /**
+         * 多出口总开关。**默认 false**: 关闭时 `TunnelManager` 只启动主出口、`resolveExit` 恒 default,
+         * 数据面对象图与快照逐字节不变 (设计 §10 I-1 / I-20)。
+         */
+        val multiExitEnabled: Flow<Boolean> =
+            context.dataStore.data
+                .map { it[KEY_MULTI_EXIT_ENABLED] ?: false }
+
+        /** 规则文本 (空串 = 无规则, 全部走 default)。 */
+        val multiExitRules: Flow<String> =
+            context.dataStore.data
+                .map { it[KEY_MULTI_EXIT_RULES].orEmpty() }
+
+        /** 附加出口降级时是否回退 default (无键 = true)。 */
+        val multiExitFailoverEnabled: Flow<Boolean> =
+            context.dataStore.data
+                .map { it[KEY_MULTI_EXIT_FAILOVER] ?: true }
 
         suspend fun setAutoConnect(enabled: Boolean) {
             context.dataStore.edit { it[KEY_AUTO_CONNECT] = enabled }
@@ -315,6 +344,29 @@ class SettingsDataStore
                     it.remove(KEY_USE_REMOTE_RESOLVE)
                 }
             }
+        }
+
+        /**
+         * 多出口总开关。关闭时写回 false 而不是删键 —— 显式关闭与"从未配置"在 UI 上是同一个状态,
+         * 但保留键能让 `multi_exit_rules` 原样留着 (关掉再打开不丢规则)。
+         */
+        suspend fun setMultiExitEnabled(enabled: Boolean) {
+            context.dataStore.edit { it[KEY_MULTI_EXIT_ENABLED] = enabled }
+        }
+
+        /** 规则文本。null/空串 = 删除键 (无规则)。 */
+        suspend fun setMultiExitRules(rules: String?) {
+            context.dataStore.edit {
+                if (rules.isNullOrEmpty()) {
+                    it.remove(KEY_MULTI_EXIT_RULES)
+                } else {
+                    it[KEY_MULTI_EXIT_RULES] = rules
+                }
+            }
+        }
+
+        suspend fun setMultiExitFailoverEnabled(enabled: Boolean) {
+            context.dataStore.edit { it[KEY_MULTI_EXIT_FAILOVER] = enabled }
         }
 
         val language: Flow<String> =

@@ -8,8 +8,10 @@ import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import cn.srv0.sshinjector.data.local.converter.Converters
+import cn.srv0.sshinjector.data.local.dao.ProxyExitDao
 import cn.srv0.sshinjector.data.local.dao.ServerDao
 import cn.srv0.sshinjector.data.local.dao.WhitelistDao
+import cn.srv0.sshinjector.data.local.entity.ProxyExitEntity
 import cn.srv0.sshinjector.data.local.entity.ServerEntity
 import cn.srv0.sshinjector.data.local.entity.WhitelistAppEntity
 
@@ -17,8 +19,9 @@ import cn.srv0.sshinjector.data.local.entity.WhitelistAppEntity
     entities = [
         ServerEntity::class,
         WhitelistAppEntity::class,
+        ProxyExitEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 @TypeConverters(
@@ -29,8 +32,10 @@ abstract class AppDatabase : RoomDatabase() {
 
     abstract fun whitelistDao(): WhitelistDao
 
+    abstract fun proxyExitDao(): ProxyExitDao
+
     companion object {
-        @Volatile private var INSTANCE: AppDatabase? = null
+        @Volatile private var instance: AppDatabase? = null
 
         private val MIGRATION_2_3 =
             object : Migration(2, 3) {
@@ -49,9 +54,18 @@ abstract class AppDatabase : RoomDatabase() {
                 }
             }
 
+        private val MIGRATION_4_5 =
+            object : Migration(4, 5) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    db.execSQL(ProxyExitSchema.CREATE_TABLE)
+                    db.execSQL(ProxyExitSchema.INDEX_NAME)
+                    db.execSQL(ProxyExitSchema.INDEX_SERVER_ID)
+                }
+            }
+
         fun getInstance(context: Context): AppDatabase =
-            INSTANCE ?: synchronized(this) {
-                val instance =
+            instance ?: synchronized(this) {
+                val created =
                     Room
                         .databaseBuilder(
                             context.applicationContext,
@@ -59,9 +73,10 @@ abstract class AppDatabase : RoomDatabase() {
                             "sshinjector.db",
                         ).addMigrations(MIGRATION_2_3)
                         .addMigrations(MIGRATION_3_4)
+                        .addMigrations(MIGRATION_4_5)
                         .build()
-                INSTANCE = instance
-                instance
+                instance = created
+                created
             }
     }
 }
