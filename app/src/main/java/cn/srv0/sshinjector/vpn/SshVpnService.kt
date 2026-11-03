@@ -22,6 +22,7 @@ import cn.srv0.sshinjector.domain.model.HealthStep
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import cn.srv0.sshinjector.domain.usecase.VpnController
+import cn.srv0.sshinjector.domain.vpn.ConnectIntent
 import cn.srv0.sshinjector.domain.vpn.ConnectivityProber
 import cn.srv0.sshinjector.domain.vpn.DNS_MODE_DOMAIN_SPLIT
 import cn.srv0.sshinjector.domain.vpn.DNS_MODE_REMOTE
@@ -29,6 +30,7 @@ import cn.srv0.sshinjector.domain.vpn.DNS_MODE_SYSTEM
 import cn.srv0.sshinjector.domain.vpn.DNS_MODE_WHITELIST
 import cn.srv0.sshinjector.domain.vpn.HealthTracker
 import cn.srv0.sshinjector.domain.vpn.VpnNetwork
+import cn.srv0.sshinjector.domain.vpn.connectIntent
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import cn.srv0.sshinjector.ui.StatusDisplay
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
@@ -52,6 +54,7 @@ import javax.inject.Inject
 import cn.srv0.sshinjector.domain.model.VpnState as DomainVpnState
 
 @AndroidEntryPoint
+@Suppress("TooManyFunctions") // 连接/断开/重连/重建/健康/通知/白名单观察各一组, 拆走是独立重构
 class SshVpnService : VpnService() {
     @Inject lateinit var vpnController: VpnController
 
@@ -413,12 +416,21 @@ class SshVpnService : VpnService() {
     private val connectMutex = Mutex()
 
     private suspend fun connect(serverId: Long) {
-        connectMutex.withLock {
-            Log.d("SshVpnService", "Connecting to server $serverId")
-            if (vpnController.isVpnRunning()) {
-                Log.w("SshVpnService", "VPN already running")
+        // 已连接时点另一台服务器 = 切换, 不是静默 no-op (旧实现在这里只有一行 logcat,
+        // 用户看到的是"点了没反应", UI 那行还会一直停在 Connecting)。
+        when (connectIntent(vpnController.isVpnRunning(), currentServer?.id, serverId)) {
+            ConnectIntent.ALREADY_CONNECTED -> {
+                vpnController.addLog("已连接该服务器 · 无需重复连接", LogLevel.INFO)
                 return
             }
+            ConnectIntent.SWITCH -> {
+                switchServer(serverId)
+                return
+            }
+            ConnectIntent.CONNECT -> Unit
+        }
+        connectMutex.withLock {
+            Log.d("SshVpnService", "Connecting to server $serverId")
             serviceVpnState.value = DomainVpnState(status = DomainVpnState.VpnStatus.Connecting)
 
             try {
@@ -478,6 +490,32 @@ class SshVpnService : VpnService() {
                 vpnController.reportHealth(verified = false, failedStep = mapConnectFailureToStep(e.message))
             }
         }
+    }
+
+    /**
+     * 已连接时切到另一台服务器: 拆旧建新, 复用 [autoReconnect] 那条成熟路径
+     * (自带 connectMutex / 拆接口 / 重建 / 健康监控重启 / 通知刷新)。
+     */
+    private suspend fun switchServer(serverId: Long) {
+        val target =
+            try {
+                serverRepository.getServerById(serverId)
+            } catch (e: Exception) {
+                vpnController.addLog("切换服务器失败 · 读取服务器异常 (${e.message})", LogLevel.WARNING)
+                return
+            }
+        if (target == null) {
+            vpnController.addLog("切换服务器失败 · 服务器不存在 (id=$serverId)", LogLevel.WARNING)
+            return
+        }
+        vpnController.addLog(
+            "切换服务器 · ${currentServer?.name ?: "当前会话"} → ${target.name}",
+            LogLevel.INFO,
+        )
+        // lastServerId 必须先写: autoReconnect 用它判断"用户是否已主动断开" (0 = 跳过重连)
+        settingsDataStore.setLastServerId(serverId)
+        serverRepository.setActiveServer(serverId)
+        autoReconnect(mergeGlobalSettings(target))
     }
 
     /**

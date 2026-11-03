@@ -513,6 +513,11 @@ class MainViewModel
         }
 
         fun connect(serverId: Long) {
+            // 已经连着这台: 不要把它乐观置成 Connecting —— 服务端会按"无需重复连接"直接返回,
+            // 不会再有 vpnState 事件把它改回来, 那一行就会永远转圈。
+            val current = _uiState.value
+            if (current.isConnected && current.currentServerId == serverId) return
+
             // 更新服务器连接状态为 Connecting
             val newServerStatus =
                 _uiState.value.serverConnectionStatus.toMutableMap().apply {
