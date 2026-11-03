@@ -1001,17 +1001,8 @@ class TcpStateMachine(
         conn: TcpConnection,
         attemptStartedAt: Long,
     ): Boolean {
-        if (conn.exitRetried) return false
-        if (conn.exitId == ExitId.DEFAULT) return false
-        // 用户明确关掉了故障回退 → 不许在这里"静默换出口" (否则这个开关名不副实)
-        val routing = routingSnapshotSource?.current()
-        if (routing == null || !routing.enabled || !routing.failoverEnabled) return false
-        if (conn.synAckWritten) return false
-        if (conn.state == TcpConnection.TcpState.Closed) return false
-        if (conn.forwardedBytes > 0) return false
+        if (!canRetryOnPrimary(conn, attemptStartedAt)) return false
         val elapsed = System.currentTimeMillis() - attemptStartedAt
-        if (elapsed > RETRY_MAX_ELAPSED_MS) return false
-
         val primary = tunnelManager.exit(ExitId.DEFAULT)
         val primaryPlugin = primary?.plugin ?: tunnelManager.getActiveOrFallback() ?: return false
         if (primary?.health == ExitHealth.Failed || !primaryPlugin.isHealthy) return false
@@ -1030,6 +1021,25 @@ class TcpStateMachine(
         val retryOutcome = forwardThroughLocalSocks(conn, primaryPlugin, primaryPlugin.localSocksPort)
         if (retryOutcome != ForwardOutcome.ESTABLISHED) closeTcpConnection(conn.key, conn)
         return true
+    }
+
+    /**
+     * §9.5 的"能不能重试"判据 (纯条件, 不含动作)。
+     *
+     * 八个条件里最容易漏的两条:
+     * - `failoverEnabled=false` → **不重试** (用户明确要求不自动换出口);
+     * - `exitId == DEFAULT` → 没有"下一个"可退。
+     */
+    private fun canRetryOnPrimary(
+        conn: TcpConnection,
+        attemptStartedAt: Long,
+    ): Boolean {
+        if (conn.exitRetried || conn.exitId == ExitId.DEFAULT) return false
+        val routing = routingSnapshotSource?.current()
+        if (routing == null || !routing.enabled || !routing.failoverEnabled) return false
+        if (conn.synAckWritten || conn.state == TcpConnection.TcpState.Closed) return false
+        if (conn.forwardedBytes > 0) return false
+        return System.currentTimeMillis() - attemptStartedAt <= RETRY_MAX_ELAPSED_MS
     }
 
     /** 释放握手期在某个出口上注册的回调/端口 (重试前必须做, 否则旧回调写进同一个 conn)。 */

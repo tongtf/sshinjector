@@ -652,19 +652,21 @@ class VpnController
             // **并行启动**: 每个出口都是一次完整的 SSH 建池 (可达数秒), 串行会把
             // `connect()` 拉长到 N×数秒 —— 用户在这段时间里看到的就是"点连接没反应"。
             coroutineScope {
-                snapshot.exits.map { exit ->
-                    async {
-                        // 单个出口的异常不能冒泡出 coroutineScope: 那会取消其余出口并让整个
-                        // connect() 失败 —— 一个坏出口不该拖死整个会话。
-                        try {
-                            startAdditionalExit(exit)
-                        } catch (e: kotlinx.coroutines.CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            addLog("出口 ${exit.name} 启动异常 · ${e.message}", LogLevel.WARNING)
+                val jobs =
+                    snapshot.exits.map { exit ->
+                        async {
+                            // 单个出口的异常不能冒泡出 coroutineScope: 那会取消其余出口并让整个
+                            // connect() 失败 —— 一个坏出口不该拖死整个会话。
+                            try {
+                                startAdditionalExit(exit)
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                addLog("出口 ${exit.name} 启动异常 · ${e.message}", LogLevel.WARNING)
+                            }
                         }
                     }
-                }.awaitAll()
+                jobs.awaitAll()
             }
         }
 
