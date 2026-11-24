@@ -1,84 +1,44 @@
-# 图集审查清单
+# 图集复核结论（2026-11-24）
 
-生成时间：2026-08-06 · 工作流：dev-workflow explore → design → audit
+复核范围：`docs/diagrams/*.html`（索引 + 各状态机 / 流程 / 时序 / 甘特图）
+权威事实：仓库根 `AGENTS.md`；图集最后同步时间：**2026-10-08**（当前代码 v1.2.8）。
 
-## 审查说明
+## 结论（修订）
 
-每张图均对照源码调用链（file:line）逐一核验。下方记录已执行的图逻辑校验项与结论。
+- [x] 原结论「图与代码事实一致，无遗留漂移」**不成立，予以作废**。旧清单只在 2026-08-06 / 08-18 做过回读，之后数据面、DNS、SSH、可观测性连续重构，图未跟进。
+- [x] 六步编排（**探索 → 设计 → 绘图 → 审查 → 修复 → 回读**）作为工作流编排**仍然准确**，可继续使用；失效的是「回读通过 ⇒ 图无漂移」这个前提 —— 代码持续演进，回读必须针对当前代码重做。
+- [x] 每张图顶部均已加「最后同步 2026-10-08，细节可能滞后，现状见 AGENTS.md」提示条；索引页同步标注容量常量与新增功能的滞后风险。
+- [x] 本清单自身必须随图一并更新；否则它会再次变成「审查通过」的假证据。后续每次改图，先改本文件的漂移表与结论日期。
 
-## 校验项
+## 本次审计发现的主要漂移
 
-### 架构图 `architecture-system.html`
-- [x] 层划分与代码包结构一致（UI → domain/usecase → domain/vpn → data/remote）
-- [x] 主数据流方向：TUN → PacketProcessor → Socks5ProxyServer → JschSshClient → 远端
-- [x] 支撑流（配置/密钥）为虚线，不与数据流混淆
-- [x] 交叉线已桥接/错开（VpnController→LocalStore 与 PacketProcessor→Socks5 平行错 8px）
+| 主题 | 图集/旧清单说法 | 当前事实（AGENTS.md / 代码） |
+| --- | --- | --- |
+| SOCKS5 认证 | 「握手无认证路径（processAuthMethods 直通）」 | **fail-closed**：握手强制用户名密码 `[0x05,0x02]`，无凭据直接 `[0x05,0xFF]` 拒绝；生物识别门禁同样 fail-closed |
+| UDP ASSOCIATE | 「空回复 0.0.0.0:0，连接保持打开」 | 立即回 **rep=0x07** 并关闭；非 DNS UDP（QUIC/游戏）在 TUN 侧明确丢弃并**按目的端口计数**，DNS 回程仍由 `UdpRelay` 组包 |
+| 出向背压容量 | `Channel(256)` | `SSH_SEND_QUEUE_CAPACITY = 128`（`Socks5ProxyServer.kt`），单槽 `pendingToSshBlock` + `backpressureLock` + 暂停 OP_READ 不变 |
+| DNS 假 IP 生命周期 | 只提 LRU 映射 | 应答 **TTL=5s**，`ipToDomain`/`domainToIp` 上限 **16384** 独立 LRU，真实 IP 独立表 8192；引用归零后 **60s 释放宽限**再删映射 |
+| 白名单空名单 | 图未区分 | `DnsTransportPolicy`：空名单退化为 **SYSTEM**（保护 socket 本地解析），非空才 WHITELIST；白名单模式下 DNS 上游**排除 VPN 网络**（过滤 `TRANSPORT_VPN` + 滤掉 `TUN_IP`） |
+| TUN 写入 | 旧清单提 `writeToTun` monitor | 已改为 **TunWriter 单写者**：`write`（控制包，满则丢且不计 TUN 写失败）/`writeBlocking`（数据，等待有界）语义分离；`@Synchronized` 因前提消失而移除 |
+| 会话变更串行化 | 图只画状态转移，未画锁 | `connect`/`disconnect`/`autoReconnect`/`rebuild` 全部串行于 **connectMutex**（Mutex 不可重入，已持锁路径只能调 `disconnectInternal` 等） |
+| 域名统计 | 完全缺失 | `DomainStatsStore` 会话级**内存**聚合（上限 20000，不落盘）；P1 建议→应用三键分存 + 撤销快照；远端解析走池内会话 direct-tcpip；按应用 uid 仅做展示列 |
+| 健康探测 | 只有端到端探测 | 新增**分阶段健康**（`StageCounters` + `StageHealthEvaluator`：TUN/DNS/FORWARD 三段，连续 2 失败窗降级、1 成功窗恢复），与端到端探测经 `reportMergedHealth` 合并，只降级显示不杀连接 |
+| SSH 会话健康 | 只有 keepAlive 往返 | **三态探活** `ROUND_TRIP_OK / UNAVAILABLE / FAILED`（UNAVAILABLE 不判死）；开通道**两层预算**（总 9s + 单候选 3s），开超时的会话后置 30s；全候选秒拒归为 INFO「远端不解析该目标」而非 ERROR |
+| SSH 容量与拒绝 | 只提池饱和 | `SshIoDispatcher` 饱和时 `connectToTarget` 提前回 `0x05`；JSch 通道 8MB 窗口 / 64KB 包；Android 上 Ed25519 MR-JAR 无效，kex 白名单必须含 ECDH |
+| 关闭语义 | 索引卡曾写「图中有 FIN+ACK」 | 图未展开该细节；实际远端 clean EOF → FIN+ACK，其余路径 RST+ACK，客户端 FIN 必须被 ACK 覆盖 |
+| 可观测性 | 只有应用日志 | 60s **数据面快照** + 断开前强制一条；故障归因按静态前缀聚合 WARNING/ERROR；`数据面快照` 是唯一诊断出口（无 adb） |
+| 隧道插件 | 单一路径未标注 | 现有插件**只有 socks5**（`TunnelPlugin` + `TunnelModule` 绑定）；新增隧道需同时补 descriptor 与绑定 |
 
-### 状态机图
-- `vpn-state.html`
-  - [x] 状态枚举核对：Authenticating/EstablishingTunnel/Reconnecting 为死代码已标注
-  - [x] 转移事件名与代码一致（connect()/disconnect()/onRevoke/网络切换/forceReset 3s 兜底）
-  - [x] Failed 为 VpnService 层设置，单标注 `* → Failed`（非逐状态画线）
-- `socks5-state.html`
-  - [x] 握手无认证路径（processAuthMethods 直通）已标注；AuthMethods 枚举保留不参与流转
-  - [x] 超时参数（连接 10s / 空闲 300s）标注
-  - [x] UDP ASSOCIATE 空回复问题已在图中提示
-- `ssh-reconnect-state.html`
-  - [x] 退避公式 min(1s·n, 10s) 与上限 5 次核对（JschSshClient.kt:380,384）
-  - [x] 原子替换池成员语义正确
+## 幽灵引用清理
 
-### 流程图
-- `packet-flow.html`
-  - [x] 决策分支覆盖：排除路由 → DOMAIN_SPLIT 直连 → 协议分派
-  - [x] 透传合并路径已修正（绕行不穿 ICMP 节点）
-- `vpn-connect-flow.html`
-  - [x] 生物识别 / VPN 授权门控分支汇入点已修正（避免与主链竖线重叠）
-- `tcp-flow.html`
-  - [x] seq 校验（重传丢弃/乱序快重传）已在脚注说明
-  - [x] 交叉线已加 hop 桥接（rep 失败路径）
-- `dns-flow.html`
-  - [x] useSystemDns 决策三种情形（SYSTEM / SPLIT 未命中 / REMOTE+WHITELIST）
-  - [x] 缓存路径已加 hop 跳过系统 DNS 横线
-- `provisioning-flow.html`
-  - [x] 六步与 ServerProvisioning.Step 枚举一致；四类失败出口标注
-- `udp-flow.html`
-  - [x] UDP 中继不可用的已知问题以醒目块标注
-- `key-flow.html`
-  - [x] 三来源 + 硬件/非硬件分支与 createJSchIdentity 逻辑一致
+- [x] 删除旧清单中的 `udp-flow.html` 引用 —— 该文件从未存在，UDP 内容实际在 `socks5-state.html` 与 `packet-flow.html` 中体现。
 
-### 时序图
-- `vpn-start-sequence.html`
-  - [x] 参与者与代码边界一致；消息顺序 = 真实调用链
-  - [x] 无向上消息、激活条闭合
-- `tcp-data-sequence.html`
-  - [x] 注册回向回调在 CONNECT 请求之前（TcpStateMachine.kt:255-262）标注
-  - [x] 出向背压（Channel cap=32 → 单槽 → 暂停 OP_READ）与回向直通均呈现
-- `dns-sequence.html`
-  - [x] REMOTE 假 IP 与 SYSTEM protect-socket 两段消息流正确
-  - [x] 恢复查询 ID / 缓存 / ipToDomain 步骤齐全
+## 保留仍准确的结论
 
-## 结论
+- [x] 六步工作流编排本身准确（见上）。
+- [x] 架构图的三层划分与主数据流方向（TUN → PacketProcessor → SOCKS5 → JSch → 远端）在宏观上仍成立，只是缺少域名统计栈 / TunWriter / SshIoDispatcher / 隧道插件等节点（已在图内提示条标注）。
+- [x] 配置服务器一键配置的六步与 `ServerProvisioning.Step` 枚举一致（与本次漂移无关，仍有效）。
 
-- [x] 流程图无不可达节点 / 死循环；每个决策有出口
-- [x] 状态机初态/终态正确、无终态回流、转移有标签
-- [x] 时序图消息均有发送/接收方、异步路径为虚线
-- [x] 图与图交叉一致（流程图↔时序图↔状态机图互通）
-- [x] 无幽灵参与者（均能在代码中找到对应类）
+## 仍未绘图
 
-**审查通过**，未发现致命逻辑缺陷。
-
-## 追加复核（2026-08-18 · dev-workflow audit → 修复）
-
-代码层面本次审计修复涉及多图描述的流程，逐图回读确认无漂移：
-
-- `tcp-data-sequence.html` / `tcp-flow.html`
-  - [x] 出向背压新增 `backpressureLock`（单槽/full 标志/OP_READ 切换原子化）与 `pendingConnectData`（buffer 不跨线程）——图脚注已同步
-- `socks5-state.html`
-  - [x] Connecting 阶段新增「池饱和拒绝」路径（`SshIoDispatcher.isSaturated()` → sendErrorReply+close）——节点副文本已同步
-- `ssh-reconnect-state.html`
-  - [x] 整体 autoReconnect 增加 10s 退避窗（`POOL_FAIL_RECONNECT_BACKOFF_MS`）；重连成功后旧 scope 取消——图注已同步
-- `dns-flow.html` / `dns-sequence.html`
-  - [x] 断开时 `clearPendingResponses()` 排空残留响应；假 IP 计数器 `updateAndGet` 永不回拨；`ipToDomain/domainToIp` 双向驱逐——脚注已同步
-- `index.html` KEY FACTS 已更新（背压锁、池饱和拒绝、开机自启 goAsync、重连退避）
-
-**结论**：图与代码事实一致，无遗留漂移。
+域名统计 / 健康探测 / 诊断快照尚无对应 HTML；见仓库根 `AGENTS.md`。

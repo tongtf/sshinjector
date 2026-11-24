@@ -14,6 +14,9 @@
              letter-spacing:0.18em; text-transform:uppercase; color:var(--muted); margin:0; }
   h1 { font-family:'Instrument Serif',serif; font-weight:400; font-size:44px; margin:8px 0 4px; }
   .sub { color:var(--muted); font-size:15px; margin:0 0 24px; }
+  .stale { margin:0 0 24px; padding:12px 16px; border:1px solid #d9a400;
+           border-left:4px solid #d9a400; border-radius:6px; background:#fff8e1;
+           color:#6b4e00; font-size:13px; line-height:1.6; }
   .fig { border:1px solid var(--rule); border-radius:8px; padding:16px; overflow-x:auto; }
   svg { display:block; }
   .foot { margin-top:16px; font-family:'Geist Mono',monospace; font-size:11px;
@@ -24,7 +27,8 @@
 <div class="wrap">
   <p class="eyebrow">STATE MACHINE · SSH SESSION</p>
   <h1>SSH 会话池重连状态机</h1>
-  <p class="sub">JschSshClient — 3 会话池 · keepAlive 每 30s · 线性退避重连 ≤5 次（JschSshClient.kt:414-470）</p>
+  <p class="sub">JschSshClient — 3 会话池 · keepAlive 每 30s · 线性退避重连 ≤5 次（行号已过时，以代码为准）</p>
+  <div class="stale"><b>⚠ 图集已过期：</b>本图集最后同步于 <b>2026-10-08</b>，部分细节（file:line、容量常量、新功能）已滞后；现状以仓库根 <b>AGENTS.md</b> 为准。</div>
   <div class="fig">
   <svg viewBox="0 0 940 500" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
     <defs>
@@ -74,9 +78,10 @@
 
     <!-- note -->
     <text x="80" y="424" fill="#73777f" font-size="11" font-family="'Geist Mono',monospace">
-成功重连后原子替换池成员（pool.remove/add，JschSshClient:445-446），旧 session scope 一并取消（:451），keepAlive 重启。
-池级判定：任一 session 健康即视为整体可用；全部丢失才进入 Failed。
-Pool Failed → SshVpnService.observeJschConnectionState（:501）触发整体 autoReconnect（:590），带 10s 退避窗（POOL_FAIL_RECONNECT_BACKOFF_MS）防重连风暴。
+（注：图中及旧版的下行注释行号已过时，以代码为准）成功重连后原子替换池成员，旧 session scope 一并取消，keepAlive 重启。
+池级判定：三态探活 ROUND_TRIP_OK / UNAVAILABLE / FAILED —— UNAVAILABLE（exec 受限）不判死；全部丢失才进入 Failed。
+开通道预算两层：总 9s + 单候选 3s，开超时的会话后置 30s；全候选秒拒归为 INFO「远端不解析该目标」而非 ERROR。
+Pool Failed → SshVpnService.observeJschConnectionState 触发整体 autoReconnect，带 10s 退避窗（POOL_FAIL_RECONNECT_BACKOFF_MS）防重连风暴。
     </text>
 
     <!-- legend -->

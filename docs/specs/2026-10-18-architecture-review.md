@@ -1,5 +1,6 @@
 # 架构梳理与结构性优化评估（SSHInjector）
 
+> ⚠️ 历史记录（2026-10-18 的设计/审计/施工图）。描述当时发现的问题与计划，条目多数已实施或废弃；**勿当现状阅读**。当前事实以仓库根 `AGENTS.md` 为准。 文中 file:line 与 `writeToTun @Synchronized` 等状态均已失效（F-02 后单写者 TunWriter）。
 - 日期：2026-10-18
 - 范围：`app/src/main/java/cn/srv0/sshinjector/`（90 个 Kotlin 文件 / 23,228 行）
 - 定位：**架构层**梳理，不含功能缺陷（功能缺陷见 `2026-10-18-defect-audit.md`）

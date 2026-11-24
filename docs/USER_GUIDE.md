@@ -22,13 +22,14 @@
 ### 要求
 
 - Android 14 (API 34) 或更高
-- 一台支持 SSH 密钥认证的 VPS（OpenSSH 服务端）
+- 一台 Linux 服务器或 OpenWrt 设备，运行 OpenSSH 或 dropbear；App 内一键配置需要 root 或 sudo 权限
+- OpenSSH 需允许 TCP 转发（`AllowTcpForwarding yes`，默认开启）
 
 ### 安装 APK
 
 从 [GitHub Releases](https://github.com/tongtf/sshinjector/releases) 下载最新 APK 并安装。
 
-> Release APK 使用 debug keystore 签名，若之前安装过其他版本，请先卸载。
+> Release 与 Debug 统一使用共享 keystore 签名（CI 构建强制校验签名指纹）；本地未配置 `keystore.properties` / `KEYSTORE_*` 时会回退到本机 debug key 并打印告警，此时跨机器签名不一致，覆盖安装可能失败，需先卸载旧版。
 
 ### 从源码编译
 
@@ -38,34 +39,55 @@ export JAVA_HOME=/path/to/jdk-17
 
 git clone https://github.com/tongtf/sshinjector.git
 cd sshinjector
-./gradlew assembleDebug   # Debug APK（按平台 ABI 拆分，产物在 app/build/outputs/apk/debug/）
-./gradlew assembleRelease # Release APK（debug keystore 签名，按 ABI 拆分: arm64-v8a/armeabi-v7a/x86_64）
+./gradlew assembleDebug   # app/build/outputs/apk/debug/sshinjector-<版本>-<abi>-debug.apk
+./gradlew assembleRelease # app/build/outputs/apk/release/sshinjector-<版本>-<abi>.apk
+# ABI 只有 arm64-v8a / armeabi-v7a；AAB 在 app/build/outputs/bundle/release/
 ```
 
 ---
 
 ## 2. 快速开始
 
-1. **添加服务器**：主页 →「+」→ 填写服务器信息
-2. **生成密钥**：应用内生成 ECDSA P-256 密钥对（需生物识别授权）
-3. **部署公钥**：复制公钥到服务器 `~/.ssh/authorized_keys`
-4. **测试连接**：确认 SSH 认证通过
-5. **配置白名单**：选择要走代理的应用
-6. **连接 VPN**：主页点击「连接」，授权 VPN 权限
+1. **一键配置服务端（推荐）**：设置 → 服务器管理 → 右上角「+」→「一键服务器配置」；填服务器信息与 root/sudo 凭证，App 自动生成密钥并部署服务端
+2. **手动添加服务器**：首页「+」或服务器列表「+」→「手动添加」，填名称/主机/端口/用户名，再生成或导入密钥
+3. **部署公钥**：手动模式需复制公钥到服务器 `~/.ssh/authorized_keys`（一键配置已自动完成）
+4. **配置白名单**：选择要走代理的应用
+5. **连接 VPN**：主页点击「连接」，授权 VPN 权限
+6. **排障入口**：连接异常时到「设置 → 日志」复制或导出应用内日志
 
 ---
 
 ## 3. 服务器管理
 
-### 添加服务器
+### 一键配置服务端（推荐）
+
+> **入口**：设置 → 服务器管理 → 服务器列表页右上角「+」→「**一键服务器配置**」。
+> 注意：首页的「+」或列表页「+」→「手动添加」是手动路径，不是向导。
+
+| 步骤 | 要做什么 | 说明 |
+|------|----------|------|
+| 1. 服务器 | 名称、主机、SSH 端口（默认 22） | 主机名/IPv4/IPv6、端口、名称在保存前统一校验 |
+| 2. 登录 | 服务器上有 **root 或 sudo 权限**的用户名与密码 | 仅用于本次远程配置，**不入库**；免密 sudo 也可 |
+| 3. 配置 | 等待 6 个子步骤 | 检测权限 → 上传脚本并校验 SHA-256 → 上传公钥 → 执行脚本 → 验证 → 完成 |
+| 4. 完成 | 点「保存」 | 服务器登录用户名固定为 `sshproxy`，密钥别名指向向导自动生成的 ECDSA P-256 密钥 |
+
+向导自动生成密钥（设置里开启生物识别解锁时，该密钥也受生物识别保护），无需先去密钥管理页生成。脚本哈希在本机和远端双重校验，不一致立即中止并报「脚本完整性校验失败」；无 root/sudo 时落「仅本机配置」（仍生成密钥并允许保存，需自行部署公钥）。
+
+OpenSSH 上脚本自动完成：创建 `sshproxy` 账户（`nologin` + 锁定密码）、chroot 隔离（上级目录强制 root 拥有）、仅公钥认证、`authorized_keys` 加 immutable 锁、`Match User sshproxy` 加固块（改前备份、`sshd -t` 通过才重载）。
+
+> **OpenWrt / dropbear**：自动探测后端；dropbear 走基础模式（建号 + 仅公钥 + marker `/etc/dropbear/sshinjector.configured`），**无 chroot / `chattr +i` / sshd reload**，不改全局 dropbear 配置。安装 `openssh-server` 后脚本自动走完整加固。逐条命令、幂等性与回滚见 [server-setup.md](server-setup.md)。
+
+### 手动添加服务器
 
 | 字段 | 说明 |
 |------|------|
 | 名称 | 自定义名称，便于识别 |
 | 主机 | 服务器 IP 或域名 |
 | 端口 | SSH 端口（默认 22） |
-| 用户名 | SSH 登录用户 |
-| 密钥算法 | ECDSA P-256 / RSA 4096 / Ed25519 |
+| 用户名 | SSH 登录用户（手动模式填你自己的用户名） |
+| 密钥算法 | ECDSA P-256 / P-384 / RSA 4096 / Ed25519（可生成或导入） |
+
+手动模式需自行把公钥部署到 `~/.ssh/authorized_keys`，详见 [server-setup.md](server-setup.md)。
 
 ### 服务端要求
 
@@ -75,36 +97,32 @@ grep -E '^(AllowTcpForwarding|GatewayPorts)' /etc/ssh/sshd_config
 # AllowTcpForwarding yes
 ```
 
-### 一键部署（推荐）
-
-服务器列表页的「向导」可自动完成：创建专用 `sshproxy` 账户、chroot 隔离、密钥部署、sshd 加固。
-
 ---
 
 ## 4. 密钥管理
 
-- **生成**：应用内生成 ECDSA P-256 密钥对，私钥保存在 Android Keystore（硬件级隔离）
-- **导入**：从文件导入已有私钥（OpenSSH 格式）
+- **生成**：应用内生成 ECDSA P-256 密钥对，私钥保存在 Android Keystore（硬件级隔离）；也可选 P-384
+- **导入**：从文件导入已有私钥（OpenSSH 格式，含 Ed25519 / RSA）；导入密钥同样以 AES-256-GCM 加密存储，口令随密钥一并加密
 - **导出**：导出公钥（OpenSSH 格式）部署到服务器
 - **二维码**：通过二维码分享公钥
 
-> **安全**：私钥永不离开 Keystore，无法导出；所有签名操作需生物识别授权。
+> **安全**：私钥永不离开 Keystore，无法导出；开启「生物识别解锁」后，签名操作需指纹/面容授权。一键配置向导生成的密钥也遵循该设置。
 
 ---
 
 ## 5. 白名单配置
 
-- 搜索/浏览已安装应用
-- 勾选需要走代理的应用（**仅勾选的应用**流量会被拦截）
-- 支持分组与预设（仅浏览器 / 社交应用 / 自定义）
+- 搜索/浏览已安装应用，按「全部 / 已选 / 系统应用」筛选，支持全选/取消全选（作用于当前筛选集）
+- 勾选需要走代理的应用（**仅勾选的应用**流量进 TUN；非白名单模式下所有应用都走隧道）
+- 入口：设置 → 白名单；白名单增删后无需重连，VPN 接口会自动重建
 
 ### 三种流量模式
 
 | 模式 | 行为 |
 |------|------|
 | **普通模式（全部走隧道）** | 所有流量经 SSH 隧道 |
-| **白名单模式** | 仅勾选应用走隧道，其余直连 |
-| **域名分流** | 命中列表的域名走隧道，其余直连 |
+| **白名单模式** | 名单非空时仅勾选应用走隧道，其余直连；**名单为空时自动退化为本地 DNS 直连**（否则假 IP 无路由会导致断网） |
+| **域名分流** | 命中列表域名（假 IP）走隧道，未命中的真实 IP 直连，仅 DNS 经隧道 |
 
 ---
 
@@ -153,14 +171,29 @@ grep -E '^(AllowTcpForwarding|GatewayPorts)' /etc/ssh/sshd_config
 
 | 设置项 | 推荐值 | 说明 |
 |--------|--------|------|
-| MTU | 1500 | 低 MTU 可解决某些网络下的断流 |
-| 保活间隔 | 30s | SSH 心跳，防止服务端断开长连接 |
-| 连通性探测地址 | 默认 | 状态检测的 HTTP 端点；留空用默认（`http://www.msftconnecttest.com/connecttest.txt`，Microsoft NCSI，境内外出口都可访问），可换为自建 204/200 端点。切换节点后若探测持续失败，优先检查该端点是否被当前出口阻断 |
-| DNS 模式 | 远端解析 | 防 DNS 泄露；需服务端可访问公共 DNS |
+| MTU | 跟随服务器 | 可覆盖服务器设置（576-1500）；低 MTU 可解决某些网络下的断流 |
+| 保活间隔 | 跟随服务器 | SSH 心跳（0-3600s）；**填 0 = 关闭心跳**，不是"立即发送" |
+| 连通性探测地址 | 默认 | 留空用 `http://www.msftconnecttest.com/connecttest.txt`（Microsoft NCSI，境内外出口都可达），可换自建 204/200 端点；换节点后探测持续失败时优先检查该端点 |
+| DNS 模式 | 远端解析 | REMOTE/WHITELIST 回假 IP（`198.18.x.x`/`fd00::x`），域名留到 SSH 远端解析；SYSTEM/域名分流未命中走受保护 socket 本地解析 |
 | IPv6 | 开启 | 双栈网络，访问 IPv6 站点 |
 | 生物识别 | 开启 | 保护私钥，解锁需指纹/面容 |
-| 连接超时 | 15s | SSH 建立连接超时 |
-| 空闲超时 | 5min | 无流量连接自动清理 |
+| 域名访问统计 | — | 进入统计页；只在本会话内存聚合，不落盘，最高 20000 条 |
+| 域名列表 / 广告拦截 | — | 域名分流规则与广告拦截规则；统计页建议仅进待确认列表，复核后才应用 |
+
+> 连接超时（SSH 建连/通道）、空闲连接清理（5min）、健康探测周期（15s）等是内置常量，不在设置页暴露。
+
+### 域名访问统计（设置 → 域名访问统计）
+
+- 按域名记录 TCP 连接数、失败数、上下行字节、首末时间与本机归属的应用 uid；**频率口径是连接数，不是 DNS 查询数**
+- 「解析真实 IP」默认走本地受保护 socket；可开启远端解析开关（走池内 SSH 会话的 direct-tcpip 53/TCP 自组 DNS 报文），不可用时静默回退本地视角
+- 每行「广告」「代理」chip **只把域名放进待确认建议**，不直接改名单；在「建议复核」页逐条确认后应用，应用后可用 Snackbar 撤销
+- 支持搜索/排序/筛选与 CSV 导出（`Download/`）
+
+### 应用内日志（设置 → 日志）
+
+- 可复制到剪贴板或导出到 `Download/`；默认隐藏 DEBUG，顶部 DEBUG chip 放行
+- 日志末尾有「数据面快照」（周期 60s + 断开前强制一条）与「故障归因」汇总——**无 adb 时这是唯一的排障证据出口**
+- 快照里的「资源节」含 TUN 写队列、DNS 映射表占用、域名统计条数、UID 归属命中率；判读会话级计数要看两条快照之差
 
 ---
 
@@ -188,8 +221,13 @@ grep -E '^(AllowTcpForwarding|GatewayPorts)' /etc/ssh/sshd_config
 
 ### VPN 自环（白名单模式连接超时）
 
-- 白名单模式下应用自身不走 TUN 排除；若 SSH 连接超时而 `nc`/`ping` 正常，怀疑自环
-- 切换到普通模式验证
+- 普通模式会把本应用排除出 TUN（`addDisallowedApplication`）；白名单模式**不会**排除自己，应用自身流量也进 TUN，SSH 连接可能自环
+- 若 SSH 连接超时而 `nc`/`ping` 正常，先切到普通模式验证；QUIC/游戏等非 DNS UDP 本身不走隧道，属预期行为
+
+### 导出日志后再求助
+
+- 在「设置 → 日志」导出完整日志（含 DEBUG 更有帮助），附上：状态步骤、数据面快照、故障归因、发生时间
+- 日志里「隧道侧零回程」「隧道通道空转关闭」「回程窗口耗尽」「SSH 通道建立超时」等分别指向不同层级，按步骤归因再看快照计数，不要只看单条告警
 
 ---
 
@@ -206,19 +244,22 @@ grep -E '^(AllowTcpForwarding|GatewayPorts)' /etc/ssh/sshd_config
 ## 10. FAQ
 
 **Q: 支持哪些 SSH 密钥类型？**
-A: ECDSA P-256（推荐）、RSA 4096、Ed25519。
+A: ECDSA P-256（默认/推荐）、P-384、RSA 4096、Ed25519（导入）。
 
 **Q: 支持 HTTP/3 (QUIC) 吗？**
-A: 通过 SOCKS5 UDP ASSOCIATE 转发 UDP 流量（QUIC）。
+A: 不支持。本应用只有 TCP SOCKS5 代理，不实现 UDP ASSOCIATE；DNS（UDP:53）被拦截处理，其余 UDP（QUIC/游戏）进 TUN 后被丢弃并计数。QUIC 不因 ICMP 错误回退 TCP，相关应用会自行重试退避。
 
 **Q: 私钥可以导出吗？**
 A: 不可以。私钥保存在 Android Keystore，只能导出公钥。
 
 **Q: 需要 root 吗？**
-A: 不需要，使用 Android 官方 VpnService API。
+A: **手机不需要 root**，使用 Android 官方 VpnService API。但 App 内「一键服务器配置」需要**服务器上**的 root 或 sudo 权限；没有则只能手动部署公钥。
 
-**Q: Release APK 签名为什么是 debug？**
-A: 项目 Release 使用 debug keystore 签名，便于直接安装；上架 Play Console 需替换为正式签名。
+**Q: 一键配置在哪儿？首页「+」点进去没有向导？**
+A: 首页「+」是手动添加。向导在「设置 → 服务器管理 → 右上角「+」→「一键服务器配置」」。
+
+**Q: Release APK 为什么有时提示签名不一致？**
+A: 项目统一用仓库根 `keystore.properties`（或 `KEYSTORE_*` 环境变量）签名；本地未配置时会回退到本机 debug key 并告警，跨机器签名不同，覆盖安装失败需先卸载。CI 的 Release 构建强制共享 keystore 并校验签名指纹。
 
 ---
 

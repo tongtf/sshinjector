@@ -22,9 +22,10 @@
 </head>
 <body>
 <div class="wrap">
+<div style="margin:0 0 20px;padding:10px 14px;border:1px solid #d9a400;border-radius:8px;background:rgba(217,164,0,.08);font-size:12px;line-height:1.6">⚠ 本图最后同步于 <b>2026-10-08</b>，file:line、容量常量与新功能可能滞后；现状以仓库根 <b>AGENTS.md</b> 为准（见 <code>docs/diagrams/review-checklist.md</code>）。</div>
   <p class="eyebrow">FLOWCHART · PACKET</p>
   <h1>数据包处理流程</h1>
-  <p class="sub">VpnController.packetLoop → PacketProcessor 协议分派（VpnController.kt:460 · PacketProcessor.kt）</p>
+  <p class="sub">VpnController.packetLoop≈VpnController.kt:811 → processPacket≈:900 → PacketProcessor 协议分派</p>
   <div class="fig">
   <svg viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
     <defs>
@@ -70,13 +71,20 @@
     <text x="490" y="127" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">解析版本 · 提取目标 IP</text>
     <text x="490" y="141" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">version=0 时扫描 tun_pi ≤8B</text>
 
+    <!-- 定界 / 写 TUN 注记 -->
+    <text x="620" y="112" fill="#7a8399" font-size="9" font-family="'Geist Mono',monospace">多包定界：ipPacketTotalLength</text>
+    <text x="620" y="126" fill="#7a8399" font-size="9" font-family="'Geist Mono',monospace">IPv4 bytes[2..3] / IPv6 bytes[4..5]+40</text>
+    <text x="620" y="158" fill="#7a8399" font-size="9" font-family="'Geist Mono',monospace">回程写 TUN：TunWriter 单写者线程</text>
+    <text x="620" y="172" fill="#7a8399" font-size="9" font-family="'Geist Mono',monospace">write(控制包丢) / writeBlocking(数据)</text>
+
     <path d="M 390,220 L 490,180 L 590,220 L 490,260 Z" fill="#f8f9ff" stroke="#191c20" stroke-width="1"/>
     <text x="490" y="216" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">命中排除路由？</text>
     <text x="490" y="230" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">shouldBypassVpn</text>
 
     <path d="M 390,336 L 490,296 L 590,336 L 490,376 Z" fill="#f8f9ff" stroke="#191c20" stroke-width="1"/>
-    <text x="490" y="332" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">DOMAIN_SPLIT</text>
-    <text x="490" y="346" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">非假 IP 且白名单未命?</text>
+    <text x="490" y="332" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">DOMAIN_SPLIT 直连？</text>
+    <text x="490" y="346" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">transportMode==DOMAIN_SPLIT</text>
+    <text x="490" y="358" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">&amp;&amp; !isFakeIp(dstIp)</text>
 
     <path d="M 390,452 L 490,412 L 590,452 L 490,492 Z" fill="#f8f9ff" stroke="#191c20" stroke-width="1"/>
     <text x="490" y="448" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">协议</text>
@@ -94,13 +102,13 @@
 
     <rect x="700" y="440" width="200" height="48" rx="6" fill="#f8f9ff"/>
     <rect x="700" y="440" width="200" height="48" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
-    <text x="800" y="467" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">ICMPv6 / 其他</text>
-    <text x="800" y="481" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">responder 响应 / 透传</text>
+    <text x="800" y="467" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">ICMPv6 / 未知协议</text>
+    <text x="800" y="481" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">NDP NA 响应 / dropUnhandled 丢弃计数</text>
 
     <rect x="700" y="316" width="180" height="48" rx="6" fill="#f8f9ff"/>
     <rect x="700" y="316" width="180" height="48" rx="6" fill="rgba(25,28,32,0.05)" stroke="#535f70" stroke-width="1"/>
-    <text x="790" y="343" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">原样写回 TUN</text>
-    <text x="790" y="357" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">writeToTun 直连</text>
+    <text x="790" y="343" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">用户态直连</text>
+    <text x="790" y="357" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">受保护 socket · 不回注 TUN</text>
 
     <rect x="420" y="618" width="160" height="44" rx="20" fill="#f8f9ff"/>
     <rect x="420" y="618" width="160" height="44" rx="20" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
@@ -114,10 +122,12 @@
     <line x1="280" y1="686" x2="320" y2="686" stroke="#1565c0" stroke-width="1.2"/>
     <text x="328" y="689" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">TCP 主路径</text>
     <line x1="408" y1="686" x2="448" y2="686" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3"/>
-    <text x="456" y="689" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">直连 / 透传</text>
+    <text x="456" y="689" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">直连 / 丢弃计数</text>
   </svg>
   </div>
-  <p class="foot">SSHInjector · 排除路由与白名单直连不进入隧道；DOMAIN_SPLIT 下 TCP 全量直连、仅 53 端口 DNS 走隧道</p>
+  <p class="foot">SSHInjector · packetLoop≈:811 / processPacket≈:900 · 多包定界 ipPacketTotalLength（IPv6 取 bytes[4..5]+40，bytes[2..5] 是 flow label 不是长度）·
+    排除路由命中不回注 TUN，改走用户态直连/受保护 socket；白名单模式名单非空时应用流量仍进 TUN 走隧道（空名单才由 dnsTransportFor 退化为 SYSTEM 直连）·
+    DOMAIN_SPLIT 仅非假 IP 直连，命中列表走假 IP 隧道 · 未知协议 dropUnhandled 丢弃计数而非透传 · 回程写 TUN 收敛到 TunWriter 单写者线程</p>
 </div>
 </body>
 </html>

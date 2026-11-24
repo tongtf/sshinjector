@@ -1,6 +1,8 @@
 # Spec — 连接状态检测 / 步骤级健康归因 (connectivity-health)
 
-**Date:** 2026-09-30 · **批次:** B1 · **状态:** 定稿（brainstorm 4 项决策全按推荐）
+> ⚠️ **历史设计文档**（2026-09-30 定稿），只记录首版设计决策，**勿当现状**。当前实现已扩展：`HealthStep` 增加 `FORWARD`、分阶段健康（`StageCounters` / `StageHealthEvaluator`）、出口 IP 回显；探测「首字节即 EOF」现归 **TUNNEL** 而非本文第 40/62 行写的 REMOTE。现状以仓库根 `AGENTS.md` 为准。
+
+**Date:** 2026-09-30 · **批次:** B1 · **状态:** 历史定稿（brainstorm 4 项决策全按推荐；仅作设计意图记录）
 
 ## 需求
 

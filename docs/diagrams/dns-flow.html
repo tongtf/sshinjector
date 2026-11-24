@@ -22,9 +22,10 @@
 </head>
 <body>
 <div class="wrap">
+<div style="margin:0 0 20px;padding:10px 14px;border:1px solid #d9a400;border-radius:8px;background:rgba(217,164,0,.08);font-size:12px;line-height:1.6">⚠ 本图最后同步于 <b>2026-10-08</b>，file:line、容量常量与新功能可能滞后；现状以仓库根 <b>AGENTS.md</b> 为准（见 <code>docs/diagrams/review-checklist.md</code>）。</div>
   <p class="eyebrow">FLOWCHART · DNS</p>
   <h1>DNS 拦截流程</h1>
-  <p class="sub">DnsInterceptor 三种模式决策 · 假 IP 伪造 / 系统真实解析 / 非 A-AAAA 直查（DnsInterceptor.kt:233-326）</p>
+  <p class="sub">DnsInterceptor 四种模式决策（REMOTE / SYSTEM / WHITELIST / DOMAIN_SPLIT）· 假 IP / 真实解析 / 非 A-AAAA 直查（DnsInterceptor.kt processDnsQuery≈:545）</p>
   <div class="fig">
   <svg viewBox="0 0 1000 760" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
     <defs>
@@ -53,10 +54,10 @@
     <!-- labels -->
     <rect x="588" y="188" width="56" height="12" rx="2" fill="#f8f9ff"/>
     <text x="616" y="197" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">缓存命中</text>
-    <rect x="384" y="404" width="140" height="12" rx="2" fill="#f8f9ff"/>
-    <text x="454" y="413" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">REMOTE / WHITELIST</text>
-    <rect x="600" y="348" width="172" height="12" rx="2" fill="#f8f9ff"/>
-    <text x="686" y="357" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">SYSTEM / SPLIT 未命中</text>
+    <rect x="384" y="404" width="176" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="472" y="413" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">REMOTE / WHITELIST(非空)</text>
+    <rect x="600" y="348" width="200" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="700" y="357" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">SYSTEM / 空名单 / SPLIT 未命中</text>
     <rect x="128" y="504" width="96" height="12" rx="2" fill="#f8f9ff"/>
     <text x="176" y="513" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">假响应</text>
     <rect x="660" y="504" width="96" height="12" rx="2" fill="#f8f9ff"/>
@@ -78,20 +79,20 @@
 
     <path d="M 390,360 L 490,320 L 590,360 L 490,400 Z" fill="#f8f9ff" stroke="#191c20" stroke-width="1"/>
     <text x="490" y="356" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">走系统 DNS？</text>
-    <text x="490" y="370" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">SYSTEM / SPLIT 未命中</text>
+    <text x="490" y="370" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">SYSTEM / 空名单退化 / SPLIT 未命中</text>
     <text x="490" y="384" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">或 REMOTE 非 A-AAAA 直查</text>
 
     <rect x="100" y="440" width="220" height="56" rx="6" fill="#f8f9ff"/>
     <rect x="100" y="440" width="220" height="56" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
     <text x="210" y="465" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">假 IP 伪造</text>
-    <text x="210" y="479" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">A→198.18.x · AAAA→fd00::x</text>
-    <text x="210" y="491" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">ipToDomain[fake]=域名</text>
+    <text x="210" y="479" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">A→198.18.x · AAAA→fd00::x · TTL 5s</text>
+    <text x="210" y="491" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">ipToDomain[fake]=域名 · 按连接数配对</text>
 
     <rect x="700" y="440" width="200" height="56" rx="6" fill="#f8f9ff"/>
     <rect x="700" y="440" width="200" height="56" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
     <text x="800" y="465" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">系统 DNS 解析</text>
-    <text x="800" y="479" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">protect socket · 5s 超时</text>
-    <text x="800" y="491" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">恢复 ID · 建 ipToDomain</text>
+    <text x="800" y="479" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">protect socket · 上游排除 VPN · 5s</text>
+    <text x="800" y="491" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">恢复 ID · 建 realIpToDomain</text>
 
     <rect x="380" y="560" width="220" height="48" rx="6" fill="#f8f9ff"/>
     <rect x="380" y="560" width="220" height="48" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
@@ -114,7 +115,7 @@
     <text x="392" y="749" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">缓存 / 响应回程</text>
   </svg>
   </div>
-  <p class="foot">SSHInjector · 缓存 TTL 300s · 映射表上限 4096 · 清理周期 30s；SYSTEM 模式 DNS 走受保护 socket 绕过 VPN</p>
+  <p class="foot">SSHInjector · processDnsQuery≈DnsInterceptor.kt:545 · 四种模式（REMOTE/SYSTEM/WHITELIST/DOMAIN_SPLIT），空名单经 DnsTransportPolicy.dnsTransportFor 退化为 SYSTEM · 假 IP TTL 5s（非 300s）· 映射表上限 ipToDomain 16384 / realIpToDomain 8192 · 清理周期 30s + LRU · 假 IP 释放按活动连接数配对且有 60s 宽限期 · 受保护 socket 上游从 allNetworks 排除 TRANSPORT_VPN（白名单模式下 activeNetwork 就是本 VPN）· 缓存键带策略标签（cacheEntryKey）</p>
 </div>
 </body>
 </html>

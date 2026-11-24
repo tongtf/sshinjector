@@ -14,6 +14,9 @@
              letter-spacing:0.18em; text-transform:uppercase; color:var(--muted); margin:0; }
   h1 { font-family:'Instrument Serif',serif; font-weight:400; font-size:44px; margin:8px 0 4px; }
   .sub { color:var(--muted); font-size:15px; margin:0 0 24px; }
+  .stale { margin:0 0 24px; padding:12px 16px; border:1px solid #d9a400;
+           border-left:4px solid #d9a400; border-radius:6px; background:#fff8e1;
+           color:#6b4e00; font-size:13px; line-height:1.6; }
   .fig { border:1px solid var(--rule); border-radius:8px; padding:16px; overflow-x:auto; }
   svg { display:block; }
   .foot { margin-top:16px; font-family:'Geist Mono',monospace; font-size:11px;
@@ -25,6 +28,7 @@
   <p class="eyebrow">FLOWCHART · KEY MANAGEMENT</p>
   <h1>密钥管理流程</h1>
   <p class="sub">SshKeyManager 三来源 · Keystore 硬件密钥 / AES-GCM 落盘 · JSch 认证接入（SshKeyManager.kt:25-750）</p>
+  <div class="stale"><b>⚠ 图集已过期：</b>本图集最后同步于 <b>2026-10-08</b>，部分细节（file:line、容量常量、新功能）已滞后；现状以仓库根 <b>AGENTS.md</b> 为准。</div>
   <div class="fig">
   <svg viewBox="0 0 1000 760" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
     <defs>
@@ -116,7 +120,7 @@
     <rect x="380" y="560" width="220" height="48" rx="6" fill="#f8f9ff"/>
     <rect x="380" y="560" width="220" height="48" rx="6" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
     <text x="490" y="587" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">JSch 认证 · 签名</text>
-    <text x="490" y="601" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">EC→SHA256withECDSA</text>
+    <text x="490" y="601" fill="#73777f" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle">P-256: SHA256withECDSA · P-384: SHA384withECDSA</text>
 
     <!-- legend -->
     <line x1="24" y1="740" x2="976" y2="740" stroke="rgba(25,28,32,0.10)" stroke-width="0.8"/>

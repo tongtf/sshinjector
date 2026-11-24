@@ -23,9 +23,10 @@
 </head>
 <body>
 <div class="wrap">
+<div style="margin:0 0 20px;padding:10px 14px;border:1px solid #d9a400;border-radius:8px;background:rgba(217,164,0,.08);font-size:12px;line-height:1.6">⚠ 本图最后同步于 <b>2026-10-08</b>，file:line、容量常量与新功能可能滞后；现状以仓库根 <b>AGENTS.md</b> 为准（见 <code>docs/diagrams/review-checklist.md</code>）。</div>
   <p class="eyebrow">SEQUENCE · TCP DATA PATH</p>
   <h1>TCP 数据通路时序</h1>
-  <p class="sub">一条连接从 SYN 到双向中继 · 出向背压 + 回向直通</p>
+  <p class="sub">一条连接从 SYN 到双向中继 · 出向背压（Channel 128）+ 回向直通 · markEstablished 守卫 / 通道就绪后才发 SYN-ACK / 远端 clean EOF 走 FIN</p>
   <div class="fig">
   <svg viewBox="0 0 1100 800" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
     <defs>
@@ -80,7 +81,7 @@
     <line x1="360" y1="168" x2="596" y2="168" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
     <text x="432" y="162" class="msg">SocketChannel → 127.0.0.1:1080</text>
     <line x1="360" y1="208" x2="596" y2="208" stroke="#73777f" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dash)"/>
-    <text x="408" y="202" class="msg">registerTunCallback(localPort)</text>
+    <text x="408" y="202" class="msg">registerTunCallback / registerTargetEofCallback(localPort)</text>
     <line x1="360" y1="248" x2="596" y2="248" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
     <text x="416" y="242" class="msg">SOCKS5 握手 + CONNECT(域名/IP)</text>
     <line x1="600" y1="288" x2="816" y2="288" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow)"/>
@@ -88,9 +89,9 @@
     <line x1="820" y1="328" x2="996" y2="328" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow)"/>
     <text x="856" y="322" class="msg">channel.connect()</text>
     <line x1="600" y1="368" x2="364" y2="368" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
-    <text x="412" y="362" class="msg">rep=0 · Established</text>
+    <text x="412" y="362" class="msg">markEstablished 守卫 · rep=0 · Established</text>
     <line x1="360" y1="408" x2="124" y2="408" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
-    <text x="168" y="402" class="msg">SYN-ACK → TUN（MSS + 条件 WS 选项）</text>
+    <text x="168" y="402" class="msg">SYN-ACK → TUN（通道就绪后才发 · MSS + 条件 WS 选项）</text>
 
     <!-- outgoing data -->
     <line x1="120" y1="456" x2="356" y2="456" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
@@ -98,7 +99,7 @@
     <line x1="360" y1="496" x2="596" y2="496" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
     <text x="428" y="490" class="msg">forwardToSocks · 写 socket</text>
     <line x1="600" y1="536" x2="816" y2="536" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
-    <text x="660" y="530" class="msg">enqueueToSsh → Channel(256)</text>
+    <text x="660" y="530" class="msg">enqueueToSsh → Channel(128) · SSH_SEND_QUEUE_CAPACITY</text>
     <line x1="820" y1="576" x2="996" y2="576" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow)"/>
     <text x="852" y="570" class="msg">write + flush</text>
 
@@ -108,9 +109,9 @@
     <line x1="820" y1="656" x2="604" y2="656" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
     <text x="660" y="650" class="msg">relayFromTarget 读回向</text>
     <line x1="600" y1="696" x2="364" y2="696" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
-    <text x="424" y="690" class="msg">callback(data, off, len) · 零拷贝</text>
+    <text x="424" y="690" class="msg">callback(data, off, len) 零拷贝 · buffer 由 relay 循环持有不可保留</text>
     <line x1="360" y1="736" x2="124" y2="736" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
-    <text x="164" y="730" class="msg">awaitFlowCapacity 窗口闸门 → 写 TUN</text>
+    <text x="164" y="730" class="msg">awaitFlowCapacity → 批≤64 → TunWriter.writeBlocking（flowLock 锁外写）</text>
 
     <!-- legend -->
     <line x1="24" y1="768" x2="1076" y2="768" stroke="rgba(25,28,32,0.10)" stroke-width="0.8"/>
@@ -123,10 +124,12 @@
     <text x="400" y="777" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">回向直通</text>
   </svg>
   </div>
-  <p class="foot">SSHInjector · 出向背压：Channel(256) 满 → 单槽 pendingToSshBlock + 暂停 OP_READ（backpressureLock 保护单槽/标志/OP_READ 切换原子性；预读数据经 pendingConnectData 传递, buffer 不跨线程）→ loopback 满 →
+  <p class="foot">SSHInjector · 建连：SOCKS 通道就绪后 markEstablished 守卫（唯一建立入口，已 Closed 则就地关通道）才回 rep=0，SYN-ACK 在通道就绪后才发（MSS + 条件 WS）·
+    出向背压：toSshChannel = SSH_SEND_QUEUE_CAPACITY=128（Socks5ProxyServer.kt:46）满 → 单槽 pendingToSshBlock + 暂停 OP_READ（backpressureLock 保护单槽/标志/OP_READ 切换原子性；预读数据经 pendingConnectData 传递, buffer 不跨线程）→ loopback 满 →
     forwardToSocks 非阻塞写失败丢弃段 + 不回 ACK（浏览器 TCP 重传兜底, 不阻塞 packetLoop）；
-    回向 relay 跑 SshIoDispatcher, 回调 (data, off, len) 零拷贝, 组包每段 1 分配 1 拷贝；
-    回程写 TUN 前按客户端通告窗口限流（awaitFlowCapacity, flowLock 内 wait/notify、锁外写 TUN；零窗口靠 window update 唤醒, 关闭/ACK 段 notifyAll）</p>
+    回向 relay 跑 SshIoDispatcher, 回调 (data, off, len) 零拷贝（buffer 由 relay 循环持有、不可保留）, 组包每段 1 分配 1 拷贝；
+    registerTargetEofCallback(localPort) 与 registerTunCallback 同键，远端 clean EOF 由 relay 读到 -1 时 remove-and-invoke（幂等、先于 close）→ closeTcpConnection(graceful=true) 发 FIN+ACK；
+    回程写 TUN 前按窗口限流（awaitFlowCapacity, flowLock 内 wait/notify；零窗口靠 window update 唤醒, 关闭/ACK 段 notifyAll），每批 RETURN_BATCH_PACKETS=64 段经 TunWriter.writeBlocking 写出，TUN 写严格在 flowLock 锁外（避免与 packetLoop 锁序死锁）</p>
 </div>
 </body>
 </html>

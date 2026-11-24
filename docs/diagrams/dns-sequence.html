@@ -23,9 +23,10 @@
 </head>
 <body>
 <div class="wrap">
+<div style="margin:0 0 20px;padding:10px 14px;border:1px solid #d9a400;border-radius:8px;background:rgba(217,164,0,.08);font-size:12px;line-height:1.6">⚠ 本图最后同步于 <b>2026-10-08</b>，file:line、容量常量与新功能可能滞后；现状以仓库根 <b>AGENTS.md</b> 为准（见 <code>docs/diagrams/review-checklist.md</code>）。</div>
   <p class="eyebrow">SEQUENCE · DNS RESOLVE</p>
   <h1>DNS 解析时序</h1>
-  <p class="sub">REMOTE 假 IP 模式 vs SYSTEM 系统直连模式（DnsInterceptor.kt:404-461 · VpnController.dnsResponseDeliveryLoop）</p>
+  <p class="sub">REMOTE 假 IP vs SYSTEM/未命中直查（DnsInterceptor.kt sendDnsOverProtectedSocket≈:736 · VpnController.dnsResponseDeliveryLoop）· TTL 5s · 上游排除 VPN</p>
   <div class="fig">
   <svg viewBox="0 0 1060 580" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
     <defs>
@@ -74,17 +75,17 @@
     <line x1="440" y1="176" x2="696" y2="176" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
     <text x="516" y="170" class="msg">pendingResponses.trySend</text>
     <line x1="700" y1="216" x2="144" y2="216" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
-    <text x="216" y="210" class="msg">假响应写 TUN（TTL 300s）</text>
+    <text x="216" y="210" class="msg">假响应写 TUN（TTL 5s）</text>
 
     <!-- SYSTEM mode -->
     <line x1="140" y1="272" x2="436" y2="272" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
-    <text x="210" y="266" class="msg">DNS 查询（未命中列表）</text>
+    <text x="210" y="266" class="msg">DNS 查询（SPLIT 未命中 / 空名单 / REMOTE 非A）</text>
     <line x1="440" y1="312" x2="956" y2="312" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow)"/>
-    <text x="580" y="306" class="msg">protect socket · 绕过 VPN 直发</text>
+    <text x="580" y="306" class="msg">protect socket · 上游从 allNetworks 排除 VPN 网络</text>
     <line x1="960" y1="352" x2="444" y2="352" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow)"/>
     <text x="600" y="346" class="msg">真实响应（5s 超时）</text>
     <path d="M 444,392 H 436" fill="none" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
-    <text x="456" y="396" class="msg">恢复查询 ID · 缓存 · 建 ipToDomain</text>
+    <text x="456" y="396" class="msg">恢复查询 ID · 缓存 · 建 realIpToDomain</text>
     <line x1="440" y1="432" x2="696" y2="432" stroke="#535f70" stroke-width="1.2" marker-end="url(#arrow)"/>
     <text x="516" y="426" class="msg">pendingResponses.trySend</text>
     <line x1="700" y1="472" x2="144" y2="472" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
@@ -101,7 +102,9 @@
     <text x="400" y="545" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">TUN 交付</text>
   </svg>
   </div>
-  <p class="foot">SSHInjector · DOMAIN_SPLIT：命中列表走 REMOTE 假 IP，未命中走 SYSTEM；deliveryLoop 挂起于 Channel receiveCatching；断开时 clearPendingResponses 排空残留响应（防跨会话投递）</p>
+  <p class="foot">SSHInjector · 假 IP 应答 TTL 5s · 直查走 sendDnsOverProtectedSocket≈:736：上游从 allNetworks 排除 TRANSPORT_VPN，resolveLocally 再滤 TUN_IP（白名单模式下 activeNetwork 就是本 VPN，其 DNS 恒为 10.0.0.2）•
+    未命中列表语义不同：DOMAIN_SPLIT 未命中 → 直查真实 IP；WHITELIST 按启用包名分流（空名单经 dnsTransportFor 退化为 SYSTEM），非按域名列表•
+    deliveryLoop 挂起于 Channel receiveCatching；断开时 clearPendingResponses 排空残留响应（防跨会话投递）</p>
 </div>
 </body>
 </html>

@@ -14,6 +14,9 @@
              letter-spacing:0.18em; text-transform:uppercase; color:var(--muted); margin:0; }
   h1 { font-family:'Instrument Serif',serif; font-weight:400; font-size:44px; margin:8px 0 4px; }
   .sub { color:var(--muted); font-size:15px; margin:0 0 24px; }
+  .stale { margin:0 0 24px; padding:12px 16px; border:1px solid #d9a400;
+           border-left:4px solid #d9a400; border-radius:6px; background:#fff8e1;
+           color:#6b4e00; font-size:13px; line-height:1.6; }
   .fig { border:1px solid var(--rule); border-radius:8px; padding:16px; overflow-x:auto; }
   svg { display:block; }
   .foot { margin-top:16px; font-family:'Geist Mono',monospace; font-size:11px;
@@ -25,6 +28,7 @@
   <p class="eyebrow">STATE MACHINE · VPN</p>
   <h1>VPN 连接状态机</h1>
   <p class="sub">VpnController + SshVpnService — 实际流转；VpnStatus 仅保留 5 个使用态（死枚举已清理）</p>
+  <div class="stale"><b>⚠ 图集已过期：</b>本图集最后同步于 <b>2026-10-08</b>，部分细节（file:line、容量常量、新功能）已滞后；现状以仓库根 <b>AGENTS.md</b> 为准。</div>
   <div class="fig">
   <svg viewBox="0 0 1200 540" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
     <defs>
@@ -51,7 +55,7 @@
     <rect x="250" y="172" width="128" height="12" rx="2" fill="#f8f9ff"/>
     <text x="314" y="181" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">UI connect()</text>
     <rect x="500" y="172" width="148" height="12" rx="2" fill="#f8f9ff"/>
-    <text x="574" y="181" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">隧道+DNI 配置成功</text>
+    <text x="574" y="181" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">隧道+DNS 配置成功</text>
     <rect x="748" y="172" width="140" height="12" rx="2" fill="#f8f9ff"/>
     <text x="818" y="181" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">断开 / onRevoke / 网络</text>
     <rect x="936" y="284" width="96" height="12" rx="2" fill="#f8f9ff"/>
@@ -73,7 +77,7 @@
     <rect x="320" y="160" width="180" height="56" rx="8" fill="#f8f9ff"/>
     <rect x="320" y="160" width="180" height="56" rx="8" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
     <text x="410" y="188" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">Connecting</text>
-    <text x="410" y="204" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">隧道启动 · DNI 配置</text>
+    <text x="410" y="204" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">隧道启动 · DNS 配置</text>
 
     <rect x="580" y="160" width="180" height="56" rx="8" fill="#f8f9ff"/>
     <rect x="580" y="160" width="180" height="56" rx="8" fill="rgba(21,101,192,0.08)" stroke="#1565c0" stroke-width="1"/>
