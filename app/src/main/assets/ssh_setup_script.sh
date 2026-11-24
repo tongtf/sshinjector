@@ -20,7 +20,9 @@
 #                not supported by dropbear, so no per-user isolation is done;
 #                the global dropbear config (/etc/config/dropbear) is NOT
 #                modified. A marker file records that provisioning ran.
-set -euo pipefail
+# POSIX sh (dash on Debian/Ubuntu, ash on OpenWrt) has no `pipefail`.
+# Provisioner invokes this via `sh <script>`, so keep it strictly POSIX.
+set -eu
 
 # Fixed provisioning account (hardcoded, never parameterized).
 ACCT=sshproxy
