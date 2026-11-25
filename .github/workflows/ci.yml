@@ -6,9 +6,15 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main, develop]
+  # 允许手动对任意分支跑一遍 (feature 分支推送不触发本 workflow, 见测试说明)
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   GRADLE_OPTS: "-Xmx3072m -Dorg.gradle.jvmargs=-Xmx3072m -Dorg.gradle.workers.max=2 -Dkotlin.compiler.execution.strategy=in-process"
@@ -35,7 +41,9 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: "platforms;android-34 build-tools;34.0.0"
+          # 与 app/build.gradle.kts 的 compileSdk 对齐; 版本不一致时 AGP 会临时下载,
+          # 既慢又依赖 license 自动接受, 门禁应显式固定。
+          packages: "platforms;android-37.0 build-tools;37.0.0"
           cmdline-tools-version: latest
       
       - name: Cache Gradle
@@ -125,7 +133,9 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: "platforms;android-34 build-tools;34.0.0"
+          # 与 app/build.gradle.kts 的 compileSdk 对齐; 版本不一致时 AGP 会临时下载,
+          # 既慢又依赖 license 自动接受, 门禁应显式固定。
+          packages: "platforms;android-37.0 build-tools;37.0.0"
           cmdline-tools-version: latest
       
       - name: Cache Gradle
@@ -158,6 +168,11 @@ jobs:
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug
+
+      # PR 也编译 release: R8/ProGuard 问题只在 release 暴露, 不能等到打 tag 才发现。
+      # PR 不注入 release keystore → 走 debug-key 回退 (仅编译验证, 产物不发布)。
+      - name: Build Release APK (R8 smoke)
+        run: ./gradlew assembleRelease
       
       - name: Upload Debug APK
         uses: actions/upload-artifact@v5
@@ -192,7 +207,9 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: "platforms;android-34 build-tools;34.0.0"
+          # 与 app/build.gradle.kts 的 compileSdk 对齐; 版本不一致时 AGP 会临时下载,
+          # 既慢又依赖 license 自动接受, 门禁应显式固定。
+          packages: "platforms;android-37.0 build-tools;37.0.0"
           cmdline-tools-version: latest
       
       - name: Cache Gradle
@@ -273,7 +290,3 @@ jobs:
           body_path: RELEASE_NOTES.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
