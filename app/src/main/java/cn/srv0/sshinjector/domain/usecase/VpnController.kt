@@ -168,7 +168,10 @@ class VpnController
             // 不回收就是"端口 + 3 条 SSH 会话"跨会话泄漏, 而且新连接仍可能被派发到它。
             launch {
                 proxyExitRepository.allExitsFlow
-                    .map { list -> list.filter { it.enabled }.mapTo(HashSet()) { it.name } }
+                    // 注意: 这里用**全部**出口行 (含 disabled)。禁用出口由 onExitDisabled
+                    // 等空闲后回收, 不能在这里直接 stopExit —— 那会把已有连接全部 RST,
+                    // 违反"出口状态只影响新连接" (I-1)。
+                    .map { list -> list.mapTo(HashSet()) { it.name } }
                     .distinctUntilChanged()
                     .collect { desired ->
                         delay(EXIT_RECONCILE_DEBOUNCE_MS)
