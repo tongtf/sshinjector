@@ -50,7 +50,7 @@ interface ServerDao {
     suspend fun getAllBlocking(): List<ServerEntity>
 
     /**
-     * L7: 写入 + 激活单事务。existingId == -1 表示新建 (server.id 未赋值, 走 insert)。
+     * L7: 写入 + 激活单事务。existingId <= 0（-1 = 向导新建，0 = 无 id）表示新建 (走 insert)。
      * 中途失败不会留下"存了但没激活"的半状态。
      */
     @Transaction
@@ -60,7 +60,7 @@ interface ServerDao {
         activate: Boolean,
     ): Long {
         val id =
-            if (existingId == -1L) {
+            if (existingId <= 0L) {
                 insert(server)
             } else {
                 update(server)

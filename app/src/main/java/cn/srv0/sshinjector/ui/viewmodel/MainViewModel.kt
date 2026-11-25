@@ -125,6 +125,8 @@ class MainViewModel
             /** 隧道出口 IP (IP 回显, 会话级); "-" = 未取回/未连接。 */
             val exitIp: String = "-",
             val dnsMode: String = "",
+            /** 机器可读的 DNS 模式 (0..3, 见 DnsTransportPolicy), 供配色等逻辑判断; 文本仍用 [dnsMode]。 */
+            val dnsModeValue: Int = 0,
             val networkDetail: String = "-",
             // VPN 权限
             val vpnPermissionIntent: Intent? = null,
@@ -164,7 +166,9 @@ class MainViewModel
         private fun observeDnsModeChanges() {
             viewModelScope.launch {
                 settingsDataStore.dnsMode.collect { dnsModeValue ->
-                    _uiState.update { it.copy(dnsMode = dnsModeLabel(dnsModeValue, context)) }
+                    _uiState.update {
+                        it.copy(dnsMode = dnsModeLabel(dnsModeValue, context), dnsModeValue = dnsModeValue)
+                    }
                 }
             }
         }
@@ -197,6 +201,7 @@ class MainViewModel
                         deviceIpv4 = ipv4,
                         deviceIpv6 = ipv6,
                         dnsMode = dnsModeText,
+                        dnsModeValue = dnsModeValue,
                         networkDetail = networkDetailText,
                     )
                 }
@@ -608,16 +613,51 @@ class MainViewModel
                     action = SshVpnService.ACTION_CONNECT
                     putExtra(SshVpnService.EXTRA_SERVER_ID, serverId)
                 }
-            context.startForegroundService(intent)
+            try {
+                context.startForegroundService(intent)
+            } catch (e: Exception) {
+                // A10: 后台启动被系统限制 (FGS 配额/厂商省电) 时不能把异常抛到 UI 线程 ——
+                // 更糟的是乐观的 Connecting 已经写了, 不收回该服务器行会永久转圈。
+                _uiState.update {
+                    it.copy(
+                        serverConnectionStatus = clearConnectingStatus(it.serverConnectionStatus, serverId),
+                    )
+                }
+                VpnController.appLogThrottled(
+                    "启动 VPN 服务失败 · ${e.message} — 连接请求未送达",
+                    level = LogLevel.WARNING,
+                    throttleKey = "启动 VPN 服务失败",
+                )
+            }
         }
 
         fun disconnect() {
+            val previousStatus = _uiState.value.connectionStatus
             _uiState.update { it.copy(connectionStatus = "Disconnecting") }
             val intent =
                 Intent(context, SshVpnService::class.java).apply {
                     action = SshVpnService.ACTION_DISCONNECT
                 }
-            context.startService(intent)
+            try {
+                context.startService(intent)
+            } catch (e: Exception) {
+                // A10: 请求没送出去就必须回滚 —— 否则 UI 卡在 Disconnecting, 3s 后的兜底
+                // 仍会走同一条 startService 再失败一次, 用户没有任何可见原因。
+                val pending = _uiState.value.pendingConnectServerId
+                _uiState.update {
+                    it.copy(
+                        connectionStatus = previousStatus,
+                        pendingConnectServerId = null,
+                        serverConnectionStatus = clearConnectingStatus(it.serverConnectionStatus, pending),
+                    )
+                }
+                VpnController.appLogThrottled(
+                    "发送断开请求失败 · ${e.message} — VPN 状态未变更",
+                    level = LogLevel.WARNING,
+                    throttleKey = "发送断开请求失败",
+                )
+                return
+            }
             viewModelScope.launch {
                 kotlinx.coroutines.delay(3000)
                 if (_uiState.value.connectionStatus == "Disconnecting") {
@@ -628,7 +668,15 @@ class MainViewModel
                         Intent(context, SshVpnService::class.java).apply {
                             action = SshVpnService.ACTION_FORCE_DISCONNECT
                         }
-                    context.startService(forceIntent)
+                    try {
+                        context.startService(forceIntent)
+                    } catch (e: Exception) {
+                        VpnController.appLogThrottled(
+                            "发送强制断开请求失败 · ${e.message}",
+                            level = LogLevel.WARNING,
+                            throttleKey = "发送强制断开请求失败",
+                        )
+                    }
                 }
             }
         }
@@ -672,6 +720,7 @@ class MainViewModel
                         deviceIpv4 = ipv4,
                         deviceIpv6 = ipv6,
                         dnsMode = dnsModeText,
+                        dnsModeValue = dnsModeValue,
                     )
                 }
                 // 同时触发资源监控和 VPN 状态刷新

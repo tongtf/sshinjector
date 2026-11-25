@@ -37,6 +37,6 @@ class ServerDeleter
                     )
                 serverRepository.deleteServer(id)
                 plan.nextActiveId?.let { serverRepository.setActiveServer(it) }
-                if (plan.clearLastServerId) settingsDataStore.setLastServerId(0)
+                if (plan.clearLastServerId) settingsDataStore.clearLastServerId()
             }
     }

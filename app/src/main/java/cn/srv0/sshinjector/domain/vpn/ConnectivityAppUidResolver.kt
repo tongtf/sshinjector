@@ -79,7 +79,7 @@ class ConnectivityAppUidResolver
                 ThreadPoolExecutor.AbortPolicy(),
             ).apply { allowCoreThreadTimeOut(true) }
 
-        override fun request(
+        override fun enqueue(
             srcIp: ByteArray,
             srcPort: Int,
             dstIp: ByteArray,

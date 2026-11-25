@@ -5,6 +5,7 @@ import cn.srv0.sshinjector.domain.vpn.exit.ExitHealth
 import cn.srv0.sshinjector.domain.vpn.exit.ExitId
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -32,6 +33,9 @@ class TunnelManagerExitTest {
         val connects = CopyOnWriteArrayList<String>()
         val disconnects = CopyOnWriteArrayList<String>()
         val connectStarted = CompletableDeferred<Unit>()
+
+        /** 单一真相源 = 插件连接表; 快照必须在发布时取它 (P0-2)。 */
+        override var activeConnections: Int = 0
 
         override suspend fun connect(config: TunnelConfig): Result<Unit> {
             connects += exitId
@@ -219,6 +223,59 @@ class TunnelManagerExitTest {
             // 不存在的出口不得抛 (快照/巡检可能在出口已摘除后调用)
             manager.noteConnection("gone")
             manager.noteDegraded("gone", "x")
+        }
+
+    /**
+     * P0-2: UI 只消费 `exitsState` 的不可变快照, 所以"内容变了就必须真的发射"是硬约束 ——
+     * 发布的若是可变条目 (旧实现), `StateFlow` 永远认为值没变, chip 停在第一帧。
+     */
+    @Test
+    fun `exitsState emits a new snapshot when an exit health changes`() =
+        runBlocking {
+            val factory = FakeFactory()
+            val manager = TunnelManager(mapOf("socks5" to factory))
+            withTimeout(5_000) { manager.startExit("hk", "socks5", "hk", "hk.example.com", config()) }
+
+            // 用无界 Channel 收全部发射: 先收到"起步帧", 触发变更后**必须再收到一帧**。
+            // 不用 `drop(1).first()`: 那个写法要求订阅严格早于变更 (withTimeout 的子协程是**派发**上
+            // 事件循环的, 订阅可能晚于变更而把变更帧当成"第一帧"丢掉 → 5s 后超时失败)。
+            // 无界 Channel 不丢帧, 两种时序下断言都成立; 等待本身有界 (withTimeout 5s)。
+            val frames = Channel<List<TunnelManager.ExitSnapshot>>(Channel.UNLIMITED)
+            val collector = launch { manager.exitsState.collect { frames.trySend(it) } }
+
+            val before = withTimeout(5_000) { frames.receive() }
+            assertEquals("起步帧必须是未降级的", 0L, before.single { it.id == "hk" }.degradeTotal)
+
+            // noteDegraded 只记账 (health 由巡检在判定窗口内先改), 但快照内容变了就必须发射
+            manager.noteDegraded("hk", "SSH 池无活口")
+
+            val after = withTimeout(5_000) { frames.receive() }
+            val hk = after.single { it.id == "hk" }
+            assertEquals(1L, hk.degradeTotal)
+            assertEquals("SSH 池无活口", hk.lastError)
+            assertEquals("快照必须带展示名/服务器地址 (UI 不读 plugin)", "hk", hk.label)
+            assertEquals("hk.example.com", hk.serverHost)
+            assertEquals("health 仍由巡检改, 这里只锁'变更可见'", ExitHealth.Ready, hk.health)
+
+            collector.cancel()
+        }
+
+    /**
+     * `publishExitsNow()` 是给"直接改 `ActiveExit.health`/瞬时连接数"的路径 (健康巡检) 补帧用的:
+     * 快照里的连接数必须在发布那一刻从插件取, 而不是构造 `ActiveExit` 时的 0。
+     */
+    @Test
+    fun `publishExitsNow refreshes the connection count from the plugin`() =
+        runBlocking {
+            val factory = FakeFactory()
+            val manager = TunnelManager(mapOf("socks5" to factory))
+            withTimeout(5_000) { manager.startExit("hk", "socks5", "hk", "hk.example.com", config()) }
+
+            factory.created.single().activeConnections = 3
+            manager.publishExitsNow()
+
+            val hk = manager.exitsState.value.single { it.id == "hk" }
+            assertEquals("快照必须携带发布瞬间的活跃连接数", 3, hk.activeConnections)
         }
 
     @Test

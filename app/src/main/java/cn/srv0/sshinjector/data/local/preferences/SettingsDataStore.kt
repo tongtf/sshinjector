@@ -200,6 +200,17 @@ class SettingsDataStore
             context.dataStore.edit { it[KEY_LAST_SERVER_ID] = id }
         }
 
+        /**
+         * 清除"最后连接"记录 (I-8): 删键而不是写 0。
+         *
+         * 写 0 与"从未连接"在消费侧虽然等价 (`?: 0` / `> 0`), 但 `lastServerId: Flow<Long?>`
+         * 会让 UI/自启逻辑拿到一个**看起来像服务器 id** 的 0; 删键后语义唯一 = "没有记录"
+         * (BootReceiver 的 `?: 0` 与 autoReconnect 的 `== 0L` 都按未连接处理)。
+         */
+        suspend fun clearLastServerId() {
+            context.dataStore.edit { it.remove(KEY_LAST_SERVER_ID) }
+        }
+
         suspend fun setBiometricUnlock(enabled: Boolean) {
             context.dataStore.edit { it[KEY_BIOMETRIC_UNLOCK] = enabled }
         }
@@ -309,6 +320,39 @@ class SettingsDataStore
                     it.remove(KEY_ADBLOCK_RULES_FROM_STATS)
                 } else {
                     it[KEY_ADBLOCK_RULES_FROM_STATS] = rules
+                }
+            }
+        }
+
+        /**
+         * 三个统计名单键**一次 `edit` 写完** (I-9)。
+         *
+         * 拆成三次 edit 时, 进程在中间被杀会留下"广告规则已写、域名集合还没写"的半套状态;
+         * 撤销是按"应用前快照"整体回写, 半套状态会让下一轮撤销把另一半也覆盖错。
+         * `DataStore.edit` 本身是原子的 (单事务落盘), 一次写入同时保证"全有或全无"。
+         *
+         * @param ad 空/空白 = 移除该键 (与 [setAdBlockRulesFromStats] 同义)
+         */
+        suspend fun setStatsState(
+            ad: String,
+            added: Set<String>,
+            removed: Set<String>,
+        ) {
+            context.dataStore.edit {
+                if (ad.isBlank()) {
+                    it.remove(KEY_ADBLOCK_RULES_FROM_STATS)
+                } else {
+                    it[KEY_ADBLOCK_RULES_FROM_STATS] = ad
+                }
+                if (added.isEmpty()) {
+                    it.remove(KEY_DOMAIN_LIST_ADDED_FROM_STATS)
+                } else {
+                    it[KEY_DOMAIN_LIST_ADDED_FROM_STATS] = added
+                }
+                if (removed.isEmpty()) {
+                    it.remove(KEY_DOMAIN_LIST_REMOVED_FROM_STATS)
+                } else {
+                    it[KEY_DOMAIN_LIST_REMOVED_FROM_STATS] = removed
                 }
             }
         }

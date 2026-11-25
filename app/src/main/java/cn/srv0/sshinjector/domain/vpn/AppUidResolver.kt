@@ -28,13 +28,34 @@ interface AppUidResolver {
      * 返回的句柄**一定会完成**: 命中给 `>= 0`, 否则给 [NO_UID] (无能力 / 无归属 / 平台拒绝 /
      * 队列满 / 窗口暂停)。地址传**原始字节** (`InetAddress.address`; 长度 4/16 即地址族),
      * 避免在数据面线程上物化 `InetAddress`。
+     *
+     * **D-19**: 地址在这里**复制并校验**后再交给 [enqueue]。数据面传的是连接对象上复用的
+     * 缓存数组, 而查询跑在有界线程池里 (异步) —— 不复制的话调用方后续改写/复用它,
+     * 反查线程读到的是另一个目标; 长度校验把"传错数组"变成明确失败而不是静默查错五元组。
      */
     fun request(
         srcIp: ByteArray,
         srcPort: Int,
         dstIp: ByteArray,
         dstPort: Int,
-    ): UidRequest
+    ): UidRequest =
+        enqueue(
+            srcIp = copyAddressBytes(srcIp, "源"),
+            srcPort = srcPort,
+            dstIp = copyAddressBytes(dstIp, "目的"),
+            dstPort = dstPort,
+        )
+
+    /**
+     * 平台实现的入队点: **入参已是 [request] 复制的私有副本**, 实现可以安全地跨线程持有。
+     * 默认 = 立即完成 [NO_UID] (测试替身只覆写 [request] 即可)。
+     */
+    fun enqueue(
+        srcIp: ByteArray,
+        srcPort: Int,
+        dstIp: ByteArray,
+        dstPort: Int,
+    ): UidRequest = UidRequest.completed(NO_UID)
 
     /** 兼容入口: 只有拿到 (≥ 0) 才回调。新代码用 [request]。 */
     fun lookup(
@@ -69,6 +90,22 @@ interface AppUidResolver {
                 override fun diagnostics(): String = ""
             }
     }
+}
+
+/**
+ * D-19: 校验地址族并复制。
+ *
+ * @throws IllegalArgumentException 长度不是 4 (IPv4) 或 16 (IPv6) —— 数据面组装错误, 早失败
+ *   比在反查线程上拿一个错地址去查、再把归属记到别的域名上更好。
+ */
+private fun copyAddressBytes(
+    bytes: ByteArray,
+    label: String,
+): ByteArray {
+    require(bytes.size == 4 || bytes.size == 16) {
+        "${label}地址必须是 4 或 16 字节, 实际 ${bytes.size}"
+    }
+    return bytes.copyOf()
 }
 
 /**

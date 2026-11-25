@@ -277,6 +277,72 @@ class DnsInterceptorTest {
         assertEquals("fake ips must not be shared across domains (no duplicates)", threads, domains.toSet().size)
     }
 
+    /**
+     * F1: 内部查询 ID 必须落在 1..65535 并回绕到 1。
+     *
+     * 旧实现 `incrementAndGet()` 会越过 65535: 写进 DNS 头部时被 dnsjava 截断成低位
+     * (65536 → 0), 之后每条查询都是 ID 0 —— `pendingQueries` 互相覆盖, 应答投给错误的问题,
+     * 客户端因 ID 不符丢弃应答 (表现为解析超时, 而日志里看不出任何异常)。
+     */
+    @Test
+    fun `query id wraps from 65535 back to 1 (F1)`() {
+        val dns = DnsInterceptor()
+        dns.setQueryIdCounterForTest(0xFFFE)
+
+        assertEquals("65535 仍是合法 ID, 必须照常发出", 0xFFFF, dns.nextQueryIdForTest())
+        assertEquals("回绕目标必须是 1 (0 是'未设置', 且旧实现在 65536 处截断成 0)", 1, dns.nextQueryIdForTest())
+        assertEquals("回绕后继续 2、3…", 2, dns.nextQueryIdForTest())
+
+        // 旧实现残留的越界值 (>= 65536) 也必须被拉回合法区间, 不能继续截断
+        dns.setQueryIdCounterForTest(0x2_0000)
+        assertEquals(1, dns.nextQueryIdForTest())
+        dns.setQueryIdCounterForTest(0x1_0000)
+        assertEquals(1, dns.nextQueryIdForTest())
+
+        dns.setQueryIdCounterForTest(0)
+    }
+
+    /**
+     * I-14: 待投递应答队列必须有界 (2048), 满队列只计数 + 节流 WARNING, 不抛异常、不阻塞。
+     *
+     * 无界 Channel 在 TUN 投递停摆 (断连瞬间 / 客户端不收包) 时会让应答对象无限堆积;
+     * 有界后丢掉的应答由客户端重试补回, 但**必须可见** (`diagnostics()` 的 `应答丢弃 N`)。
+     */
+    @Test
+    fun `offerDnsResponse counts drops when the bounded queue is full (I-14)`() {
+        val dns = DnsInterceptor()
+        // pendingResponses 是 companion 级共享队列 —— 先清掉其它用例可能残留的应答
+        dns.clearPendingResponses()
+        val droppedBefore = dns.droppedDnsResponsesForTest()
+        val resp =
+            DnsInterceptor.DnsResponse(
+                srcIp = gatewayIp,
+                dstIp = clientIp,
+                dstPort = 40000,
+                data = ByteArray(0),
+            )
+
+        // 不写死容量: 一直塞到拒绝为止 (上界 4096 只用于避免死循环)。
+        // 注意: 拒绝发生在循环里那一次 (不能再用 while 条件多调一次, 否则计数 +2)。
+        var accepted = 0
+        var rejected = false
+        while (accepted < 4096) {
+            if (!dns.offerDnsResponseForTest(resp)) {
+                rejected = true
+                break
+            }
+            accepted++
+        }
+        assertEquals("有界队列容量应为 2048 (见 PENDING_RESPONSE_CAPACITY)", 2048, accepted)
+        assertTrue("队列满后必须拒绝入队", rejected)
+        assertEquals("满队列丢弃必须计数", droppedBefore + 1, dns.droppedDnsResponsesForTest())
+
+        // 收尾: 排空, 避免污染后续用例 (队列是 companion 共享的)
+        dns.clearPendingResponses()
+        assertTrue("排空后必须能重新入队", dns.offerDnsResponseForTest(resp))
+        dns.clearPendingResponses()
+    }
+
     private val clientIp: InetAddress = InetAddress.getByName("10.0.0.2")
     private val gatewayIp: InetAddress = InetAddress.getByName("10.0.0.2")
 

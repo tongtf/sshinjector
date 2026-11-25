@@ -37,6 +37,15 @@ class UdpRelay(
      */
     private val droppedByDstPort = ConcurrentHashMap<Int, Long>()
 
+    /**
+     * 丢弃日志的本地节流门 (上次打印时刻, 单位 ms)。
+     *
+     * 不能只用 `VpnController.appLogThrottled`: 它的实参在**调用前**求值, 于是每丢一个 UDP 包
+     * 都要跑一次 `portBreakdown()` (排序 + 拼接) 再把结果丢弃 —— QUIC 洪峰下是纯 CPU/GC 浪费。
+     * 这里先 CAS 抢窗口, 抢到的那一次才求值 + 打印 (窗口与旧行为一致, 仍是 [DROP_LOG_INTERVAL_MS])。
+     */
+    private val lastDropLogAt = AtomicLong(0)
+
     val droppedUdp: Long
         get() = droppedUdpCount.get()
 
@@ -76,17 +85,22 @@ class UdpRelay(
         if (IS_DEBUG) {
             Log.d(TAG, "UDP ${dstIp.hostAddress}:$dstPort dropped (UDP relay not supported)")
         }
-        // 应用内可见 (60s 节流, 走统一 appLogThrottled): Play/浏览器下载常走 HTTP/3(UDP)。日志措辞已修正:
+        // 应用内可见: 本地 CAS 门控 (窗口 = DROP_LOG_INTERVAL_MS), 只有抢到窗口的那一次才
+        // 做 portBreakdown() 与 appLog。**不再用 appLogThrottled**: 它无法阻止实参求值,
+        // 叠两层节流只会让"到底谁在节流"变得不可读。
+        // Play/浏览器下载常走 HTTP/3(UDP)。日志措辞已修正:
         // 旧文案"(应由应用回退 TCP)"是**未经验证的假设** —— QUIC 不会因 ICMP 错误回退
         // (RFC 9000 §8), 客户端只能靠自身重试退避, 实测可达数十秒, 期间表现为"卡住"。
-        VpnController.appLogThrottled(
-            "UDP 包丢弃累计 ${droppedUdpCount.get()} 个 — UDP 中继不支持," +
-                " 目的端口分布 ${portBreakdown()};" +
-                " 依赖 HTTP/3(QUIC/443) 的请求需等客户端自行回退 TCP, 期间表现为卡顿",
-            windowMs = DROP_LOG_INTERVAL_MS,
-            level = LogLevel.WARNING,
-            throttleKey = "UDP 包丢弃",
-        )
+        val now = System.currentTimeMillis()
+        val last = lastDropLogAt.get()
+        if (now - last >= DROP_LOG_INTERVAL_MS && lastDropLogAt.compareAndSet(last, now)) {
+            VpnController.appLog(
+                "UDP 包丢弃累计 ${droppedUdpCount.get()} 个 — UDP 中继不支持," +
+                    " 目的端口分布 ${portBreakdown()};" +
+                    " 依赖 HTTP/3(QUIC/443) 的请求需等客户端自行回退 TCP, 期间表现为卡顿",
+                level = LogLevel.WARNING,
+            )
+        }
         return true
     }
 

@@ -137,8 +137,10 @@ class ServerEditViewModel
                 try {
                     serverRepository.saveServerEdit(serverId, config, setAsDefault)
                 } catch (e: Exception) {
-                    // 加密失败不降级为明文——保存中止并提示重试，绝不落明文
-                    _error.tryEmit("加密失败，请重试: ${e.message}")
+                    // I-7/R9: 异常文案已是人话 ("服务器已被删除" / 加密失败的具体原因),
+                    // 统一提示原文; 不再固定套"加密失败"前缀 (会把并发删除说成加密问题)。
+                    // 无论哪种异常都中止保存 —— 加密失败绝不降级为明文落库。
+                    _error.tryEmit(e.message ?: "保存失败")
                     return@launch
                 }
                 _saved.value = true

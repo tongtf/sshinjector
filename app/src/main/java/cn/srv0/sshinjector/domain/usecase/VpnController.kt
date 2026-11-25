@@ -49,6 +49,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -163,11 +164,28 @@ class VpnController
         /** TUN 接口为空时被整包跳过的计数 —— 隧道看似在线但流量全被吞, 必须进快照可见。 */
         private val droppedNoTun = AtomicLong(0)
 
-        // 用于 SYSTEM 模式 DNS 绕过的 socket 保护函数
-        private var protectDatagramChannel: ((DatagramSocket) -> Boolean)? = null
+        // 用于 SYSTEM 模式 DNS 绕过的 socket 保护函数。
+        // @Volatile (I-2): 由 SshVpnService 在 connect 前注入, 而 DNS bypass 线程在 executor 上读它
+        // —— 不加 @Volatile 时那条线程可能永远看不到注入值, 查询落回 VPN 回环 (静默 5s 超时)。
+        @Volatile private var protectDatagramChannel: ((DatagramSocket) -> Boolean)? = null
 
         // F1: TCP 用户态直连的 protect (必须在 connect 前调用, 由 SshVpnService 注入)
         @Volatile private var protectTcpSocket: ((java.net.Socket) -> Boolean)? = null
+
+        /**
+         * 出口对账专用 scope (P0-1)。
+         *
+         * 必须**独立于本类的 CoroutineScope**: `disconnect()`/`forceReset()` 会
+         * `coroutineContext.cancelChildren()`, 把 `init` 里的 collector 一起干掉 —— 那之后
+         * "服务器被删除 → 运行中的出口回收" 这条对账在**本进程剩余生命周期内永久失效**,
+         * 泄漏的端口 + 3 条 SSH 会话再也没人收 (且没有任何可见迹象)。
+         * 它只观察出口表并调用幂等的 `stopExit`, 与连接会话无关, 因此不随会话取消。
+         * SupervisorJob: 单次 collect 抛异常不会终止整个对账。
+         *
+         * 声明顺序: 必须在 `init` **之前** —— Kotlin 的初始化块按声明顺序执行, 反了会在
+         * `reconcilerScope` 还是 null 时被 init 里的 launch 访问。
+         */
+        private val reconcilerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
         init {
             // TCP bypass 策略实时读 excludedRoutes/transportMode (无需随配置变化重挂)
@@ -177,7 +195,8 @@ class VpnController
             setAppLogSink { message, level -> addLog(message, level) }
             // 出口对账: 服务器删除会由外键级联删掉 proxy_exits, 但运行中的隧道对象不会自己消失。
             // 不回收就是"端口 + 3 条 SSH 会话"跨会话泄漏, 而且新连接仍可能被派发到它。
-            launch {
+            // P0-1: 跑在 reconcilerScope 上 —— 不能被 disconnect() 的 cancelChildren() 取消。
+            reconcilerScope.launch {
                 proxyExitRepository.allExitsFlow
                     // 注意: 这里用**全部**出口行 (含 disabled)。禁用出口由 onExitDisabled
                     // 等空闲后回收, 不能在这里直接 stopExit —— 那会把已有连接全部 RST,
@@ -299,8 +318,13 @@ class VpnController
         private var currentServer: ServerConfig? = null
 
         @Volatile private var isRunning = false
-        private var excludedRoutes: List<CidrRoute> = emptyList()
-        private var transportMode: DnsInterceptor.DnsTransport = DnsInterceptor.DnsTransport.REMOTE
+
+        // I-2: packetLoop (读) 与 connect/updateDnsMode (写) 在不同线程, 不加 @Volatile 时
+        // 数据包循环可能长期读到空的排除路由/旧的传输模式 → 该直连的被塞进隧道 (或反之)。
+        @Volatile private var excludedRoutes: List<CidrRoute> = emptyList()
+
+        /** 只经本字段读写 (I-2); 外部消费者一律走 [dnsInterceptor.setTransportMode]。 */
+        @Volatile private var transportMode: DnsInterceptor.DnsTransport = DnsInterceptor.DnsTransport.REMOTE
 
         // 白名单模式 (dnsMode=2) 的启用应用; 空名单 → DNS 退化为本地直连解析 (见 dnsTransportFor)
         @Volatile private var whitelistPackages: List<String> = emptyList()
@@ -494,6 +518,13 @@ class VpnController
             // 新一轮连接: 分阶段计数与评估窗口清零, 避免上一会话的增量污染本轮归因
             StageCounters.reset()
             stageEvaluator.reset()
+            // I-6: TUN 丢弃计数是**进程级** AtomicLong, 不清零会让新会话的快照带着上一会话的
+            // 累计值 (无 adb 现场判读"刚连上就丢了 5MB"会被严重带偏)。清零发生在会话开始,
+            // 而快照取样在 disconnect 之前 (R8), 两者无交叉。
+            droppedTunControlPackets.set(0)
+            droppedTunControlBytes.set(0)
+            trailingBytesDropped.set(0)
+            droppedNoTun.set(0)
             // 故障归因按会话清零: "本会话 N 类 M 次" 必须名副其实
             AppMetrics.resetSession()
             // 新一轮连接: 清掉上一次的健康归因/出口 IP/流程阶段, 重新从"未验证"开始
@@ -672,6 +703,12 @@ class VpnController
                 packetLoopJob = launch { packetLoop(++tunGeneration) }
 
                 Result.success(Unit)
+            } catch (e: CancellationException) {
+                // I-5: 取消 ≠ 连接失败。必须走完整清理并原样上抛 —— 折进下面的 catch (Exception)
+                // 会被记成 ERROR「连接失败」并吞掉取消语义 (调用方以为会话仍在建)。
+                // NonCancellable: 清理链本身不能再被同一个取消打断 (stopAll 是 suspend)。
+                withContext(NonCancellable) { disconnect() }
+                throw e
             } catch (e: Exception) {
                 addLog("连接失败: ${e.message}", LogLevel.ERROR)
                 disconnect()
@@ -1713,6 +1750,10 @@ class VpnController
                     }
 
                     val payload = packetData.copyOfRange(payloadStart, packetData.size)
+                    // F8: 请求的 DNS 事务 ID (DNS 报文前 2 字节)。响应必须回同一个 ID ——
+                    // 受保护 socket 上可能收到上一次查询的迟到应答/串包, 不校验就会把**别的查询的
+                    // 答案**当成这次的结果写回 TUN (客户端看到解析结果错乱且毫无线索)。
+                    val queryId = IpPacketParser.readU16(payload, 0)
 
                     val dnsServer = dstIp.hostAddress
                     val packet =
@@ -1730,8 +1771,9 @@ class VpnController
                     }
                     socket!!.send(packet)
 
-                    // 接收响应
-                    val responseBuf = ByteArray(512)
+                    // 接收响应 (F8: 512 → 4096, 与受保护 socket 的一致 —— 512 会截断带 EDNS/多条
+                    // 记录/TXT 的应答, 截断后的报文解析必失败, 而客户端只看到"解析不到")
+                    val responseBuf = ByteArray(4096)
                     val responsePacket = java.net.DatagramPacket(responseBuf, responseBuf.size)
                     socket!!.receive(responsePacket)
                     val responseData = responseBuf.copyOfRange(0, responsePacket.length)
@@ -1741,6 +1783,18 @@ class VpnController
                                 "(${responseData.size}B)",
                             LogLevel.DEBUG,
                         )
+                    }
+                    // F8: 事务 ID 校验 (writeToTun 之前)。queryId < 0 = 请求报文过短/非法, 无从校验, 放行。
+                    val responseId = IpPacketParser.readU16(responseData, 0)
+                    if (queryId >= 0 && responseId != queryId) {
+                        val actual = if (responseId >= 0) "0x%04x".format(responseId) else "报文过短"
+                        appLogThrottled(
+                            "DNS 旁路响应丢弃 · 响应ID不匹配 — 期望 0x${"%04x".format(queryId)}" +
+                                " / 实际 $actual ($dnsServer)",
+                            level = LogLevel.WARNING,
+                            throttleKey = "DNS 旁路响应ID不匹配",
+                        )
+                        return@submit
                     }
 
                     // 从复制的原始包提取源 IP 和源端口
@@ -1975,6 +2029,10 @@ class VpnController
                 if (decision.health != exit.health) {
                     exit.health = decision.health
                     exit.degradedSince = if (decision.health == ExitHealth.Degraded) now else 0L
+                    // A 批的显式发布入口: DEGRADED/RECOVERED 也会经下面的 noteDegraded/
+                    // noteRecovered 各发布一次 (幂等, 只是多一次 ≤5 条的快照列表); 这里补的是
+                    // "health 变了但 change 仍为 NONE" 的窗口, 否则 chip 停在旧健康态。
+                    tunnelManager.publishExitsNow()
                 }
                 when (decision.change) {
                     ExitHealthChange.DEGRADED -> {

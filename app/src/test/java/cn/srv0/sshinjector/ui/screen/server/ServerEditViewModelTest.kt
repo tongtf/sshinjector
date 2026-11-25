@@ -9,12 +9,15 @@ import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -78,6 +81,28 @@ class ServerEditViewModelTest {
             verify(serverRepository).saveServerEdit(eq(-1L), captor.capture(), eq(true))
             assertEquals("secret", captor.firstValue.password)
             assertTrue(done)
+        }
+
+    @Test
+    fun `save surfaces repository error message instead of a fixed crypto prefix`() =
+        runTest {
+            Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+            // I-7/R9: 并发删除由 Repository 抛 IllegalStateException, UI 必须显示原因本身
+            whenever(serverRepository.saveServerEdit(any(), any(), any()))
+                .thenThrow(IllegalStateException("服务器已被删除"))
+
+            val messages = mutableListOf<String>()
+            val collector =
+                launch(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.error.collect { messages += it }
+                }
+            var done = false
+            viewModel.save(7, config(id = 7), { done = true })
+            testScheduler.advanceUntilIdle()
+            collector.cancel()
+
+            assertEquals(listOf("服务器已被删除"), messages)
+            assertFalse(done)
         }
 
     @Test

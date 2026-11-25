@@ -235,7 +235,111 @@ class TcpWindowGateTest {
         }
     }
 
+    /**
+     * F4: 回程批量写失败时只回退计数、不关连接 —— 组包时 `serverSeq` 已推进, 失败段及其后
+     * 所有段在客户端看来都是乱序/重复 (本栈无重传), 下行永久停在 0, 只能挂到 300s 陈旧清理。
+     * 修复语义: 锁外关闭连接 (RST), 让客户端立刻重连。
+     */
+    @Test
+    fun `failed return batch closes the connection instead of leaving a seq hole (F4)`() {
+        val server = FakeSocksServer()
+        val plugin = FakeSocksPlugin(server.port)
+        val tunPackets = CopyOnWriteArrayList<ByteArray>()
+        val sink = FailingBatchSink(tunPackets)
+        val sm = newStateMachine(plugin, tunPackets, sink = sink)
+        try {
+            sendSyn(sm, clientIp, serverIp)
+            assertTrue("handshake must reach SYN-ACK", awaitUntil { tunPackets.any(::isSynAck) })
+            assertTrue("tun callback must register", awaitUntil { plugin.tunCallback != null })
+            assertTrue(server.awaitConnect(5, TimeUnit.SECONDS))
+            val isn = readIsn(tunPackets.first(::isSynAck), ipHeader = 20)
+            sendAckWindow(sm, clientIp, serverIp, ack = isn + 1, window = 65535)
+
+            sink.failBatch = true
+            tunPackets.clear()
+            val payload = ByteArray(500) { 4 }
+            val (_, done) = injectAsync(plugin, payload)
+            assertTrue("injection must return after the batch failure", done.await(5, TimeUnit.SECONDS))
+            assertTrue(
+                "failed batch must close the connection with RST (otherwise the seq hole is permanent)",
+                awaitUntil { tunPackets.any(::isRst) },
+            )
+
+            // 条目必须释放: 同五元组新 SYN 重建并补发 SYN-ACK
+            tunPackets.clear()
+            sink.failBatch = false
+            sendSyn(sm, clientIp, serverIp)
+            assertTrue(
+                "entry must be removed after a failed-batch close so a new SYN rebuilds",
+                awaitUntil { tunPackets.any(::isSynAck) },
+            )
+        } finally {
+            server.close()
+        }
+    }
+
+    /**
+     * F5: 畸形 `dataOffset` 必须在读选项/计算载荷之前丢弃。
+     *
+     * 旧实现: `dataOffset < 20` 把 TCP 头当载荷转发; `dataOffset > payloadLength` 让
+     * `position(payloadStart + dataOffset)` / 选项解析越界抛异常 —— 本函数跑在 packetLoop
+     * 单线程上, 一次异常 = 整条数据面停摆。正常内核不会造这种包, 但加固成本近似为零。
+     */
+    @Test
+    fun `malformed TCP dataOffset is dropped before option parsing (F5)`() {
+        val server = FakeSocksServer()
+        val plugin = FakeSocksPlugin(server.port)
+        val tunPackets = CopyOnWriteArrayList<ByteArray>()
+        val sm = newStateMachine(plugin, tunPackets)
+        try {
+            // dataOffset = 0 (< 20)
+            val zeroOffset = rawTcpSegment(flags = 0x02, seq = 12345, dataOffsetNibble = 0)
+            val accepted1 =
+                sm.processTcpPacket(
+                    ByteBuffer.wrap(zeroOffset).order(ByteOrder.BIG_ENDIAN),
+                    IpPacketParser.ParsedPacket(clientIp, serverIp, 6, 0, zeroOffset.size),
+                )
+            assertFalse("dataOffset<20 must be rejected", accepted1)
+
+            // dataOffset = 15 (60B) > payloadLength (20B)
+            val overlong = rawTcpSegment(flags = 0x10, seq = 12345, dataOffsetNibble = 15)
+            val accepted2 =
+                sm.processTcpPacket(
+                    ByteBuffer.wrap(overlong).order(ByteOrder.BIG_ENDIAN),
+                    IpPacketParser.ParsedPacket(clientIp, serverIp, 6, 0, overlong.size),
+                )
+            assertFalse("dataOffset>payloadLength must be rejected", accepted2)
+
+            Thread.sleep(200)
+            assertTrue("malformed segments must not create a connection or emit packets", tunPackets.isEmpty())
+            val diag = sm.diagnostics()
+            assertTrue("malformed drops must be counted in the snapshot: $diag", !diag.contains("畸形 TCP 0"))
+        } finally {
+            server.close()
+        }
+    }
+
     // ------------------------------------------------------------------ helpers
+
+    /** 畸形 TCP 段 (只有 20B 固定头, dataOffset 字段可任意设置)。 */
+    private fun rawTcpSegment(
+        flags: Int,
+        seq: Int,
+        dataOffsetNibble: Int,
+    ): ByteArray =
+        ByteBuffer
+            .allocate(20)
+            .order(ByteOrder.BIG_ENDIAN)
+            .apply {
+                putShort(srcPort.toShort())
+                putShort(dstPort.toShort())
+                putInt(seq)
+                putInt(0)
+                putShort(((dataOffsetNibble shl 12) or flags).toShort())
+                putShort(65535.toShort())
+                putShort(0)
+                putShort(0)
+            }.array()
 
     /**
      * 上行记账与 ACK 号一致性 (乱序回归)。
@@ -503,12 +607,13 @@ class TcpWindowGateTest {
         plugin: TunnelPlugin,
         tunPackets: CopyOnWriteArrayList<ByteArray>,
         dnsInterceptor: DnsInterceptor? = null,
+        sink: TunSink? = null,
     ): TcpStateMachine {
         val tunnelManager = mock<TunnelManager>()
         whenever(tunnelManager.getActiveOrFallback()).thenReturn(plugin)
         return TcpStateMachine(
             tunnelManager,
-            { tunSinkOf { p: ByteArray -> tunPackets.add(p) } },
+            { sink ?: tunSinkOf { p: ByteArray -> tunPackets.add(p) } },
             PacketStats(),
             SshIoDispatcher(),
         ).also { if (dnsInterceptor != null) it.setDnsInterceptor(dnsInterceptor) }
@@ -631,6 +736,36 @@ class TcpWindowGateTest {
         val ipHeader = if (p[0].toInt() shr 4 == 6) 40 else 20
         if (p.size < ipHeader + 14) return false
         return (p[ipHeader + 13].toInt() and 0xFF) == 0x12
+    }
+
+    private fun isRst(p: ByteArray): Boolean {
+        if (p.size < 34) return false
+        val ipHeader = if (p[0].toInt() shr 4 == 6) 40 else 20
+        if (p.size < ipHeader + 14) return false
+        return (p[ipHeader + 13].toInt() and 0x04) != 0
+    }
+
+    /** F4 替身: `writeBlockingBatch` 可以整体失败 (等价于 TUN 写线程会话关闭/写失败)。 */
+    private class FailingBatchSink(
+        private val captured: MutableList<ByteArray>,
+    ) : TunSink {
+        @Volatile var failBatch: Boolean = false
+
+        override fun write(data: ByteArray): Boolean {
+            captured.add(data)
+            return true
+        }
+
+        override fun writeBlocking(data: ByteArray): Boolean {
+            captured.add(data)
+            return true
+        }
+
+        override fun writeBlockingBatch(packets: List<ByteArray>): Boolean {
+            if (failBatch) return false
+            captured.addAll(packets)
+            return true
+        }
     }
 
     /** 有 TCP payload 的数据段 (排除 SYN/RST/FIN 与纯 ACK)。IPv4/IPv6 布局: TCP 头在 ipHeader 偏移。 */

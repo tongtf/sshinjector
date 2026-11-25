@@ -58,9 +58,12 @@ class StatsListApplier
             )
 
         private suspend fun writeState(state: StatsListOps.State) {
-            settings.setAdBlockRulesFromStats(state.adBlockRulesFromStats)
-            settings.setDomainListAddedFromStats(state.domainListAdded)
-            settings.setDomainListRemovedFromStats(state.domainListRemoved)
+            // I-9: 三个键一次写完, 避免中途被杀留下"广告规则已写、域名集合没写"的半套状态
+            settings.setStatsState(
+                ad = state.adBlockRulesFromStats.orEmpty(),
+                added = state.domainListAdded,
+                removed = state.domainListRemoved,
+            )
         }
 
         private suspend fun reload(touchedAdBlock: Boolean) {

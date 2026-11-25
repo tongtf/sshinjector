@@ -216,15 +216,69 @@ class TcpCloseBannerTest {
         }
     }
 
+    /**
+     * F3: SYN-ACK 走**非阻塞** `TunSink.write` (队列满即丢)。旧实现无条件置 `synAckWritten`:
+     * 写失败时客户端仍在 SYN_SENT, 而回程闸门以为它已收到 → banner 直写 TUN 被客户端丢弃,
+     * `serverSeq` 却已推进, 本栈无重传 → 该段永久丢失, 连接卡到 300s 陈旧清理。
+     *
+     * 本用例锁死修复语义: 写失败 → 回程继续排队 (TUN 上一个字节都不出); SYN 重传补发成功
+     * 之后才放行, 且顺序严格在 SYN-ACK 之后。
+     */
+    @Test
+    fun `failed SYN-ACK write keeps the banner queued until SYN retransmit (F3)`() {
+        lateinit var plugin: FakeSocksPlugin
+        val banner = "SSH-2.0-testserver\r\n".toByteArray()
+        val server =
+            FakeSocksServer(
+                beforeConnectReply = { plugin.tunCallback?.invoke(banner, 0, banner.size) },
+            )
+        plugin = FakeSocksPlugin(server.port)
+        val tunPackets = CopyOnWriteArrayList<ByteArray>()
+        val sink = SynAckDroppingSink(tunPackets)
+        val sm = newStateMachine(plugin, tunPackets, sink)
+
+        try {
+            sendSyn(sm)
+            assertTrue(
+                "SYN-ACK 写点必须真的被执行 (模拟 TUN 队列满)",
+                sink.synAckAttempt.await(5, TimeUnit.SECONDS),
+            )
+            // 写失败不置 synAckWritten: banner 必须仍留在 pendingReturn, 不得写 TUN
+            Thread.sleep(300)
+            assertTrue(
+                "failed SYN-ACK must keep return data queued (nothing may precede the SYN-ACK)",
+                tunPackets.none(::containsBanner),
+            )
+
+            // 客户端重传 SYN (同一 seq): 补发成功后才放行缓存, 且 banner 必须在 SYN-ACK 之后
+            sink.dropSynAck = false
+            sendSyn(sm)
+            assertTrue("retransmitted SYN must be answered", awaitUntil { tunPackets.any(::isSynAck) })
+            assertTrue(
+                "queued banner must flush after a successful SYN-ACK",
+                awaitUntil { tunPackets.any(::containsBanner) },
+            )
+            val synAckIdx = tunPackets.indexOfFirst(::isSynAck)
+            val bannerIdx = tunPackets.indexOfFirst(::containsBanner)
+            assertTrue(
+                "banner must be written after the SYN-ACK (synAck=$synAckIdx banner=$bannerIdx)",
+                synAckIdx in 0 until bannerIdx,
+            )
+        } finally {
+            server.close()
+        }
+    }
+
     private fun newStateMachine(
         plugin: TunnelPlugin,
         tunPackets: CopyOnWriteArrayList<ByteArray>,
+        sink: TunSink? = null,
     ): TcpStateMachine {
         val tunnelManager = mock<TunnelManager>()
         whenever(tunnelManager.getActiveOrFallback()).thenReturn(plugin)
         return TcpStateMachine(
             tunnelManager,
-            { tunSinkOf { p: ByteArray -> tunPackets.add(p) } },
+            { sink ?: tunSinkOf { p: ByteArray -> tunPackets.add(p) } },
             PacketStats(),
             SshIoDispatcher(),
         )
@@ -398,6 +452,37 @@ class TcpCloseBannerTest {
                 serverSocket.close()
             } catch (_: Exception) {
             }
+        }
+    }
+
+    /**
+     * F3 替身: SYN-ACK 的非阻塞 `write` 失败 (等价于 TunWriter 队列满), 其余包照常记录。
+     * `writeBlocking` 永远成功 —— 若实现错误地在 SYN-ACK 写失败后仍然 flush, banner 会从这里冒出。
+     */
+    private class SynAckDroppingSink(
+        private val captured: MutableList<ByteArray>,
+    ) : TunSink {
+        @Volatile var dropSynAck: Boolean = true
+        val synAckAttempt = CountDownLatch(1)
+
+        override fun write(data: ByteArray): Boolean {
+            if (isSynAck(data)) {
+                synAckAttempt.countDown()
+                if (dropSynAck) return false
+            }
+            captured.add(data)
+            return true
+        }
+
+        override fun writeBlocking(data: ByteArray): Boolean {
+            captured.add(data)
+            return true
+        }
+
+        private fun isSynAck(data: ByteArray): Boolean {
+            if (data.isEmpty()) return false
+            val ipHeader = if ((data[0].toInt() shr 4) == 6) 40 else 20
+            return data.size > ipHeader + 13 && (data[ipHeader + 13].toInt() and 0xFF) == 0x12
         }
     }
 

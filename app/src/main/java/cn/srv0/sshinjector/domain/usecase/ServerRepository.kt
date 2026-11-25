@@ -58,7 +58,10 @@ class ServerRepository
          * 编辑/新建服务器并保留表单未展示的字段（已加密密码、指纹、DNS 模式等）。
          *
          * 凭据加密与不可编辑字段保留统一收敛于此，UI 层不再直连 DAO：
-         * - existingId == -1L 视为新建；否则加载既有实体并合并可编辑字段。
+         * - existingId <= 0（-1 = 向导新建，0 = 新建页/脱离列表的空 id）一律视为新建；
+         *   否则加载既有实体并合并可编辑字段。
+         * - 既有行已被并发删除时抛 [IllegalStateException]（旧实现静默返回 id，UI 当成功关页，
+         *   用户以为改了其实什么都没落库 —— R9）。
          * - 密码仅在表单提供时重新加密，否则原样保留已加密密文（字节稳定）。
          * - setAsDefault 为真时将该服务器设为唯一激活项。
          */
@@ -70,11 +73,13 @@ class ServerRepository
             withContext(Dispatchers.IO) {
                 val entity: cn.srv0.sshinjector.data.local.entity.ServerEntity
                 val baseId: Long
-                if (existingId == -1L) {
+                if (existingId <= 0L) {
                     entity = incoming.toEntity(credentialCrypto).copy(isActive = false)
                     baseId = -1L
                 } else {
-                    val existing = serverDao.getByIdBlocking(existingId) ?: return@withContext existingId
+                    val existing =
+                        serverDao.getByIdBlocking(existingId)
+                            ?: error("服务器已被删除")
                     // isActive 一律由事务决定: 关掉开关时必须真的取消激活 —— 旧实现
                     // `else existing.isActive` 让"设为默认"永远关不掉 (保存成功但 DB 仍是 1)。
                     entity = mergeForEdit(existing, incoming).copy(isActive = false)

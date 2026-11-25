@@ -27,7 +27,13 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-/** 出口的会话内运行态 (只读快照; null = 本次会话未启动)。 */
+/**
+ * 出口的会话内运行态 (只读快照; null = 本次会话未启动)。
+ *
+ * 只从 [TunnelManager.ExitSnapshot] 构造 —— **不要**再回头读 `plugin.activeConnections`:
+ * 那是可变对象上的瞬时值, 读它等于绕开快照发布, chip 会在两次发布之间显示过期/为 0 的数据
+ * (P0-2 的成因)。
+ */
 data class ExitRuntimeUi(
     val health: ExitHealth,
     val activeConnections: Int,
@@ -146,11 +152,11 @@ class MultiExitViewModel
                             serverName = names[exit.serverId]?.name ?: "—",
                             referencedRules = ProxyExitRepository.countRulesReferencing(config.rules, exit.name),
                             runtime =
-                                data.runtime[exit.name]?.let { active ->
+                                data.runtime[exit.name]?.let { snapshot ->
                                     ExitRuntimeUi(
-                                        health = active.health,
-                                        activeConnections = active.plugin.activeConnections,
-                                        failTotal = active.failTotal,
+                                        health = snapshot.health,
+                                        activeConnections = snapshot.activeConnections,
+                                        failTotal = snapshot.failTotal,
                                     )
                                 },
                         )
@@ -309,6 +315,7 @@ class MultiExitViewModel
             val exits: List<ProxyExit>,
             val servers: List<ServerConfig>,
             val whitelistPackages: List<String>,
-            val runtime: Map<String, TunnelManager.ActiveExit>,
+            /** 出口名 → 运行态**不可变快照** (UI 不持有插件/可变条目)。 */
+            val runtime: Map<String, TunnelManager.ExitSnapshot>,
         )
     }

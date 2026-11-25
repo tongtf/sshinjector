@@ -76,6 +76,10 @@ import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.srv0.sshinjector.domain.model.ServerConfig
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_DOMAIN_SPLIT
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_REMOTE
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_SYSTEM
+import cn.srv0.sshinjector.domain.vpn.DNS_MODE_WHITELIST
 import cn.srv0.sshinjector.ui.biometric.BiometricAuth
 import cn.srv0.sshinjector.ui.biometric.GateAction
 import cn.srv0.sshinjector.ui.biometric.biometricAvailable
@@ -395,7 +399,7 @@ private fun DashboardStatusCard(
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                val (dnsBg, dnsFg) = dnsModeColors(state.dnsMode)
+                val (dnsBg, dnsFg) = dnsModeColors(state.dnsModeValue)
                 Surface(
                     shape = RoundedCornerShape(4.dp),
                     color = dnsBg,
@@ -1091,18 +1095,15 @@ private fun memoryUsageMb(text: String): Float? {
 }
 
 @Composable
-private fun dnsModeColors(dnsMode: String): Pair<Color, Color> {
+private fun dnsModeColors(dnsMode: Int): Pair<Color, Color> {
     val colors = MaterialTheme.extendedColors
-    // 按资源文案匹配而非硬编码中文: stringResource 配置感知, 切换语言后 chip 配色仍生效
-    val remote = stringResource(cn.srv0.sshinjector.R.string.dashboard_dns_remote)
-    val direct = stringResource(cn.srv0.sshinjector.R.string.dashboard_dns_direct)
-    val whitelist = stringResource(cn.srv0.sshinjector.R.string.dashboard_dns_whitelist)
-    val domain = stringResource(cn.srv0.sshinjector.R.string.dashboard_dns_domain)
+    // 按机器可读的模式值 (DnsTransportPolicy 的 0..3) 配色。
+    // 旧实现拿"文案"反查, 切语言/改文案后配色会静默失效; 文案本身仍由 state.dnsMode 渲染。
     return when (dnsMode) {
-        remote -> colors.dnsRemoteProxy to Color.White
-        direct -> colors.dnsLocalDirect to Color.White
-        whitelist -> colors.dnsWhitelist to Color.White
-        domain -> colors.dnsDomainSplit to Color.White
+        DNS_MODE_REMOTE -> colors.dnsRemoteProxy to Color.White
+        DNS_MODE_SYSTEM -> colors.dnsLocalDirect to Color.White
+        DNS_MODE_WHITELIST -> colors.dnsWhitelist to Color.White
+        DNS_MODE_DOMAIN_SPLIT -> colors.dnsDomainSplit to Color.White
         else ->
             MaterialTheme.colorScheme.surfaceVariant to
                 MaterialTheme.colorScheme.onSurface

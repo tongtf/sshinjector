@@ -187,6 +187,36 @@ class ServerRepositoryTest {
         }
 
     @Test
+    fun `zero id is treated as a new server insert`() =
+        runTest {
+            Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+            whenever(serverDao.insert(any())).thenReturn(1L)
+
+            repository.saveServerEdit(0L, config(password = "secret"), setAsDefault = false)
+
+            verify(serverDao).insert(any())
+            verify(serverDao, never()).update(any())
+        }
+
+    @Test
+    fun `edit on a concurrently deleted row throws instead of silently succeeding`() =
+        runTest {
+            Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+            // I-7/R9: 行已被并发删除 (另一个入口删了服务器) → 不能静默返回 id 让 UI 当成功关页
+            whenever(serverDao.getByIdBlocking(7)).thenReturn(null)
+
+            val thrown =
+                runCatching {
+                    repository.saveServerEdit(7, config(id = 7, name = "edited"), setAsDefault = false)
+                }.exceptionOrNull()
+
+            assertEquals("服务器已被删除", thrown?.message)
+            verify(serverDao, never()).insert(any())
+            verify(serverDao, never()).update(any())
+            verify(serverDao, never()).setActive(any())
+        }
+
+    @Test
     fun `legacy plaintext password is re-encrypted on save without new password`() =
         runTest {
             Dispatchers.setMain(StandardTestDispatcher(testScheduler))

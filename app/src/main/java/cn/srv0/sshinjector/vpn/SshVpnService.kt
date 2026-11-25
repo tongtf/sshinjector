@@ -8,6 +8,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -31,6 +32,7 @@ import cn.srv0.sshinjector.domain.vpn.DNS_MODE_WHITELIST
 import cn.srv0.sshinjector.domain.vpn.HealthTracker
 import cn.srv0.sshinjector.domain.vpn.VpnNetwork
 import cn.srv0.sshinjector.domain.vpn.connectIntent
+import cn.srv0.sshinjector.domain.vpn.effectiveWhitelist
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import cn.srv0.sshinjector.ui.StatusDisplay
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
@@ -580,15 +582,30 @@ class SshVpnService : VpnService() {
      * 当前 dnsMode + 启用白名单应用 (WHITELIST 模式外恒为空)。
      * connect / rebuild / autoReconnect 三处共用; 调用方自行决定与 establish 的先后顺序
      * (rebuild 必须先 establish 再 setWhitelistPackages, 见 rebuildVpnInterfaceInternal 注释)。
+     *
+     * **F2**: 白名单在这里就过滤掉"自身包名 + 不可见/已卸载包"。不能留到 `buildVpnBuilder`
+     * 逐条 catch —— 那边过滤时 `allowedPackages.isNotEmpty()` 已经为真, 全量路由照加,
+     * 实际却一个应用都没放行 (整机断网)。过滤后为空 = 按"全部直连"退化, TUN 与 DNS 策略一致 (R4)。
      */
     private suspend fun whitelistSelection(): Pair<Int, List<String>> {
         val dnsMode = settingsDataStore.dnsMode.first()
+        if (dnsMode != DNS_MODE_WHITELIST) return dnsMode to emptyList()
+        val configured = serverRepository.getEnabledPackageNames()
         val packages =
-            if (dnsMode == DNS_MODE_WHITELIST) {
-                serverRepository.getEnabledPackageNames()
-            } else {
-                emptyList()
+            effectiveWhitelist(configured, packageName) { pkg ->
+                try {
+                    packageManager.getApplicationInfo(pkg, 0)
+                    true
+                } catch (_: PackageManager.NameNotFoundException) {
+                    false
+                }
             }
+        if (packages.isEmpty() && configured.isNotEmpty()) {
+            vpnController.addLog(
+                "白名单应用均不可见 · 已按全部直连处理",
+                LogLevel.WARNING,
+            )
+        }
         return dnsMode to packages
     }
 
@@ -913,7 +930,7 @@ class SshVpnService : VpnService() {
             // 0. 清除所有服务器的激活状态
             serverRepository.deactivateAllServers()
             // 用户主动断开: 清除最后连接记录, 开机自启不再触发
-            settingsDataStore.setLastServerId(0)
+            settingsDataStore.clearLastServerId()
         }
 
         // 1. 断开 VPN 控制器 (如果正在运行)
@@ -986,10 +1003,14 @@ class SshVpnService : VpnService() {
         poolFailRetryJob?.cancel()
         poolFailRetryJob = null
         reconnectJob?.cancel()
+        // I-4: 与 disconnectInternal 对齐 —— 残留的池失败标志会让 Failed 观察者永远跳过清理
+        // (`shouldCleanupFailureSession` 见 pending=true 就认为"收尾由重连负责"), 而重连任务
+        // 已被上面取消 → isRunning 卡住, 下次 connect 被拒。
+        poolFailReconnectPending = false
         stopHealthMonitor()
         vpnController.forceReset()
         serverRepository.deactivateAllServers()
-        settingsDataStore.setLastServerId(0)
+        settingsDataStore.clearLastServerId()
         try {
             vpnInterface?.close()
         } catch (_: Exception) {

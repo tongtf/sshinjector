@@ -24,7 +24,9 @@ class Socks5TunnelPlugin(
     private val label: String,
 ) : TunnelPlugin {
     override val id = "socks5"
-    private var socksServer: Socks5ProxyServer? = null
+
+    /** I-3: 由 connect() 写、eventLoop/UI 线程读 —— 不加 @Volatile 可能长期读到 null (孤儿端口)。 */
+    @Volatile private var socksServer: Socks5ProxyServer? = null
 
     /**
      * "启动途中已被要求关闭" 标志 (P1-13)。
@@ -40,7 +42,8 @@ class Socks5TunnelPlugin(
     override val activeConnections: Int
         get() = socksServer?.activeConnections ?: 0
 
-    private var _socksAuth: Pair<String, String>? = null
+    /** I-3: 同上 —— connect/disconnect 在 IO 协程写, `socksAuth` getter 从别的线程读 (启动握手)。 */
+    @Volatile private var _socksAuth: Pair<String, String>? = null
     override val socksAuth: Pair<String, String>? get() = _socksAuth
 
     override val localSocksPort: Int

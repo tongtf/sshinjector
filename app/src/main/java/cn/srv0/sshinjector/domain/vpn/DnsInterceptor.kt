@@ -107,6 +107,21 @@ class DnsInterceptor
             private const val PENDING_QUERY_TIMEOUT_MS = 30_000L
 
             /**
+             * DNS 头部 ID 的上限 (16 位)。内部查询 ID 必须落在 1..65535 并在此回绕 (F1)。
+             * 常量声明而非字面量: detekt MagicNumber 白名单只覆盖 0..4096, 且常量为单点来源。
+             */
+            private const val MAX_DNS_QUERY_ID = 0xFFFF
+
+            /**
+             * 待投递 DNS 应答队列上限 (I-14)。
+             *
+             * 必须是**有界** Channel: UNLIMITED 时一旦投递端停摆 (TUN 写拥堵 / 客户端已离开),
+             * 应答对象会无限堆积。2048 远高于正常并发 (一次突发通常几十条), 溢出说明投递端
+             * 已经跟不上, 由 [offerDnsResponse] 计数 + 节流 WARNING 暴露, 客户端自行重试。
+             */
+            private const val PENDING_RESPONSE_CAPACITY = 2048
+
+            /**
              * 域名统计的"解析真实 IP"旁路查询超时 (毫秒)。3s 覆盖一般移动网络 RTT, 又不会让设置页
              * 的"解析中"转圈过久; A / AAAA 两次查询各自计时, 最坏约 2× 该值。
              */
@@ -250,9 +265,28 @@ class DnsInterceptor
             }
         }
 
+        /**
+         * 待投递 DNS 应答队列 (有界, 见 [PENDING_RESPONSE_CAPACITY])。
+         * 入队统一走 [offerDnsResponse], 溢出计数 + 节流 WARNING。
+         */
         private val pendingResponses =
-            kotlinx.coroutines.channels.Channel<DnsResponse>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+            kotlinx.coroutines.channels.Channel<DnsResponse>(PENDING_RESPONSE_CAPACITY)
+
+        /** 应答队列溢出的丢弃数 (进 `diagnostics()`; 非零 = 投递端跟不上或客户端已离开)。 */
+        private val droppedDnsResponses = AtomicLong(0)
+
         private val queryIdCounter = AtomicInteger(0)
+
+        /**
+         * 分配下一个内部查询 ID, 值域 **1..65535** (F1)。
+         *
+         * DNS 头部 ID 只有 16 位: 旧实现 `incrementAndGet()` 会越过 65535 写到 65536..,
+         * 写入头部时被 dnsjava 截断成低位 (65536 → 0), 之后每次自增都截断成 0 ——
+         * 所有在途查询共用一个 ID, `pendingQueries` 互相覆盖、应答被投给错误的问题
+         * (客户端拿到 ID 不符的应答直接丢弃 → 解析超时)。回绕到 1 后与在途查询重号的
+         * 概率可忽略: 在途上限受 30s [PENDING_QUERY_TIMEOUT_MS] 清理约束, 远小于 65535。
+         */
+        private fun nextQueryId(): Int = queryIdCounter.updateAndGet { if (it >= MAX_DNS_QUERY_ID) 1 else it + 1 }
 
         // 当前传输模式
         @Volatile private var transportMode = DnsTransport.REMOTE
@@ -434,7 +468,9 @@ class DnsInterceptor
             "假 IP 映射 ${ipToDomain.size}/$MAX_IP_DOMAIN_MAP_SIZE · " +
                 "待摘除 ${pendingFakeIpRelease.size} · " +
                 "真实 IP 映射 ${realIpToDomain.size}/$MAX_REAL_IP_MAP_SIZE · " +
-                "域名→IP ${domainToIp.size}/$MAX_DOMAIN_IP_MAP_SIZE"
+                "域名→IP ${domainToIp.size}/$MAX_DOMAIN_IP_MAP_SIZE · " +
+                // 应答队列溢出: 非零 = TUN 投递端停摆 (断连瞬间/客户端不收包), 队列 2048 被打满
+                "应答丢弃 ${droppedDnsResponses.get()}"
 
         /**
          * 归零但仍在摘除宽限期内的假 IP → 摘除截止时刻; 到期由 cleanupScheduler 真正删除。
@@ -643,7 +679,7 @@ class DnsInterceptor
                         )
                     }
                     // AAAA: 不回 IPv4 的 0.0.0.0, 回空答案集逼客户端回落 A 记录
-                    pendingResponses.trySend(
+                    offerDnsResponse(
                         DnsResponse(
                             srcIp = dstIp,
                             dstIp = srcIp,
@@ -665,7 +701,7 @@ class DnsInterceptor
                     response.header.setFlag(Flags.RA.toInt())
                     response.header.setRcode(Rcode.NOERROR)
                     response.addRecord(question, Section.QUESTION)
-                    pendingResponses.trySend(
+                    offerDnsResponse(
                         DnsResponse(
                             srcIp = dstIp,
                             dstIp = srcIp,
@@ -685,7 +721,7 @@ class DnsInterceptor
                     cacheHits.incrementAndGet()
                     rebuildFakeIpMappings(question, cached.records, dnsKey)
                     // F10: 源 IP = 本次查询的目标 DNS 服务器, 目的 = 客户端
-                    pendingResponses.trySend(
+                    offerDnsResponse(
                         DnsResponse(
                             srcIp = dstIp,
                             dstIp = srcIp,
@@ -717,7 +753,7 @@ class DnsInterceptor
                 }
 
                 // 系统 DNS 模式: 正常 DNS 解析
-                val queryId = queryIdCounter.incrementAndGet()
+                val queryId = nextQueryId()
 
                 val pending =
                     DnsPendingQuery(
@@ -987,7 +1023,7 @@ class DnsInterceptor
 
                 // 放入响应队列
                 // pending.dstIp 是 DNS 服务器 IP (对于 SYSTEM 模式是物理网卡的 DNS，对于 REMOTE 是 8.8.8.8 等)
-                pendingResponses.trySend(
+                offerDnsResponse(
                     DnsResponse(
                         srcIp = pending.dstIp ?: InetAddress.getByName("8.8.8.8"),
                         dstIp = pending.srcIp,
@@ -1120,7 +1156,7 @@ class DnsInterceptor
                     return false
                 }
                 Log.d(TAG, "REMOTE 假IP: 非 A/AAAA 类型 $qtype, 改走系统 DNS 直查")
-                val queryId = queryIdCounter.incrementAndGet()
+                val queryId = nextQueryId()
                 pendingQueries[queryId] =
                     DnsPendingQuery(
                         queryId = queryId,
@@ -1133,6 +1169,12 @@ class DnsInterceptor
                         generation = sessionGeneration.get(),
                     )
                 val msg = Message(originalQueryId)
+                // 重建的查询**必须自己带上 RD** (递归期望): Message(id) 只建了空头部,
+                // 旧实现漏了这一步 → 转发给系统 DNS 的查询 RD=0, 部分解析器对非递归查询
+                // 直接回空答案 (REFUSED/SERVFAIL), 表现为 MX/TXT 一律解析失败。
+                // 客户端原始查询里的 RD 不能直接照搬 (它可能带 AD/DO 等附加语义, 且本处
+                // 只是原样转发问题段), 统一按递归查询处理。
+                msg.header.setFlag(Flags.RD.toInt())
                 msg.addRecord(question, Section.QUESTION)
                 msg.header.setID(queryId)
                 sendDnsOverProtectedSocket(msg.toWire(), queryId)
@@ -1179,7 +1221,7 @@ class DnsInterceptor
             )
 
             // F10: 源 IP = 查询的目标地址 (客户端实际查询的 VPN DNS), 非假 IP
-            pendingResponses.trySend(
+            offerDnsResponse(
                 DnsResponse(
                     srcIp = dstIp,
                     dstIp = srcIp,
@@ -1273,7 +1315,7 @@ class DnsInterceptor
             response.header.setRcode(rcode)
             response.addRecord(pending.question, Section.QUESTION)
 
-            pendingResponses.trySend(
+            offerDnsResponse(
                 DnsResponse(
                     srcIp = pending.dstIp ?: InetAddress.getByName("8.8.8.8"),
                     dstIp = pending.srcIp,
@@ -1282,6 +1324,43 @@ class DnsInterceptor
                 ),
             )
         }
+
+        /**
+         * 把 DNS 应答放入待投递队列 (唯一入口, 见 [PENDING_RESPONSE_CAPACITY])。
+         *
+         * 队列满只**计数 + 节流 WARNING**, 不改变控制流: 调用点分布在上行解析/缓存/错误应答
+         * 各路径, 抛异常或阻塞会污染 DNS 处理协程; 丢掉的应答由客户端重试自然补回。
+         *
+         * @return true = 已入队; false = 队列满, 已计入 [droppedDnsResponses]
+         */
+        private fun offerDnsResponse(resp: DnsResponse): Boolean {
+            if (pendingResponses.trySend(resp).isSuccess) return true
+            val dropped = droppedDnsResponses.incrementAndGet()
+            VpnController.appLogThrottled(
+                "DNS 应答丢弃 · 队列已满 (累计 $dropped)",
+                level = LogLevel.WARNING,
+                throttleKey = "DNS 应答丢弃",
+            )
+            return false
+        }
+
+        /** 仅供单测: 直接调用 [offerDnsResponse] (需要私有队列的满队列语义)。 */
+        @VisibleForTesting
+        internal fun offerDnsResponseForTest(resp: DnsResponse): Boolean = offerDnsResponse(resp)
+
+        /** 仅供单测: 读应答队列溢出丢弃数 (断言"满队列必须计数")。 */
+        @VisibleForTesting
+        internal fun droppedDnsResponsesForTest(): Long = droppedDnsResponses.get()
+
+        /** 仅供单测: 把内部查询 ID 计数器推到指定位 (断言 65535 → 1 回绕)。 */
+        @VisibleForTesting
+        internal fun setQueryIdCounterForTest(value: Int) {
+            queryIdCounter.set(value)
+        }
+
+        /** 仅供单测: 取下一个内部查询 ID (生产路径在 [processDnsQuery]/假 IP 分支内调用)。 */
+        @VisibleForTesting
+        internal fun nextQueryIdForTest(): Int = nextQueryId()
 
         /**
          * 获取待发送的 DNS 响应

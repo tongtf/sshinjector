@@ -12,7 +12,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.mockito.kotlin.any
-import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.atLeastOnce
 import org.mockito.kotlin.doSuspendableAnswer
 import org.mockito.kotlin.mock
@@ -37,14 +36,12 @@ class StatsListApplierTest {
             onBlocking { getAdBlockRulesFromStats() } doSuspendableAnswer { f.adRules }
             onBlocking { getDomainListAddedFromStats() } doSuspendableAnswer { f.added }
             onBlocking { getDomainListRemovedFromStats() } doSuspendableAnswer { f.removed }
-            onBlocking { setAdBlockRulesFromStats(anyOrNull()) } doSuspendableAnswer { inv ->
-                f.adRules = inv.getArgument(0)
-            }
-            onBlocking { setDomainListAddedFromStats(any()) } doSuspendableAnswer { inv ->
-                f.added = inv.getArgument(0)
-            }
-            onBlocking { setDomainListRemovedFromStats(any()) } doSuspendableAnswer { inv ->
-                f.removed = inv.getArgument(0)
+            // I-9: 三个键一次写完 (writeState 只调这一个入口)
+            onBlocking { setStatsState(any(), any(), any()) } doSuspendableAnswer { inv ->
+                val ad = inv.getArgument<String>(0)
+                f.adRules = if (ad.isBlank()) null else ad
+                f.added = inv.getArgument(1)
+                f.removed = inv.getArgument(2)
             }
         }
 

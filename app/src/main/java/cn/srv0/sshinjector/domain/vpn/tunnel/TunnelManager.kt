@@ -51,21 +51,72 @@ class TunnelManager
             // 另记一份 = 两处增减不同步 → 软上限要么永不触发要么永久触发。
         )
 
+        /**
+         * 出口运行态**不可变快照** (UI / 只读消费方专用)。
+         *
+         * 与 [ActiveExit] 的差别只有一条: **不含 `plugin` 引用**。UI 拿不到插件就不会顺手去读
+         * 插件内部状态 (连接数/健康), 那正是 chip 显示"永远 Ready / 连接数恒 0"的根源 (P0-2)。
+         * 所有字段在发布时取值并冻结; 每次 [publishExits] 都是新实例, `StateFlow` 按值比较
+         * 才会真的发射 (复用旧实例 = 变化永远看不到)。
+         */
+        data class ExitSnapshot(
+            val id: String,
+            /** 展示名 (日志前缀); 主出口为空串。 */
+            val label: String,
+            val serverHost: String,
+            val health: ExitHealth,
+            /** 发布瞬间的活跃连接数 (单一来源 = `plugin.activeConnections`)。 */
+            val activeConnections: Int,
+            val connTotal: Long,
+            val failTotal: Long,
+            val degradeTotal: Long,
+            val lastError: String,
+            val startedAt: Long,
+        )
+
         private val exits = ConcurrentHashMap<String, ActiveExit>()
 
         /** 主出口的插件 (兼容既有 `getActiveOrFallback` 语义)。 */
         private val activePlugin = MutableStateFlow<TunnelPlugin?>(null)
 
         /**
-         * 会话内出口运行态 (UI chip / 排障): 每次增删或健康变化后重新发布。
-         * 只发布不可变快照列表, UI 不接触 map/plugin 内部。
+         * 会话内出口运行态 (UI chip / 排障): 每次启停或健康变化后重新发布。
+         * 只发布**不可变**快照列表, UI 不接触 map/plugin 内部。
+         *
+         * 发布时机**刻意不含** `noteConnection`/`noteHandshakeFailure` (每次连接一次 →
+         * 高频分配, 见方案 R2): 连接数/失败数在两次发布之间是冻结值, 下一次启停/健康变化
+         * 会用最新值重算整份快照。
          */
-        private val mutableExitsState = MutableStateFlow<List<ActiveExit>>(emptyList())
-        val exitsState: StateFlow<List<ActiveExit>> = mutableExitsState.asStateFlow()
+        private val mutableExitsState = MutableStateFlow<List<ExitSnapshot>>(emptyList())
+        val exitsState: StateFlow<List<ExitSnapshot>> = mutableExitsState.asStateFlow()
 
         private fun publishExits() {
-            mutableExitsState.value = exits.values.toList()
+            // 每次 map 出新实例 (不可变副本): 只发布 ActiveExit 的**值**, 不发布可变对象本身
+            mutableExitsState.value = exits.values.map { it.toSnapshot() }
         }
+
+        /**
+         * 立即重新发布出口快照。
+         *
+         * 供**绕过** [noteDegraded]/[noteRecovered] 直接改 `ActiveExit.health` 的路径调用
+         * (健康巡检先改状态再记账): 不补这一下, chip / 统计页会停在上一帧。
+         */
+        fun publishExitsNow() = publishExits()
+
+        private fun ActiveExit.toSnapshot(): ExitSnapshot =
+            ExitSnapshot(
+                id = id,
+                label = label,
+                serverHost = serverHost,
+                health = health,
+                // 连接数不在此记账: 单一来源是插件的连接表, 发布时取一次瞬时值
+                activeConnections = plugin.activeConnections,
+                connTotal = connTotal,
+                failTotal = failTotal,
+                degradeTotal = degradeTotal,
+                lastError = lastError,
+                startedAt = startedAt,
+            )
 
         /**
          * 会话代际: `stopAll()` 自增。`startExit` 在每个挂起点之后复查 ——
@@ -256,6 +307,10 @@ class TunnelManager
             }
         }
 
+        /**
+         * 可变条目列表 (含 `plugin`): **只给诊断/健康巡检用** (要读插件端口、探测、改 health)。
+         * UI 层一律消费 [exitsState] 的 [ExitSnapshot], 不要拿这条路径去渲染。
+         */
         fun exitsSnapshot(): List<ActiveExit> = exits.values.toList()
 
         /** 当前主出口的插件; null = 隧道未就绪/已拆除 (插件不再有"未连接实例"兜底)。 */

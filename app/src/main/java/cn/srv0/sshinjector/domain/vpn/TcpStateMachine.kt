@@ -68,7 +68,11 @@ class TcpStateMachine(
         private const val TAG = "PacketProcessor"
         private const val RELAY_BUFFER_SIZE = 65535
         private const val RELAY_IDLE_SLEEP_MIN_MS = 1L // 回程空闲退避起点 (非阻塞 read 返回 0 时)
-        private const val RELAY_IDLE_SLEEP_MAX_MS = 8L // 回程空闲退避上限
+
+        // 回程空闲退避上限。8ms 时一条空闲连接每秒唤醒 ~125 次, 而中继线程固定占着
+        // SshIoDispatcher 的一条线程 (上限 128): 空闲连接 × 125 次/秒是纯 CPU 浪费。
+        // 50ms 仍有 20 次/秒的响应粒度, 且**有数据即复位到 MIN** —— 活跃路径零额外延迟。
+        private const val RELAY_IDLE_SLEEP_MAX_MS = 50L
         private const val MAX_TCP_SEGMENT = 1460
         private const val MAX_TCP_SEGMENT_V6 = 1440 // MTU1500 - IPv6 头40 - TCP 头20
 
@@ -185,6 +189,9 @@ class TcpStateMachine(
 
     /** 回程丢弃累计字节 (窗口耗尽/连接已关/组包失败 → 客户端收不到)。 */
     private val droppedDownstreamBytes = AtomicLong(0)
+
+    /** 畸形 TCP 段丢弃数 (F5: dataOffset 越界或小于 20)。正常内核不会造, 仅自证加固生效。 */
+    private val droppedMalformedTcp = AtomicLong(0)
 
     /** 假 IP → 活动连接数; 只在归零时才释放 DNS 映射 (见 releaseUnusedFakeIps)。 */
     private val fakeIpActiveConns = ConcurrentHashMap<String, Int>()
@@ -467,6 +474,16 @@ class TcpStateMachine(
         val dataOffset = (dataOffsetFlags shr 12) * 4
         val flags = dataOffsetFlags and 0x0FFF
 
+        // F5: TCP 头长校验, **必须在读选项 / 计算载荷之前**。
+        // dataOffset < 20 = 把 TCP 头当载荷转发; dataOffset > payloadLength 会让下面的
+        // position(payloadStart + dataOffset) / 选项解析越界抛异常 —— 本函数跑在 packetLoop
+        // 单线程上, 一次异常就是整条数据面停摆。畸形的包只有 raw socket 造得出来, 直接丢弃并计数。
+        if (dataOffset !in 20..60 || dataOffset > payloadLength) {
+            droppedMalformedTcp.incrementAndGet()
+            if (IS_DEBUG) Log.d(TAG, "malformed TCP segment: dataOffset=$dataOffset payloadLength=$payloadLength")
+            return false
+        }
+
         // TCP 标志位 (提前到选项解析前, SYN 选项解析依赖 syn/ack)
         val fin = (flags and 0x01) != 0
         val syn = (flags and 0x02) != 0
@@ -527,8 +544,16 @@ class TcpStateMachine(
                 if (conn.state != TcpConnection.TcpState.Closed && conn.synAckSeq >= 0) {
                     val again = buildSynAckPacket(conn)
                     if (again != null) {
-                        tunWriterProvider()?.write(again)
-                        conn.synAckWritten = true
+                        // F3: 只有**真正写进 TUN** 才置 synAckWritten。队列满时 write 返回 false,
+                        // 客户端仍在 SYN_SENT —— 回程数据必须继续留在 pendingReturn 里等下一次补发,
+                        // 而不是被放行到 SYN-ACK 前面 (客户端会丢弃, 而 serverSeq 已推进 = 永久洞)。
+                        val firstWrite = !conn.synAckWritten
+                        if (writeSynAck(conn, again) && firstWrite) {
+                            // 上一次 SYN-ACK 写失败时, 缓存的回程一直没被放行 —— 补发成功后必须排空。
+                            // **不能**在 packetLoop 里同步 flush (它会等客户端窗口 / 阻塞在 TUN 写队列,
+                            // 一次就能把全部连接拖死), 见 flushPendingReturnAsync。
+                            flushPendingReturnAsync(connKey)
+                        }
                     }
                     VpnController.appLogThrottled(
                         "SYN 重传 · 补发 SYN-ACK ${target(conn)} (握手较慢或包丢失)",
@@ -629,6 +654,46 @@ class TcpStateMachine(
         }
 
         return true
+    }
+
+    /**
+     * 异步排空缓存的回程 (F3: SYN-ACK 补发成功后才调用)。
+     *
+     * 两条"不能用"的原因必须一起看:
+     * - **不能同步**: [flushPendingReturn] 会等客户端窗口并阻塞在 TUN 写队列上, 而调用点
+     *   ([processTcpPacket]) 是 packetLoop 单线程 —— 一次就能把全部连接拖死;
+     * - **不能走 `SshIoDispatcher`**: 它的拒绝策略是 `CallerRunsPolicy`, 队列满时会把这段
+     *   阻塞代码**原地跑在 packetLoop 上**, 正好是上一条要避免的情况。
+     *
+     * 按 key 在执行时重新取连接: 期间同五元组可能已被关闭/重建, 取到的新连接 flush 自己的
+     * 队列是无害的, 而拿着旧对象既可能已 Closed 也可能已不在 map 里。
+     */
+    private fun flushPendingReturnAsync(connKey: Long) {
+        scope.launch {
+            val conn = tcpConnections[connKey] ?: return@launch
+            if (conn.state == TcpConnection.TcpState.Closed) return@launch
+            flushPendingReturn(conn)
+        }
+    }
+
+    /**
+     * 写 SYN-ACK 并按写入结果发布 [TcpConnection.synAckWritten] (F3)。
+     *
+     * 旧实现无条件置位: `TunSink.write` 是**非阻塞**的 (队列满即丢), 写失败时客户端仍在
+     * SYN_SENT, 而回程闸门以为它已收到 —— 随后的回程数据直写 TUN 被客户端丢弃, `serverSeq`
+     * 却已推进, 本栈没有重传 → 该段永久丢失, 连接卡到 300s 陈旧清理。
+     *
+     * 写失败时不置位: 回程继续留在 `pendingReturn`, 由客户端 SYN 重传触发的补发放行。
+     *
+     * @return true = 已写入 TUN
+     */
+    private fun writeSynAck(
+        conn: TcpConnection,
+        packet: ByteArray,
+    ): Boolean {
+        val ok = tunWriterProvider()?.write(packet) ?: false
+        if (ok) conn.synAckWritten = true
+        return ok
     }
 
     /**
@@ -808,10 +873,7 @@ class TcpStateMachine(
             // 握手期间客户端 RST 时这里直接返回, 不会出现"已移除的连接继续跑 relay"或假 IP 计数泄漏。
             if (!markEstablished(conn, sc)) return
             val synAckPacket = buildSynAckPacket(conn)
-            if (synAckPacket != null) {
-                tunWriterProvider()?.write(synAckPacket)
-                conn.synAckWritten = true
-            }
+            if (synAckPacket != null) writeSynAck(conn, synAckPacket)
             startRelayFromSocks(conn, connKey)
             if (IS_DEBUG) {
                 Log.d(TAG, "TCP bypass direct to ${conn.dstIp}:${conn.dstPort} for conn ${conn.id}")
@@ -1341,12 +1403,12 @@ class TcpStateMachine(
         }
         // 通道就绪 = 现在才能安全发 SYN-ACK (客户端此前只重传 SYN, 不会发应用数据)
         val synAckPacket = buildSynAckPacket(conn)
-        if (synAckPacket != null) {
-            tunWriterProvider()?.write(synAckPacket)
-            conn.synAckWritten = true
+        // F3: 写失败 (TUN 队列满) 时 synAckWritten 保持 false —— 缓存的回程继续排队,
+        // 由 SYN 重传补发并排空 (见 packetLoop 的 SYN 重传分支)。写失败绝不能 flush。
+        if (synAckPacket != null && writeSynAck(conn, synAckPacket)) {
+            // 握手期间缓存的回程数据 (banner/早到响应) 现在按序下发
+            flushPendingReturn(conn)
         }
-        // 握手期间缓存的回程数据 (banner/早到响应) 现在按序下发
-        flushPendingReturn(conn)
         // 握手期间缓存的上行数据 (客户端提前发来的请求) 现在送出并补 ACK
         flushPendingUpstream(conn)
         VpnController.appLogThrottled(
@@ -1495,7 +1557,11 @@ class TcpStateMachine(
         while (pos < end) {
             // 先写掉手里的包再进窗口等待: 这些段的 serverSeq 已推进、客户端却还没收到,
             // 留到等待里就成了"等一个永远不会到来的 ACK"(每秒空转一次重查, 吞吐塌掉)。
-            flushReturnBatch(sink, conn, batch)
+            // 这里在 downlinkLock **之外**, 失败可直接关连接 (F4)。
+            if (!flushReturnBatch(sink, conn, batch)) {
+                closeAfterFailedBatch(conn)
+                return
+            }
             val capacity = awaitFlowCapacity(conn)
             if (capacity <= 0) {
                 // 静默丢弃是重大盲点: 曾导致"代理从 SSH 读到 3.4MB、TUN 只收到 0.4MB"
@@ -1509,40 +1575,61 @@ class TcpStateMachine(
             var budget = capacity
             // seq 分配 + TUN 写与关闭包共用 downlinkLock: 否则 FIN/RST 可能抢在
             // 已分配更早序号的数据段前面写出 (客户端先看到 FIN 再收到数据)。
-            synchronized(conn.downlinkLock) {
-                while (budget > 0 && batch.size < RETURN_BATCH_PACKETS) {
-                    if (pos >= end || conn.state == TcpConnection.TcpState.Closed) break
-                    val chunkLen = minOf(maxSegment, end - pos, budget)
-                    val segmentStart = pos
-                    val responsePacket = buildTcpResponsePacket(conn, payload, segmentStart, chunkLen)
-                    pos += chunkLen
-                    budget -= chunkLen
-                    if (responsePacket != null) {
-                        // 组包时 serverSeq 已推进; 写失败时由 flushReturnBatch 回退记账
-                        batch.add(responsePacket)
-                        conn.downstreamBytes += chunkLen.toLong()
-                    } else {
-                        droppedDownstreamBytes.addAndGet(chunkLen.toLong())
-                        reportDownstreamDrop(conn, chunkLen)
+            val batchOk =
+                synchronized(conn.downlinkLock) {
+                    while (budget > 0 && batch.size < RETURN_BATCH_PACKETS) {
+                        if (pos >= end || conn.state == TcpConnection.TcpState.Closed) break
+                        val chunkLen = minOf(maxSegment, end - pos, budget)
+                        val segmentStart = pos
+                        val responsePacket = buildTcpResponsePacket(conn, payload, segmentStart, chunkLen)
+                        pos += chunkLen
+                        budget -= chunkLen
+                        if (responsePacket != null) {
+                            // 组包时 serverSeq 已推进; 写失败时由 flushReturnBatch 回退记账
+                            batch.add(responsePacket)
+                            conn.downstreamBytes += chunkLen.toLong()
+                        } else {
+                            droppedDownstreamBytes.addAndGet(chunkLen.toLong())
+                            reportDownstreamDrop(conn, chunkLen)
+                        }
                     }
+                    // 必须在锁内交接: 关闭包不能插在"已分配序号"和"写 TUN"之间
+                    flushReturnBatch(sink, conn, batch)
                 }
-                // 必须在锁内交接: 关闭包不能插在"已分配序号"和"写 TUN"之间
-                flushReturnBatch(sink, conn, batch)
+            // 锁外关连接 (R6): closeTcpConnection 自己会取 downlinkLock 写关闭包,
+            // 持锁调用会把"等 TUN 写队列"的阻塞时间也算进锁内。
+            if (!batchOk) {
+                closeAfterFailedBatch(conn)
+                return
             }
         }
-        synchronized(conn.downlinkLock) { flushReturnBatch(sink, conn, batch) }
+        val tailOk = synchronized(conn.downlinkLock) { flushReturnBatch(sink, conn, batch) }
+        if (!tailOk) closeAfterFailedBatch(conn)
+    }
+
+    /**
+     * 回程批量写失败后的收尾 (F4)。必须在**不持有** [TcpConnection.downlinkLock] 时调用。
+     *
+     * 为什么必须关连接而不是只回退计数: 组包时 `serverSeq` 已经推进, 而本栈没有重传 ——
+     * 失败这段及其后的段在客户端看来都是"乱序/重复", 下行永久停在 0, 只能挂到 300s 陈旧清理。
+     * 关连接 (RST) 让客户端立刻重连, 比静默等 5 分钟好得多。
+     */
+    private fun closeAfterFailedBatch(conn: TcpConnection) {
+        closeTcpConnection(conn.key, conn, notifyBrowser = true)
     }
 
     /**
      * 批量交接回程包。连接已关闭时直接丢弃 —— 关闭包可能已由 [closeTcpConnection] 先入队,
      * 再补写数据会变成"FIN/RST 之后还有数据段"(客户端按非法序号丢弃)。
+     *
+     * @return true = 已写出 (或批次为空); false = 写失败/连接已关 —— 调用方必须关连接 (F4)
      */
     private fun flushReturnBatch(
         sink: TunSink,
         conn: TcpConnection,
         batch: MutableList<ByteArray>,
-    ) {
-        if (batch.isEmpty()) return
+    ): Boolean {
+        if (batch.isEmpty()) return true
         val bytes = batch.sumOf { it.size }
         val ok = conn.state != TcpConnection.TcpState.Closed && sink.writeBlockingBatch(batch)
         if (!ok && bytes > 0) {
@@ -1553,6 +1640,7 @@ class TcpStateMachine(
             reportDownstreamDrop(conn, bytes)
         }
         batch.clear()
+        return ok
     }
 
     /** 回程排队溢出上报: pendingReturn 满 → 该段既没进队列也没写 TUN, 客户端会一直重传。 */
@@ -1667,6 +1755,14 @@ class TcpStateMachine(
      * 必须在 buildSynAckPacket 写 TUN **之后**调用, 保证 "SYN-ACK 先于所有回程数据"。
      */
     private fun flushPendingReturn(conn: TcpConnection) {
+        // 单 flusher 约束: 两个并发 flusher 各自从队首取块时, 后取的块可能先写出
+        // (本栈无乱序缓存 → 永久错位)。F3 之后 SYN 重传也会触发 flush, 所以入口必须
+        // 用 pendingReturnFlushing 抢一次; 抢不到 = 另一个 flusher 正在跑, 它会一直排到队列空。
+        synchronized(conn.pendingReturnLock) {
+            if (conn.pendingReturnFlushing) return
+            if (conn.pendingReturn.isEmpty()) return
+            conn.pendingReturnFlushing = true
+        }
         while (true) {
             val chunk: ByteArray
             synchronized(conn.pendingReturnLock) {
@@ -1679,7 +1775,6 @@ class TcpStateMachine(
                 }
                 chunk = head
                 conn.pendingReturnBytes -= chunk.size.toLong()
-                conn.pendingReturnFlushing = true
             }
             writeTcpPayloadToTun(conn, chunk, 0, chunk.size, fromFlush = true)
             if (IS_DEBUG) {
@@ -1759,6 +1854,7 @@ class TcpStateMachine(
             "fin ${orphanFinPackets.get()}/rst ${orphanRstPackets.get()}" +
             "/ack ${orphanAckPackets.get()}/data ${orphanDataPackets.get()}) · " +
             "回程丢弃 ${droppedDownstreamBytes.get()}B · 回程缓存溢出 ${droppedReturnQueueBytes.get()}B · " +
+            "畸形 TCP ${droppedMalformedTcp.get()} · " +
             "零回程 ${tunnelBlackHoleConns.get()}" +
             "(秒断 ${tunnelBlackHoleImmediate.get()}/迟断 ${tunnelBlackHoleDelayed.get()}) · " +
             "地址惰性失效 ${IpPacketParser.staleAddressReads()}"
@@ -2598,6 +2694,7 @@ class TcpStateMachine(
         droppedOrphanBytes.set(0)
         droppedDownstreamBytes.set(0)
         droppedReturnQueueBytes.set(0)
+        droppedMalformedTcp.set(0)
         orphanFinPackets.set(0)
         orphanRstPackets.set(0)
         orphanAckPackets.set(0)
