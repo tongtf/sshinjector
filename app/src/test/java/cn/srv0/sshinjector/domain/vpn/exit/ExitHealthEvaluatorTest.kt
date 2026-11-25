@@ -1,6 +1,8 @@
 package cn.srv0.sshinjector.domain.vpn.exit
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -61,5 +63,24 @@ class ExitHealthEvaluatorTest {
             assertEquals("$state 由启动/用户流程驱动, 巡检不得改写", state, d.health)
             assertEquals(ExitHealthChange.NONE, d.change)
         }
+    }
+}
+
+/** 只有 Ready/Degraded 值得探测; Starting 由启动流程驱动, Failed/Stopped 是终态。 */
+class ExitProbePolicyTest {
+    @Test
+    fun `only ready and degraded exits are probed`() {
+        assertTrue(ExitHealthEvaluator.shouldProbe(ExitHealth.Ready))
+        assertTrue(ExitHealthEvaluator.shouldProbe(ExitHealth.Degraded))
+        assertFalse(ExitHealthEvaluator.shouldProbe(ExitHealth.Starting))
+        assertFalse(ExitHealthEvaluator.shouldProbe(ExitHealth.Failed))
+        assertFalse(ExitHealthEvaluator.shouldProbe(ExitHealth.Stopped))
+    }
+
+    @Test
+    fun `failed exits are never revived by a healthy probe`() {
+        val decision = ExitHealthEvaluator.decide(ExitHealth.Failed, healthy = true, lastProbeOkAt = 0L, now = 1L)
+        assertEquals(ExitHealth.Failed, decision.health)
+        assertEquals(ExitHealthChange.NONE, decision.change)
     }
 }

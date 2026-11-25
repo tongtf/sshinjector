@@ -25,6 +25,12 @@ data class ExitHealthDecision(
  * - 其它状态 (`Starting`/`Failed`/`Stopped`) 一律不动: 它们由启动流程/用户操作驱动, 不是巡检的对象。
  */
 object ExitHealthEvaluator {
+    /**
+     * 是否值得对这条出口做端到端探测。
+     * `Starting` 由启动流程驱动; `Failed` 是本次会话终态 (不复活); `Stopped` 已移除。
+     */
+    fun shouldProbe(current: ExitHealth): Boolean = current == ExitHealth.Ready || current == ExitHealth.Degraded
+
     fun decide(
         current: ExitHealth,
         healthy: Boolean,

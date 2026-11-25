@@ -8,6 +8,8 @@ import cn.srv0.sshinjector.domain.vpn.exit.ExitId
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -55,6 +57,17 @@ class TunnelManager
         private val activePlugin = MutableStateFlow<TunnelPlugin?>(null)
 
         /**
+         * 会话内出口运行态 (UI chip / 排障): 每次增删或健康变化后重新发布。
+         * 只发布不可变快照列表, UI 不接触 map/plugin 内部。
+         */
+        private val mutableExitsState = MutableStateFlow<List<ActiveExit>>(emptyList())
+        val exitsState: StateFlow<List<ActiveExit>> = mutableExitsState.asStateFlow()
+
+        private fun publishExits() {
+            mutableExitsState.value = exits.values.toList()
+        }
+
+        /**
          * 会话代际: `stopAll()` 自增。`startExit` 在每个挂起点之后复查 ——
          * 断开之后才完成的启动必须立刻回收, 否则会出现"断开后端口/会话复活" (I-5/I-7)。
          */
@@ -87,11 +100,17 @@ class TunnelManager
             config: TunnelConfig,
         ): Result<Unit> {
             exits[id]?.let { existing ->
-                // 已经**在启动中**: 不能回 "success"(调用方会以为出口可用), 也不能再起一个池
-                return if (existing.health == ExitHealth.Starting) {
-                    Result.failure(IllegalStateException("Exit $id is still starting"))
-                } else {
-                    Result.success(Unit)
+                when (existing.health) {
+                    // 已经**在启动中**: 不能回 "success"(调用方会以为出口可用), 也不能再起一个池
+                    ExitHealth.Starting -> return Result.failure(IllegalStateException("Exit $id is still starting"))
+                    // Failed 是本会话的终态, 但**允许重建**: 不先摘除的话会静默假成功, 出口永远不恢复
+                    ExitHealth.Failed -> {
+                        exits.remove(id, existing)
+                        runCatching { existing.plugin.disconnect() }
+                        publishExits()
+                    }
+                    // Ready/Degraded/Stopped(已 remove): 已在运行, 幂等成功
+                    else -> return Result.success(Unit)
                 }
             }
 
@@ -115,6 +134,7 @@ class TunnelManager
                     health = ExitHealth.Starting,
                 )
             exits[id] = entry
+            publishExits()
 
             return try {
                 val result = plugin.connect(config)
@@ -137,12 +157,19 @@ class TunnelManager
                     }
                     result.isSuccess -> {
                         entry.health = ExitHealth.Ready
+                        entry.lastError = ""
                         activePlugin.value = exits[ExitId.DEFAULT]?.plugin
+                        publishExits()
                         Result.success(Unit)
                     }
                     else -> {
-                        exits.remove(id, entry)
+                        // 保留 Failed 条目 (方案 A): 启动失败出口不再从快照/UI 凭空消失;
+                        // 不参与选路 (selectExit 只认 Ready), 本会话不自动复活, 下次 connect 重建。
+                        entry.health = ExitHealth.Failed
+                        entry.lastError = result.exceptionOrNull()?.message ?: "启动失败"
+                        entry.failTotal++
                         runCatching { plugin.disconnect() }
+                        publishExits()
                         Log.e(TAG, "Failed to start $protocolId: ${result.exceptionOrNull()?.message}")
                         if (id == ExitId.DEFAULT) {
                             // 主出口失败 = 整个会话不可用, 进全局归因
@@ -161,10 +188,12 @@ class TunnelManager
                 // 启动被取消 (连接中途断开): 必须自己把池收掉, 否则没人再看得见它
                 exits.remove(id, entry)
                 runCatching { plugin.disconnect() }
+                publishExits()
                 throw e
             } catch (e: Exception) {
                 exits.remove(id, entry)
                 runCatching { plugin.disconnect() }
+                publishExits()
                 throw e
             }
         }
@@ -181,6 +210,7 @@ class TunnelManager
             exit.health = ExitHealth.Stopped
             runCatching { exit.plugin.disconnect() }
             activePlugin.value = exits[ExitId.DEFAULT]?.plugin
+            publishExits()
         }
 
         fun exit(id: String): ActiveExit? = exits[id]
@@ -197,6 +227,7 @@ class TunnelManager
             exitId: String,
             detail: String,
         ) {
+            // 同样不发布 (失败可能成批出现); 失败计数随下一次健康节拍进 UI
             exits[exitId]?.let {
                 it.failTotal++
                 it.lastError = detail
@@ -212,13 +243,17 @@ class TunnelManager
             exits[exitId]?.let {
                 it.degradeTotal++
                 it.lastError = reason
+                publishExits()
             }
         }
 
         /** 健康巡检判定恢复 (清掉最后一次失败原因)。 */
         @Synchronized
         fun noteRecovered(exitId: String) {
-            exits[exitId]?.let { it.lastError = "" }
+            exits[exitId]?.let {
+                it.lastError = ""
+                publishExits()
+            }
         }
 
         fun exitsSnapshot(): List<ActiveExit> = exits.values.toList()
@@ -239,5 +274,6 @@ class TunnelManager
                 exit.health = ExitHealth.Stopped
                 runCatching { exit.plugin.disconnect() }
             }
+            publishExits()
         }
     }

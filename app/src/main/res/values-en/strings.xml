@@ -460,4 +460,11 @@
     <string name="multi_exit_shared_uid">Shared uid</string>
     <string name="multi_exit_shared_uid_desc">Several apps share this uid; the rule affects all of them</string>
     <string name="multi_exit_ip_rule_note">Note: in remote-DNS mode domain connections use fake IPs, so IP/CIDR rules only match requests that connect to an IP literal.</string>
+    <string name="multi_exit_state_starting">Starting</string>
+    <string name="multi_exit_state_ready">Ready</string>
+    <string name="multi_exit_state_degraded">Degraded</string>
+    <string name="multi_exit_state_failed">Failed</string>
+    <string name="multi_exit_state_stopped">Stopped</string>
+    <string name="multi_exit_runtime_conns">%1$d conns</string>
+    <string name="multi_exit_runtime_fails">%1$d fails</string>
 </resources>

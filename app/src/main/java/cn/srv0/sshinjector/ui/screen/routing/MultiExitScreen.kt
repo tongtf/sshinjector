@@ -1,5 +1,6 @@
 package cn.srv0.sshinjector.ui.screen.routing
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -51,6 +52,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.domain.model.ServerConfig
+import cn.srv0.sshinjector.domain.vpn.exit.ExitHealth
 import cn.srv0.sshinjector.domain.vpn.exit.ExitId
 import cn.srv0.sshinjector.ui.component.BackNavIcon
 
@@ -346,6 +348,35 @@ private fun ExitRow(
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // 会话内运行态: 只有本次会话真的启动过才显示 (未连接时不误导)
+            row.runtime?.let { runtime ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        stringResource(exitHealthLabel(runtime.health)),
+                        fontSize = 11.sp,
+                        color =
+                            when (runtime.health) {
+                                ExitHealth.Ready -> MaterialTheme.colorScheme.primary
+                                ExitHealth.Degraded, ExitHealth.Failed -> MaterialTheme.colorScheme.error
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                    )
+                    if (runtime.activeConnections > 0) {
+                        Text(
+                            " · " + stringResource(R.string.multi_exit_runtime_conns, runtime.activeConnections),
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (runtime.failTotal > 0) {
+                        Text(
+                            " · " + stringResource(R.string.multi_exit_runtime_fails, runtime.failTotal),
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
         }
         Switch(checked = row.exit.enabled, onCheckedChange = onToggle)
         IconButton(onClick = onRename) {
@@ -475,3 +506,13 @@ private fun AddExitDialog(
         },
     )
 }
+
+@StringRes
+private fun exitHealthLabel(health: ExitHealth): Int =
+    when (health) {
+        ExitHealth.Starting -> R.string.multi_exit_state_starting
+        ExitHealth.Ready -> R.string.multi_exit_state_ready
+        ExitHealth.Degraded -> R.string.multi_exit_state_degraded
+        ExitHealth.Failed -> R.string.multi_exit_state_failed
+        ExitHealth.Stopped -> R.string.multi_exit_state_stopped
+    }

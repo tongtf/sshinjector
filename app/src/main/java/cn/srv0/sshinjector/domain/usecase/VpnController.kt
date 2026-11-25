@@ -17,6 +17,7 @@ import cn.srv0.sshinjector.domain.vpn.AdBlocker
 import cn.srv0.sshinjector.domain.vpn.AppIdentity
 import cn.srv0.sshinjector.domain.vpn.CidrRoute
 import cn.srv0.sshinjector.domain.vpn.ConnectionBudgetHolder
+import cn.srv0.sshinjector.domain.vpn.ConnectivityProber
 import cn.srv0.sshinjector.domain.vpn.DNS_MODE_WHITELIST
 import cn.srv0.sshinjector.domain.vpn.DataPlaneSnapshot
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
@@ -24,6 +25,7 @@ import cn.srv0.sshinjector.domain.vpn.DomainStatsStore
 import cn.srv0.sshinjector.domain.vpn.GfwListMatcher
 import cn.srv0.sshinjector.domain.vpn.IpPacketParser
 import cn.srv0.sshinjector.domain.vpn.PacketProcessor
+import cn.srv0.sshinjector.domain.vpn.SshIoDispatcher
 import cn.srv0.sshinjector.domain.vpn.StageCounters
 import cn.srv0.sshinjector.domain.vpn.StageHealthEvaluator
 import cn.srv0.sshinjector.domain.vpn.TunWriter
@@ -48,7 +50,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -62,6 +67,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.FileDescriptor
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -102,6 +108,7 @@ class VpnController
         private val routingTableStore: RoutingTableStore,
         private val proxyExitRepository: ProxyExitRepository,
         private val domainStats: DomainStatsStore,
+        private val sshIoDispatcher: SshIoDispatcher,
         private val appIdentity: AppIdentity,
         @ApplicationContext private val context: Context,
     ) : CoroutineScope by CoroutineScope(Dispatchers.IO + SupervisorJob()) {
@@ -365,6 +372,9 @@ class VpnController
 
             /** 出口表变化后的合并窗口: rename 是 delete+insert, 不合并会误停一次。 */
             private const val EXIT_RECONCILE_DEBOUNCE_MS = 200L
+
+            /** 附加出口单次探测预算: 4 条并发, 最坏只把 15s 节拍拉长 3s。 */
+            private const val EXIT_PROBE_TIMEOUT_MS = 3_000L
             private const val TAG = "VpnController"
             private const val IPPROTO_UDP = 17
             private const val DNS_PORT = 53
@@ -1919,16 +1929,42 @@ class VpnController
          * (见 `TcpStateMachine.selectExit`), 所以这里不会改变任何连接的走向 —— 它负责的是
          * "让状态可见 + 恢复有节拍", 否则快照里永远只有 `Ready`。
          */
-        fun evaluateExitHealth() {
+        suspend fun evaluateExitHealth() {
             val routing = routingTableStore.current()
             if (!routing.enabled) return
             val now = System.currentTimeMillis()
-            for (exit in tunnelManager.exitsSnapshot()) {
-                if (exit.id == ExitId.DEFAULT) continue
+            val candidates =
+                tunnelManager
+                    .exitsSnapshot()
+                    .filter { it.id != ExitId.DEFAULT && ExitHealthEvaluator.shouldProbe(it.health) }
+            if (candidates.isEmpty()) return
+            // 饱和时探测本身会排队/回环失败 → 假降级; 本轮跳过, 保持原状态
+            if (sshIoDispatcher.isSaturated()) return
+            val endpoint = settingsDataStore.probeUrl.first() ?: ConnectivityProber.DEFAULT_ENDPOINT
+            // 同一节拍内并发探测 (设计 §9.3): 串行 4×3s 会把主探活挤出 15s 节拍
+            val results =
+                coroutineScope {
+                    candidates
+                        .map { exit ->
+                            async {
+                                val port = exit.plugin.localSocksPort
+                                if (port <= 0) {
+                                    null
+                                } else {
+                                    withTimeoutOrNull(EXIT_PROBE_TIMEOUT_MS) {
+                                        ConnectivityProber(port, exit.plugin.socksAuth, endpoint).probe()
+                                    }
+                                }
+                            }
+                        }.awaitAll()
+                }
+            for ((index, exit) in candidates.withIndex()) {
+                val probe = results[index] ?: continue // 超时/没有端口: 本轮不判, 保持原状态
+                val healthy = probe is ConnectivityProber.Result.Ok && exit.plugin.isHealthy
                 val decision =
                     ExitHealthEvaluator.decide(
                         current = exit.health,
-                        healthy = exit.plugin.isHealthy,
+                        healthy = healthy,
                         lastProbeOkAt = exit.lastProbeOkAt,
                         now = now,
                     )
@@ -1939,8 +1975,9 @@ class VpnController
                 }
                 when (decision.change) {
                     ExitHealthChange.DEGRADED -> {
-                        tunnelManager.noteDegraded(exit.id, "SSH 池无活口")
-                        addLog("出口 ${exit.id} 不可用 · 已降级, 新连接回退主出口", LogLevel.WARNING)
+                        val reason = (probe as? ConnectivityProber.Result.Failed)?.reason ?: "SSH 池无活口"
+                        tunnelManager.noteDegraded(exit.id, reason)
+                        addLog("出口 ${exit.id} 不可用 · 已降级 ($reason), 新连接回退主出口", LogLevel.WARNING)
                     }
                     ExitHealthChange.RECOVERED -> {
                         tunnelManager.noteRecovered(exit.id)

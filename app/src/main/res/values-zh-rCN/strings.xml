@@ -460,4 +460,11 @@
     <string name="multi_exit_shared_uid">共享 uid</string>
     <string name="multi_exit_shared_uid_desc">多个应用共用同一个 uid, 规则会影响同组全部应用</string>
     <string name="multi_exit_ip_rule_note">提示: 远端解析模式下域名连接使用假 IP, IP / 网段规则只对"直接连接 IP"的请求生效。</string>
+    <string name="multi_exit_state_starting">启动中</string>
+    <string name="multi_exit_state_ready">就绪</string>
+    <string name="multi_exit_state_degraded">降级</string>
+    <string name="multi_exit_state_failed">失败</string>
+    <string name="multi_exit_state_stopped">已停止</string>
+    <string name="multi_exit_runtime_conns">%1$d 连</string>
+    <string name="multi_exit_runtime_fails">失败 %1$d</string>
 </resources>

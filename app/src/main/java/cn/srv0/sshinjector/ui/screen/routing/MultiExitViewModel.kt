@@ -11,9 +11,11 @@ import cn.srv0.sshinjector.domain.usecase.VpnController
 import cn.srv0.sshinjector.domain.vpn.DNS_MODE_DOMAIN_SPLIT
 import cn.srv0.sshinjector.domain.vpn.DNS_MODE_SYSTEM
 import cn.srv0.sshinjector.domain.vpn.DNS_MODE_WHITELIST
+import cn.srv0.sshinjector.domain.vpn.exit.ExitHealth
 import cn.srv0.sshinjector.domain.vpn.exit.ProxyExit
 import cn.srv0.sshinjector.domain.vpn.routing.ExitRuleText
 import cn.srv0.sshinjector.domain.vpn.routing.RoutingTableStore
+import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,11 +27,19 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-/** 出口列表行: 出口 + 服务器名 + 引用它的规则数 (删除前提示)。 */
+/** 出口的会话内运行态 (只读快照; null = 本次会话未启动)。 */
+data class ExitRuntimeUi(
+    val health: ExitHealth,
+    val activeConnections: Int,
+    val failTotal: Long,
+)
+
+/** 出口列表行: 出口 + 服务器名 + 引用它的规则数 (删除前提示) + 会话运行态。 */
 data class MultiExitRow(
     val exit: ProxyExit,
     val serverName: String,
     val referencedRules: Int,
+    val runtime: ExitRuntimeUi? = null,
 )
 
 /** 多出口页的展示态。 */
@@ -66,6 +76,7 @@ class MultiExitViewModel
         private val serverRepository: ServerRepository,
         private val routingTableStore: RoutingTableStore,
         private val vpnController: VpnController,
+        private val tunnelManager: TunnelManager,
         whitelistDao: WhitelistDao,
     ) : ViewModel() {
         private val mutableState = MutableStateFlow(MultiExitUiState())
@@ -87,7 +98,15 @@ class MultiExitViewModel
                     proxyExitRepository.allExitsFlow,
                     serverRepository.allServersFlow,
                     whitelistDao.getEnabled(),
-                ) { exits, servers, whitelist -> Data(exits, servers, whitelist.map { it.packageName }) }
+                    tunnelManager.exitsState,
+                ) { exits, servers, whitelist, runtime ->
+                    Data(
+                        exits = exits,
+                        servers = servers,
+                        whitelistPackages = whitelist.map { it.packageName },
+                        runtime = runtime.associateBy { it.id },
+                    )
+                }
 
             viewModelScope.launch {
                 combine(config, data) { c, d -> buildState(c, d) }
@@ -126,6 +145,14 @@ class MultiExitViewModel
                             exit = exit,
                             serverName = names[exit.serverId]?.name ?: "—",
                             referencedRules = ProxyExitRepository.countRulesReferencing(config.rules, exit.name),
+                            runtime =
+                                data.runtime[exit.name]?.let { active ->
+                                    ExitRuntimeUi(
+                                        health = active.health,
+                                        activeConnections = active.plugin.activeConnections,
+                                        failTotal = active.failTotal,
+                                    )
+                                },
                         )
                     },
                 servers = data.servers,
@@ -282,5 +309,6 @@ class MultiExitViewModel
             val exits: List<ProxyExit>,
             val servers: List<ServerConfig>,
             val whitelistPackages: List<String>,
+            val runtime: Map<String, TunnelManager.ActiveExit>,
         )
     }

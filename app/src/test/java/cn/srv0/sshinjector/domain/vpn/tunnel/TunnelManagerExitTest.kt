@@ -385,4 +385,67 @@ class TunnelManagerExitTest {
             val plugin = factory.plugins.single()
             assertTrue("取消路径也必须回收刚建的池", plugin.disconnects.isNotEmpty())
         }
+
+    /** 可切换 "下一次启动失败/成功" 的工厂: 验证 Failed 条目保留 + 同会话重建。 */
+    private class FlakyFactory : TunnelPluginFactory {
+        override val protocolId = "socks5"
+
+        @Volatile var failNext = true
+        val created = CopyOnWriteArrayList<TunnelPlugin>()
+        val disconnects = CopyOnWriteArrayList<String>()
+
+        override fun create(
+            exitId: String,
+            label: String,
+        ): TunnelPlugin =
+            object : TunnelPlugin {
+                override val id = "socks5"
+                override val exitId: String = exitId
+
+                override suspend fun connect(config: TunnelConfig): Result<Unit> =
+                    if (failNext) {
+                        Result.failure(IllegalStateException("boom"))
+                    } else {
+                        Result.success(Unit)
+                    }
+
+                override suspend fun disconnect() {
+                    disconnects += exitId
+                }
+            }.also { created += it }
+    }
+
+    @Test
+    fun `failed start is kept as Failed and can be rebuilt in the same session`() =
+        runBlocking {
+            val factory = FlakyFactory()
+            val manager = TunnelManager(mapOf("socks5" to factory))
+
+            val first = withTimeout(5_000) { manager.startExit("hk", "socks5", "hk", "hk.example.com", config()) }
+            assertTrue(first.isFailure)
+
+            // 方案 A: 失败出口不再凭空消失, 但仍不可选 (health != Ready)
+            val failed = manager.exit("hk")
+            assertNotNull(failed)
+            assertEquals(ExitHealth.Failed, failed!!.health)
+            assertTrue("失败原因要可见", failed.lastError.isNotEmpty())
+            assertEquals(1L, failed.failTotal)
+            assertTrue("失败也要回收已建的一半资源", factory.disconnects.isNotEmpty())
+            assertEquals(
+                "Session UI 必须看得到 Failed",
+                ExitHealth.Failed,
+                manager.exitsState.value
+                    .single { it.id == "hk" }
+                    .health,
+            )
+
+            // 同 id 再启动: 必须真的重建 (旧实现对非 Starting 直接假 success)
+            factory.failNext = false
+            val second = withTimeout(5_000) { manager.startExit("hk", "socks5", "hk", "hk.example.com", config()) }
+            assertTrue(second.isSuccess)
+            assertEquals(ExitHealth.Ready, manager.exit("hk")?.health)
+            assertEquals("必须创建了第二个插件", 2, factory.created.size)
+            // 失败时回收一次 + 重建前摘除 Failed 条目再兜底一次 (幂等)
+            assertEquals(2, factory.disconnects.size)
+        }
 }
