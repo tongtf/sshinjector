@@ -360,6 +360,13 @@ class TcpStateMachine(
         val uplinkWriteLock = Any()
 
         /**
+         * 回程序列锁: `serverSeq` 分配与 TUN 写必须原子, 否则关闭包 (FIN/RST) 可能抢在
+         * 已分配更早序号的数据段前面写出去 —— 客户端先看到 FIN 再收到数据。
+         * 只允许 "downlinkLock → (无其它连接锁)" 的顺序, 不要反向嵌套。
+         */
+        val downlinkLock = Any()
+
+        /**
          * 是否有路径正在排空 [pendingUpstream] (只在 [pendingUpstreamLock] 内读写)。
          *
          * 光看 [pendingUpstreamBytes] 不够: 队首是在**取出的同一临界区**里减计数的, 从"取出"
@@ -525,11 +532,15 @@ class TcpStateMachine(
                     val receivedSeq = seqNum.toLong() and UINT32_MASK
                     if (receivedSeq == expectedBrowserSeq) {
                         buffer.position(payloadStart + dataOffset)
-                        val written = forwardToSocks(conn, buffer, payloadStart + dataOffset, payloadLen, receivedSeq)
+                        // 写 + 记账必须在同一把 uplinkWriteLock 内: 否则并发排空可能在
+                        // "检查 seq → 直写 → 记账" 之间插队, 同一段被写两次。
+                        val written =
+                            synchronized(conn.uplinkWriteLock) {
+                                val w = forwardToSocks(conn, buffer, payloadStart + dataOffset, payloadLen, receivedSeq)
+                                if (w > 0) conn.forwardedBytes += w.toLong()
+                                w
+                            }
                         if (written > 0) {
-                            // 部分写也只推进/ACK 到已写处; 未写完的字节浏览器重传,
-                            // 重传段 seq 落在 [expected, expected+written) 之外 → 正常续写或 dup 分支, 不重复
-                            conn.forwardedBytes += written.toLong()
                             // 立即回纯 ACK，避免浏览器因等待确认而超时重传
                             sendAckToBrowser(conn)
                         }
@@ -1452,20 +1463,29 @@ class TcpStateMachine(
                 return
             }
             val chunkLen = minOf(maxSegment, end - pos, capacity)
-            val responsePacket = buildTcpResponsePacket(conn, payload, pos, chunkLen)
+            val segmentStart = pos
             pos += chunkLen
-            if (responsePacket != null) {
-                // 回程数据走**阻塞**写入: 组包时 serverSeq 已推进, 本栈无重传, 丢了就是永久洞。
-                // 必须认返回值: 失败仍记账会让"下行字节"虚高, 并把真实的零回程上报抑制掉。
-                if (sink.writeBlocking(responsePacket)) {
-                    conn.downstreamBytes += chunkLen.toLong()
+            // seq 分配 + TUN 写与关闭包共用 downlinkLock: 否则 FIN/RST 可能抢在
+            // 已分配更早序号的数据段前面写出 (客户端先看到 FIN 再收到数据)。
+            synchronized(conn.downlinkLock) {
+                if (conn.state == TcpConnection.TcpState.Closed) {
+                    droppedDownstreamBytes.addAndGet(chunkLen.toLong())
+                    return
+                }
+                val responsePacket = buildTcpResponsePacket(conn, payload, segmentStart, chunkLen)
+                if (responsePacket != null) {
+                    // 回程数据走**阻塞**写入: 组包时 serverSeq 已推进, 本栈无重传, 丢了就是永久洞。
+                    // 必须认返回值: 失败仍记账会让"下行字节"虚高, 并把真实的零回程上报抑制掉。
+                    if (sink.writeBlocking(responsePacket)) {
+                        conn.downstreamBytes += chunkLen.toLong()
+                    } else {
+                        droppedDownstreamBytes.addAndGet(chunkLen.toLong())
+                        reportDownstreamDrop(conn, chunkLen)
+                    }
                 } else {
                     droppedDownstreamBytes.addAndGet(chunkLen.toLong())
                     reportDownstreamDrop(conn, chunkLen)
                 }
-            } else {
-                droppedDownstreamBytes.addAndGet(chunkLen.toLong())
-                reportDownstreamDrop(conn, chunkLen)
             }
         }
     }
@@ -2091,52 +2111,52 @@ class TcpStateMachine(
             }
         if (queuedOrFlushing && !flushPendingUpstream(conn)) return 0
 
-        // 排空可能刚刚推进了 forwardedBytes (本轮自己, 或建连协程的并发 flush): 此时手里的包
-        // 就是被排空并 ACK 覆盖的那段重传, 再写一遍会在隧道侧产生重复字节。丢给 ACK/重传即可。
-        val expectedNow = (conn.browserSeq + 1 + conn.forwardedBytes) and UINT32_MASK
-        if (payloadSeq and UINT32_MASK != expectedNow) return 0
-        if (conn.state == TcpConnection.TcpState.Closed) return 0
+        synchronized(conn.uplinkWriteLock) {
+            // 排空可能刚刚推进了 forwardedBytes (本轮自己, 或建连协程的并发 flush): 此时手里的包
+            // 就是被排空并 ACK 覆盖的那段重传, 再写一遍会在隧道侧产生重复字节。丢给 ACK/重传即可。
+            val expectedNow = (conn.browserSeq + 1 + conn.forwardedBytes) and UINT32_MASK
+            if (payloadSeq and UINT32_MASK != expectedNow) return 0
+            if (conn.state == TcpConnection.TcpState.Closed) return 0
 
-        try {
-            buffer.position(payloadStart)
-            buffer.limit(payloadStart + payloadLength)
-            // 非阻塞写: loopback 缓冲满 (SSH 背压) 时返回已写字节数,
-            // 调用方只 ACK 到已写处, 浏览器重传剩余部分 —— packetLoop 不被单连接拖死。
-            // 与 flushPendingUpstream 共用 uplinkWriteLock: 两条线程的字节不得交错 (见该字段 KDoc)。
-            while (buffer.hasRemaining()) {
-                val written = synchronized(conn.uplinkWriteLock) { socksChannel.write(buffer) }
-                if (written == 0) {
-                    // 关键监控点: 丢段只靠客户端重传, 是"上行暴涨/下载卡死"的唯一早期信号。
-                    // 曾经只有 IS_DEBUG 日志, 导致"上行 16MB / 下行 0.4MB"的重传风暴完全不可见。
-                    val dropped = buffer.remaining()
-                    val total = droppedByBackpressure.addAndGet(dropped.toLong())
-                    VpnController.appLogThrottled(
-                        "上行背压丢段 · ${conn.dstIp.hostAddress}:${conn.dstPort} — 本次 ${dropped}B " +
-                            "等待客户端重传 (累计 ${total}B)",
-                        level = LogLevel.WARNING,
-                        throttleKey = "上行背压丢段",
-                    )
-                    if (IS_DEBUG) {
-                        Log.d(
-                            TAG,
-                            "forwardToSocks: backpressure, wrote ${payloadLength - buffer.remaining()}" +
-                                "/${payloadLength}B for conn ${conn.id}",
+            try {
+                buffer.position(payloadStart)
+                buffer.limit(payloadStart + payloadLength)
+                // 非阻塞写: loopback 缓冲满 (SSH 背压) 时返回已写字节数,
+                // 调用方只 ACK 到已写处, 浏览器重传剩余部分 —— packetLoop 不被单连接拖死。
+                while (buffer.hasRemaining()) {
+                    val written = socksChannel.write(buffer)
+                    if (written == 0) {
+                        // 关键监控点: 丢段只靠客户端重传, 是"上行暴涨/下载卡死"的唯一早期信号。
+                        val dropped = buffer.remaining()
+                        val total = droppedByBackpressure.addAndGet(dropped.toLong())
+                        VpnController.appLogThrottled(
+                            "上行背压丢段 · ${conn.dstIp.hostAddress}:${conn.dstPort} — 本次 ${dropped}B " +
+                                "等待客户端重传 (累计 ${total}B)",
+                            level = LogLevel.WARNING,
+                            throttleKey = "上行背压丢段",
                         )
+                        if (IS_DEBUG) {
+                            Log.d(
+                                TAG,
+                                "forwardToSocks: backpressure, wrote ${payloadLength - buffer.remaining()}" +
+                                    "/${payloadLength}B for conn ${conn.id}",
+                            )
+                        }
+                        break
                     }
-                    break
                 }
+                return payloadLength - buffer.remaining()
+            } catch (e: IOException) {
+                Log.e(TAG, "forwardToSocks failed", e)
+                VpnController.appLogThrottled(
+                    "上行转发失败 · ${conn.dstIp.hostAddress}:${conn.dstPort} — ${e.message}",
+                    level = LogLevel.WARNING,
+                    throttleKey = "上行转发失败",
+                )
+                stats.addError()
+                closeTcpConnection(conn.key, conn)
+                return 0
             }
-            return payloadLength - buffer.remaining()
-        } catch (e: IOException) {
-            Log.e(TAG, "forwardToSocks failed", e)
-            VpnController.appLogThrottled(
-                "上行转发失败 · ${conn.dstIp.hostAddress}:${conn.dstPort} — ${e.message}",
-                level = LogLevel.WARNING,
-                throttleKey = "上行转发失败",
-            )
-            stats.addError()
-            closeTcpConnection(conn.key, conn)
-            return 0
         }
     }
 
@@ -2287,10 +2307,13 @@ class TcpStateMachine(
         if (notifyBrowser) {
             try {
                 val flags = if (graceful) TCP_FLAGS_FIN_ACK else TCP_FLAGS_RST_ACK
-                val closePacket = buildClosePacket(conn, flags)
-                // 关闭包用**阻塞**写入: 这是"让客户端立刻 abort/收尾"的唯一信号 (F6),
-                // 每个连接只发一次且很小, 丢掉就会让对端挂到自己的超时。
-                if (closePacket != null) tunWriterProvider()?.writeBlocking(closePacket)
+                // 与回程数据段共用 downlinkLock: 等正在写的数据段完成后, 再用当时的 serverSeq 组关闭包
+                synchronized(conn.downlinkLock) {
+                    val closePacket = buildClosePacket(conn, flags)
+                    // 关闭包用**阻塞**写入: 这是"让客户端立刻 abort/收尾"的唯一信号 (F6),
+                    // 每个连接只发一次且很小, 丢掉就会让对端挂到自己的超时。
+                    if (closePacket != null) tunWriterProvider()?.writeBlocking(closePacket)
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "send close packet on close failed: ${e::class.simpleName}: ${e.message}")
                 VpnController.appLogThrottled(
@@ -2597,29 +2620,33 @@ internal object UplinkDrain {
                     conn.pendingUpstreamBytes -= data.size.toLong()
                 }
                 var chunkWritten = 0
-                try {
-                    synchronized(conn.uplinkWriteLock) {
+                var failure: IOException? = null
+                // 写 + 记账同锁: 与 forwardToSocks 的 seq 复核互斥, 避免"检查后被并发排空插队"
+                synchronized(conn.uplinkWriteLock) {
+                    try {
                         val buf = ByteBuffer.wrap(data)
                         while (buf.hasRemaining()) {
                             val n = write(buf)
                             if (n <= 0) break
                             chunkWritten += n
                         }
+                    } catch (e: IOException) {
+                        failure = e
                     }
-                } catch (e: IOException) {
+                    if (chunkWritten > 0) {
+                        synchronized(conn) { conn.forwardedBytes += chunkWritten.toLong() }
+                    }
+                }
+                total += chunkWritten
+                if (failure != null) {
                     // 通道已坏: 未写部分放回队首 (语义上仍属未交付), 由调用方关闭连接。
                     restore(conn, data, chunkWritten)
-                    if (chunkWritten > 0) synchronized(conn) { conn.forwardedBytes += chunkWritten.toLong() }
                     return UplinkDrainResult(
                         drained = false,
-                        written = total + chunkWritten,
+                        written = total,
                         failed = true,
-                        error = e,
+                        error = failure,
                     )
-                }
-                if (chunkWritten > 0) {
-                    synchronized(conn) { conn.forwardedBytes += chunkWritten.toLong() }
-                    total += chunkWritten
                 }
                 if (chunkWritten < data.size) {
                     // 写 0 / 部分写: 未写部分放回队首并**结束本轮**。下一轮由客户端 RTO 重传

@@ -79,14 +79,17 @@ class CredentialCryptoRoundTripTest {
             try {
                 val repo = ServerRepository(db.serverDao(), db.whitelistDao(), crypto)
                 val id =
-                    repo.saveServer(
-                        ServerConfig(
-                            name = "t",
-                            host = "example.com",
-                            username = "root",
-                            keyAlias = "k",
-                            password = "P@ss!w0rd",
-                        ),
+                    repo.saveServerEdit(
+                        existingId = -1L,
+                        incoming =
+                            ServerConfig(
+                                name = "t",
+                                host = "example.com",
+                                username = "root",
+                                keyAlias = "k",
+                                password = "P@ss!w0rd",
+                            ),
+                        setAsDefault = true,
                     )
                 val raw = db.serverDao().getByIdBlocking(id)
                 assertTrue(raw?.password!!.startsWith(AesGcmCipher.ENCRYPTED_PREFIX))

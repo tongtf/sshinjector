@@ -20,6 +20,7 @@ import cn.srv0.sshinjector.domain.vpn.ConnectionBudgetHolder
 import cn.srv0.sshinjector.domain.vpn.DNS_MODE_WHITELIST
 import cn.srv0.sshinjector.domain.vpn.DataPlaneSnapshot
 import cn.srv0.sshinjector.domain.vpn.DnsInterceptor
+import cn.srv0.sshinjector.domain.vpn.DomainStatsStore
 import cn.srv0.sshinjector.domain.vpn.GfwListMatcher
 import cn.srv0.sshinjector.domain.vpn.IpPacketParser
 import cn.srv0.sshinjector.domain.vpn.PacketProcessor
@@ -100,6 +101,7 @@ class VpnController
         private val serverRepository: ServerRepository,
         private val routingTableStore: RoutingTableStore,
         private val proxyExitRepository: ProxyExitRepository,
+        private val domainStats: DomainStatsStore,
         private val appIdentity: AppIdentity,
         @ApplicationContext private val context: Context,
     ) : CoroutineScope by CoroutineScope(Dispatchers.IO + SupervisorJob()) {
@@ -501,6 +503,9 @@ class VpnController
                 connectionBudgetHolder.startSession()
                 // DNS 会话边界: 清空在途查询/缓存/待投递应答 (跨会话投递会污染新 TUN)
                 dnsInterceptor.resetSessionState()
+                // 域名统计是**会话级**: 新会话从零开始; 断开后数据保留供页面/导出查看
+                // (下次连接才清, 不是断开就清)
+                domainStats.clear()
 
                 // 1. 启动隧道插件 (内含 SSH TCP+握手, 连接流程中最慢阶段)
                 val tunnelConfig = TunnelConfig.forSocks5(server, password)

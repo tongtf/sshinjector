@@ -59,17 +59,6 @@ class ServerRepository
                 serverDao.getActiveSync()?.toDomain(credentialCrypto)
             }
 
-        suspend fun saveServer(config: ServerConfig): Long =
-            withContext(Dispatchers.IO) {
-                val entity = config.toEntity(credentialCrypto)
-                if (entity.id == 0L) {
-                    serverDao.insert(entity)
-                } else {
-                    serverDao.update(entity)
-                    entity.id
-                }
-            }
-
         /**
          * 编辑/新建服务器并保留表单未展示的字段（已加密密码、指纹、DNS 模式等）。
          *
