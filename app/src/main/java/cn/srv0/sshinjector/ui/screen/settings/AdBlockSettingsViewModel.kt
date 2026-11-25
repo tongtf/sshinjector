@@ -113,11 +113,6 @@ class AdBlockSettingsViewModel
                 adBlockManager.update()
             }
 
-        /** 保存远程规则源 URL; 空串 = 关闭远程加载。 */
-        fun setRemoteUrl(url: String) {
-            viewModelScope.launch { settingsDataStore.setAdBlockRemoteUrl(url.trim()) }
-        }
-
         /** 把远程源重置为内置默认 URL (jsDelivr); 而非清空成空串导致输入框只剩 example.com 占位提示。 */
         fun resetRemoteUrlToDefault() {
             val url = SettingsDataStore.DEFAULT_ADBLOCK_REMOTE_URL

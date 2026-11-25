@@ -381,6 +381,14 @@ class MainViewModel
         private var lastCpuTimeRead = 0L
         private val cpuCoreCount = Runtime.getRuntime().availableProcessors()
 
+        /**
+         * CPU 采样 (每 5s 一次, 但由两处不同线程轮换调用: 连接期协程与刷新路径)。
+         *
+         * `@Synchronized`: `lastCpuTime/lastCpuTimeRead` 是裸 `Long`, 在 32 位 ABI 上跨线程
+         * 读-改-写会撕裂 (读到半个旧值 + 半个新值 → 百分比出现荒谬值), 且两次读之间会被
+         * 另一条线程插进来把基线改掉。
+         */
+        @Synchronized
         private fun readProcessCpuUsage(): String {
             try {
                 val cpuTime = android.os.Process.getElapsedCpuTime()

@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
@@ -41,6 +42,14 @@ data class MultiExitRulesUiState(
     val dirty: Boolean get() = text != savedText
     val canSave: Boolean get() = !tooManyRules && dirty
 }
+
+/**
+ * 保存完成后的状态合并 (纯函数, 便于单测)。
+ *
+ * `savedText` = **本次真正落库的文本**, `text` 保持调用瞬间的最新输入 —— 落库是异步的,
+ * 期间用户可能继续敲字; 用启动时捕获的旧快照整体覆盖 (老实现) 会把新文本吞掉。
+ */
+internal fun MultiExitRulesUiState.afterSave(savedText: String): MultiExitRulesUiState = copy(savedText = savedText)
 
 /**
  * 规则编辑器 (设计 §13.3)。
@@ -89,10 +98,13 @@ class MultiExitRulesViewModel
         fun save() {
             val current = mutableState.value
             if (!current.canSave) return
+            val savedText = current.text
             viewModelScope.launch {
-                settingsDataStore.setMultiExitRules(current.text)
+                settingsDataStore.setMultiExitRules(savedText)
                 routingTableStore.refresh()
-                mutableState.value = current.copy(savedText = current.text)
+                // 落库期间用户可能继续输入: 只把 savedText 记成**本次落库的内容**,
+                // text 保留最新输入 (老实现用启动时捕获的 current 整体回写会把新文本吞掉)。
+                mutableState.update { it.afterSave(savedText) }
             }
         }
 

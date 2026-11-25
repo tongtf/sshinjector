@@ -144,11 +144,16 @@ class TunnelManager
                         exits.remove(id, entry)
                         runCatching { plugin.disconnect() }
                         Log.e(TAG, "Failed to start $protocolId: ${result.exceptionOrNull()?.message}")
-                        VpnController.appLogThrottled(
-                            "隧道插件启动失败 · $protocolId — ${result.exceptionOrNull()?.message}",
-                            level = LogLevel.ERROR,
-                            throttleKey = "隧道插件启动失败",
-                        )
+                        if (id == ExitId.DEFAULT) {
+                            // 主出口失败 = 整个会话不可用, 进全局归因
+                            VpnController.appLogThrottled(
+                                "隧道插件启动失败 · $protocolId — ${result.exceptionOrNull()?.message}",
+                                level = LogLevel.ERROR,
+                                throttleKey = "隧道插件启动失败",
+                            )
+                        }
+                        // 附加出口: 由调用方按出口名打一条 WARNING (E-3: 不进全局故障归因),
+                        // 这里只留 logcat, 避免同一失败产生两条可见日志。
                         result
                     }
                 }

@@ -70,7 +70,6 @@ class SshVpnService : VpnService() {
     @Inject lateinit var tunnelManager: TunnelManager
 
     @Volatile private var vpnInterface: ParcelFileDescriptor? = null
-    private var tunFd: java.io.FileDescriptor? = null
 
     // SupervisorJob: 某个 launch 逃逸异常只取消该协程, 不连坐健康监测/状态镜像/池失败重连
     // (普通 Job 下兄弟协程全部被取消, 且 UI 仍显示已连接, 无任何可见迹象)
@@ -407,7 +406,6 @@ class SshVpnService : VpnService() {
             } catch (_: Exception) {
             }
             vpnInterface = null
-            tunFd = null
             cleanupScope.cancel()
         }
         super.onDestroy()
@@ -536,7 +534,7 @@ class SshVpnService : VpnService() {
             settingsDataStore.setLastServerId(target.id)
         } else {
             vpnController.addLog(
-                "切换服务器未完成 · 保持原会话 (${currentServer?.name ?: "-"})",
+                "切换服务器未完成 · 保持原会话 ($from)",
                 LogLevel.WARNING,
             )
         }
@@ -598,7 +596,6 @@ class SshVpnService : VpnService() {
         } catch (_: Exception) {
         }
         vpnInterface = newVpnInterface
-        tunFd = newFd
         return newFd
     }
 
@@ -884,6 +881,11 @@ class SshVpnService : VpnService() {
         poolFailRetryJob?.cancel()
         poolFailRetryJob = null
         stopHealthMonitor()
+        // 残留的 2s 去抖重连会把刚建好的新会话拆掉; 池失败标志残留在补跑任务被取消时
+        // 会让 Failed 观察者永远跳过清理 → isRunning 卡住, 下次 connect 被拒。
+        reconnectJob?.cancel()
+        reconnectJob = null
+        poolFailReconnectPending = false
 
         if (userInitiated) {
             vpnController.reportHealth(verified = false, failedStep = null)
@@ -906,7 +908,6 @@ class SshVpnService : VpnService() {
         } catch (_: Exception) {
         }
         vpnInterface = null
-        tunFd = null
 
         // 3. 清理状态
         currentServer = null
@@ -973,7 +974,6 @@ class SshVpnService : VpnService() {
         } catch (_: Exception) {
         }
         vpnInterface = null
-        tunFd = null
         currentServer = null
         serviceVpnState.value = DomainVpnState()
         notificationManager?.cancel(NOTIFICATION_ID)
@@ -1251,7 +1251,6 @@ class SshVpnService : VpnService() {
                     } catch (_: Exception) {
                     }
                     vpnInterface = null
-                    tunFd = null
 
                     // 2. 重建接口并重连
                     val (dnsMode, allowedPackages) = whitelistSelection()

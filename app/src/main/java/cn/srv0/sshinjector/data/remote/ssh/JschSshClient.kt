@@ -693,7 +693,6 @@ class JschSshClient
         private val pool = ConcurrentLinkedQueue<PooledSession>()
         private val sessionIndex = AtomicInteger(0)
 
-        @Volatile private var scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         private val isConnectedFlag = AtomicBoolean(false)
         private var currentConfig: ServerConfig? = null
 
@@ -703,7 +702,6 @@ class JschSshClient
             Disconnected,
             Connecting,
             Authenticating,
-            EstablishingTunnel,
             Connected,
             Disconnecting,
             Failed,

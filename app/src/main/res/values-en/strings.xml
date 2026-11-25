@@ -295,6 +295,11 @@
     <string name="settings_logs_desc">View, copy and export app logs</string>
     <string name="log_title">Logs</string>
     <string name="log_all">All</string>
+    <string name="log_level_debug">Debug</string>
+    <string name="log_level_info">Info</string>
+    <string name="log_level_success">Success</string>
+    <string name="log_level_warning">Warning</string>
+    <string name="log_level_error">Error</string>
     <string name="log_empty">No logs yet</string>
     <string name="log_copy">Copy</string>
     <string name="log_export">Export</string>

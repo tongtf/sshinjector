@@ -184,19 +184,28 @@ class TcpUplinkFlushTest {
                 conn.queueUpstream("OLD")
                 val sm = newStateMachine()
 
-                val written = sm.forwardToSocks(conn, ByteBuffer.wrap("NEW".toByteArray()), 0, 3)
+                // 此刻到达的包 seq 仍是排空前的期望值 = 队列里那段数据的重传:
+                // 排空并 ACK 之后它已过期, 必须丢弃 (再写一遍就是重复上行)
+                val stale = sm.forwardToSocks(conn, ByteBuffer.wrap("NEW".toByteArray()), 0, 3, payloadSeq = 1001L)
+                assertEquals("已由排空 ACK 覆盖的重传段不得再写", 0, stale)
+                assertEquals(
+                    "对端只应收到队列里的旧数据一次",
+                    "OLD",
+                    String(readExactly(peerResult.get(), 3, SOCKET_TIMEOUT_MS), Charsets.US_ASCII),
+                )
+                assertEquals("排空写出的旧数据要记账", 3L, conn.forwardedBytes)
 
-                assertEquals("新数据仍要照常写出去 (闸门只负责先排空队列)", 3, written)
+                // 真正的下一条新数据 (seq = 1001 + 3) 正常写出, 且不会重复
+                val fresh = sm.forwardToSocks(conn, ByteBuffer.wrap("NEW".toByteArray()), 0, 3, payloadSeq = 1004L)
+                assertEquals(3, fresh)
                 assertEquals(
-                    "对端必须先收到队列里的旧数据: 新数据越过旧数据 = 隧道侧字节流永久错位",
-                    "OLDNEW",
-                    String(readExactly(peerResult.get(), 6, SOCKET_TIMEOUT_MS), Charsets.US_ASCII),
+                    "旧数据在前、新数据在后",
+                    "NEW",
+                    String(readExactly(peerResult.get(), 3, SOCKET_TIMEOUT_MS), Charsets.US_ASCII),
                 )
-                assertEquals(
-                    "forwardedBytes 只记排空写出的旧数据 (新数据由调用方记账)",
-                    3L,
-                    conn.forwardedBytes,
-                )
+                // 直写由调用方记账 (生产在 handleRead 里), 这里模拟同一口径
+                conn.forwardedBytes += fresh
+                assertEquals(6L, conn.forwardedBytes)
             } finally {
                 runCatching { channel.close() }
             }
@@ -233,7 +242,7 @@ class TcpUplinkFlushTest {
                 conn.uplinkFlushing = true
                 val sm = newStateMachine(tunPackets)
 
-                val written = sm.forwardToSocks(conn, ByteBuffer.wrap("NEW".toByteArray()), 0, 3)
+                val written = sm.forwardToSocks(conn, ByteBuffer.wrap("NEW".toByteArray()), 0, 3, payloadSeq = 1001L)
 
                 assertEquals("排空进行中: 新数据不得越过队列", 0, written)
                 assertEquals("不推进 forwardedBytes (客户端会重传这一段)", 0L, conn.forwardedBytes)

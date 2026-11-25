@@ -190,6 +190,15 @@ class RoutingTableTest {
     }
 
     @Test
+    fun `unspecified addresses are rejected instead of silently never matching`() {
+        // 0.0.0.0 / :: 是"未指定地址": 规则编辑器的占位目标会误命中, 生产永不命中
+        val parsed = ExitRuleParser.parse("0.0.0.0 -> hk\n:: -> jp\n0.0.0.0:443 -> hk")
+
+        assertTrue(parsed.rules.isEmpty())
+        assertEquals(3, parsed.issues.count { it.issue == RuleIssue.INVALID_TARGET })
+    }
+
+    @Test
     fun `invalid exit names are syntax errors but unknown ones are not`() {
         val parsed = ExitRuleParser.parse("example.com -> HK 1\nexample.com -> jp")
 

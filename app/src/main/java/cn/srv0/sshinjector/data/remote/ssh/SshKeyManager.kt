@@ -5,6 +5,8 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.util.Log
+import cn.srv0.sshinjector.domain.usecase.VpnController
+import cn.srv0.sshinjector.ui.viewmodel.LogLevel
 import com.jcraft.jsch.JSch
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
@@ -403,6 +405,19 @@ class SshKeyManager
             return readEncryptedMetaFile(metaFile)?.lineSequence()?.firstOrNull() ?: "ECDSA"
         }
 
+        /**
+         * 生物识别录入变更会让 `setInvalidatedByBiometricEnrollment` 的 key 永久失效。
+         * 只写 logcat 等于用户永远不知道为什么连不上 (无 adb 现场唯一可见面是应用内日志)。
+         */
+        private fun reportInvalidatedKey(e: Exception) {
+            VpnController.appLogThrottled(
+                "SSH 密钥已失效 · 需在密钥管理重新生成或重新导入 — ${e.javaClass.simpleName}",
+                level = LogLevel.WARNING,
+                throttleKey = "SSH 密钥已失效",
+            )
+            Log.e("SshKeyManager", "SSH key invalidated: ${e.message}", e)
+        }
+
         fun getPrivateKeyForAuth(alias: String): PrivateKey? {
             val fullAlias = "$aliasPrefix$alias"
 
@@ -440,6 +455,12 @@ class SshKeyManager
                     Log.e("SshKeyManager", "Key not found in KeyStore")
                     null
                 }
+            } catch (e: android.security.keystore.KeyPermanentlyInvalidatedException) {
+                reportInvalidatedKey(e)
+                null
+            } catch (e: java.security.UnrecoverableKeyException) {
+                reportInvalidatedKey(e)
+                null
             } catch (e: Exception) {
                 Log.e("SshKeyManager", "Failed to get private key: ${e.message}", e)
                 null

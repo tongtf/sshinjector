@@ -22,26 +22,6 @@ object LocaleManager {
             else -> langCode
         }
 
-    fun applyLanguage(
-        context: Context,
-        langCode: String,
-    ): Context {
-        val locale =
-            when (langCode) {
-                LANGUAGE_CHINESE -> Locale.SIMPLIFIED_CHINESE
-                LANGUAGE_ENGLISH -> Locale.ENGLISH
-                LANGUAGE_RUSSIAN -> Locale("ru")
-                else ->
-                    run {
-                        val config = Configuration(context.resources.configuration)
-                        return context.createConfigurationContext(config)
-                    }
-            }
-        val config = Configuration(context.resources.configuration)
-        config.setLocale(locale)
-        return context.createConfigurationContext(config)
-    }
-
     fun applyLanguageBase(
         base: Context,
         langCode: String,

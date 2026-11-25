@@ -112,7 +112,8 @@ class VpnController
         // 健康线程在 stats/健康环里读它算 packetLoopActive, 不加 @Volatile 会读到陈旧 Job
         // → 虚假 TUN FAIL (需连续 2 窗才降级, 影响小但不该有)
         @Volatile private var packetLoopJob: Job? = null
-        private var tunGeneration = 0L
+
+        @Volatile private var tunGeneration = 0L
         private val readBuffer = ByteBuffer.allocate(32768).order(ByteOrder.BIG_ENDIAN)
 
         // 分阶段健康 (TUN/DNS/转发三段): 端到端探测探不到的盲区由它补
@@ -498,6 +499,8 @@ class VpnController
                 // 0. 新会话新建全出口共享连接预算 (512 = 改造前 MAX_CONNECTIONS, 行为等价)。
                 //    必须每会话新建: 复用会让上一会话泄漏的 permit 永久吃掉新会话容量。
                 connectionBudgetHolder.startSession()
+                // DNS 会话边界: 清空在途查询/缓存/待投递应答 (跨会话投递会污染新 TUN)
+                dnsInterceptor.resetSessionState()
 
                 // 1. 启动隧道插件 (内含 SSH TCP+握手, 连接流程中最慢阶段)
                 val tunnelConfig = TunnelConfig.forSocks5(server, password)
@@ -769,6 +772,7 @@ class VpnController
             // F12-j: 释放对 VpnService 的 lambda 引用 (早退路径也必须清)
             setProtectFunction(null)
             setProtectTcpFunction(null)
+            dnsInterceptor.setProtectFunction(null)
             // 建连早期失败走不到下面完整清理段: 先补一次汇总 (幂等, 重复调用不会重复打)
             AppMetrics.summaryOnce().takeIf { it.isNotEmpty() }?.let { addLog(it, LogLevel.INFO) }
             if (!isRunning) return
@@ -783,8 +787,8 @@ class VpnController
             packetLoopJob = null
             addLog("已取消所有子任务", LogLevel.DEBUG)
 
-            // 排空 DNS 残留响应, 避免旧会话数据泄漏到下一次连接
-            dnsInterceptor.clearPendingResponses()
+            // 排空 DNS 残留响应并作废在途查询/缓存, 避免旧会话数据泄漏到下一次连接
+            dnsInterceptor.resetSessionState()
 
             // 断开前补一条数据面快照: 60s 周期在 30~50s 的短会话里一次都打不出来, 而"无 adb"
             // 现场只有导出的日志 —— 资源节/回程闸门/地址惰性失效/在途通道 必须每条会话都留痕。
@@ -809,14 +813,20 @@ class VpnController
             connectionBudgetHolder.clearSession()
             routingTableStore.reset()
 
-            // 关闭输入输出流
+            // 关闭输入输出流: 三个 close 各自兜底, 第一个抛异常不能跳过后面两个
             try {
                 inputStream?.close()
-                closeTunWriter()
-                outputStream?.close()
-                addLog("TUN 数据流已关闭", LogLevel.DEBUG)
             } catch (_: Exception) {
             }
+            try {
+                closeTunWriter()
+            } catch (_: Exception) {
+            }
+            try {
+                outputStream?.close()
+            } catch (_: Exception) {
+            }
+            addLog("TUN 数据流已关闭", LogLevel.DEBUG)
 
             // 清理状态
             vpnInterface = null
@@ -915,6 +925,7 @@ class VpnController
             // F12-j: 释放对 VpnService 的 lambda 引用
             setProtectFunction(null)
             setProtectTcpFunction(null)
+            dnsInterceptor.setProtectFunction(null)
             isRunning = false
             try {
                 coroutineContext.cancelChildren()
@@ -923,8 +934,12 @@ class VpnController
             packetLoopJob?.cancel()
             packetLoopJob = null
 
+            // 与 disconnect() 对齐: 断开前补一条快照 + 最终归因 (forceReset 绕过整条链,
+            // 少这两行则看门狗断开路径在导出日志里没有任何结论)
+            emitDataPlaneSnapshot(force = true)
+            AppMetrics.summaryOnce().takeIf { it.isNotEmpty() }?.let { addLog(it, LogLevel.INFO) }
             // 投递协程已随 cancelChildren 停掉, 此刻排空不会与新会话竞争
-            dnsInterceptor.clearPendingResponses()
+            dnsInterceptor.resetSessionState()
             packetProcessor.resetTcpState()
 
             // 与 disconnect() 的清理段对齐: 先停隧道 (SSH 会话/本地代理), 再关 TUN 流
@@ -938,7 +953,13 @@ class VpnController
             routingTableStore.reset()
             try {
                 inputStream?.close()
+            } catch (_: Exception) {
+            }
+            try {
                 closeTunWriter()
+            } catch (_: Exception) {
+            }
+            try {
                 outputStream?.close()
             } catch (_: Exception) {
             }
@@ -980,7 +1001,13 @@ class VpnController
             val generation = ++tunGeneration
             try {
                 inputStream?.close()
+            } catch (_: Exception) {
+            }
+            try {
                 closeTunWriter()
+            } catch (_: Exception) {
+            }
+            try {
                 outputStream?.close()
             } catch (_: Exception) {
             }
@@ -1624,6 +1651,8 @@ class VpnController
             // 复制必要的数据到新数组，避免与主线程共享 buffer
             val packetData = ByteArray(buffer.remaining())
             buffer.duplicate().get(packetData)
+            // 会话代际: 断连/重建后旧会话的 DNS 应答不得写进新 TUN (旧 5-tuple 会错投)
+            val sessionGen = tunGeneration
 
             executor.submit {
                 var socket: DatagramSocket? = null
@@ -1740,6 +1769,10 @@ class VpnController
                             "DNS 绕过转发 · 构造响应包 dstPort=$srcPort size=${responsePkt.size}",
                             LogLevel.DEBUG,
                         )
+                    }
+                    if (sessionGen != tunGeneration) {
+                        addLog("DNS 绕过响应丢弃 · 会话已切换", LogLevel.DEBUG)
+                        return@submit
                     }
                     // 必须认返回值: 否则 DNS 绕过路径的写失败既不计 onDnsDelivered 也不计
                     // onTunWrite(false), 分阶段健康对它是全盲的。

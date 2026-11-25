@@ -484,29 +484,7 @@ private fun DashboardStatusCard(
                         },
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
-                    color =
-                        ratioLevelColor(
-                            MainViewModel.ratioLevel(
-                                if (state.javaHeapUsage != "-" &&
-                                    state.javaHeapUsage.contains(" MB")
-                                ) {
-                                    val num =
-                                        state.javaHeapUsage
-                                            .replace(" MB", "")
-                                            .replace(" GB", "")
-                                            .toFloatOrNull() ?: 0f
-                                    val inMb =
-                                        if (state.javaHeapUsage.contains(" GB")) {
-                                            num * 1024f
-                                        } else {
-                                            num
-                                        }
-                                    inMb / 50f
-                                } else {
-                                    0f
-                                },
-                            ),
-                        ),
+                    color = ratioLevelColor(memoryColorLevel(state.javaHeapUsage)),
                     fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -830,7 +808,6 @@ fun ServerListItem(
             listOf(
                 "Connecting",
                 "Authenticating",
-                "EstablishingTunnel",
                 "Disconnecting",
             )
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
@@ -1053,6 +1030,38 @@ private fun ratioLevelColor(level: MainViewModel.RatioLevel): Color {
         MainViewModel.RatioLevel.WARNING -> colors.statusWarning
         MainViewModel.RatioLevel.BAD -> colors.statusError
     }
+}
+
+/** 内存档位分母: 50MB 满档 (与 CPU 的 10% 满档同口径, 见 [MainViewModel.ratioLevel])。 */
+private const val MEMORY_RATIO_DIVISOR_MB = 50f
+
+/**
+ * 内存占用文本 → 颜色档位。
+ *
+ * 曾经外层只判 `contains(" MB")`、内层判 `contains(" GB")` —— 内层永远为假, 于是任何 ≥1GB 的
+ * 堆都被当成 0MB 恒显绿色。这里统一先换算成 MB 再比较; 解析不出来 (`-` / 空) 给 OK,
+ * 不把"没读到"报成故障色。
+ */
+internal fun memoryColorLevel(text: String): MainViewModel.RatioLevel {
+    val mb = memoryUsageMb(text) ?: return MainViewModel.RatioLevel.OK
+    return MainViewModel.ratioLevel(mb / MEMORY_RATIO_DIVISOR_MB)
+}
+
+/** `"12.3 MB"` / `"1.5 GB"` (见 [MainViewModel.formatMemorySize]) → MB; 其它形态返回 null。 */
+private fun memoryUsageMb(text: String): Float? {
+    val trimmed = text.trim()
+    val mb =
+        when {
+            trimmed.endsWith("MB") -> trimmed.removeSuffix("MB").trim().toFloatOrNull()
+            trimmed.endsWith("GB") ->
+                trimmed
+                    .removeSuffix("GB")
+                    .trim()
+                    .toFloatOrNull()
+                    ?.times(1024f)
+            else -> null
+        } ?: return null
+    return mb.takeIf { it >= 0f }
 }
 
 @Composable

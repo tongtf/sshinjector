@@ -245,6 +245,7 @@ object ExitRuleParser {
      * 与连接建立路径上, 于是表现为"输入几秒卡死"或连接超时。这里先用 [parseIpLiteral] 的字面量
      * 预检 (只放行数字/十六进制/点/冒号), 非字面量直接判 CIDR 非法。
      */
+    @Suppress("ReturnCount") // 每种非法形态一个早退出口, 合并反而绕
     private fun parseCidrTarget(
         target: String,
         exitId: String,
@@ -258,6 +259,9 @@ object ExitRuleParser {
         val prefix = target.substring(slash + 1).toIntOrNull()
         if (prefix == null) return TargetParse.Bad(RuleIssue.INVALID_CIDR, "前缀长度非法")
         if (prefix == 0) return TargetParse.Bad(RuleIssue.DEFAULT_ROUTE_REJECTED, "请改用 default -> <出口>")
+        if (ip.isAnyLocalAddress) {
+            return TargetParse.Bad(RuleIssue.INVALID_CIDR, "0.0.0.0 / :: 不是有效目标, 请改用 default")
+        }
         val maxPrefix = if (ip is Inet6Address) 128 else 32
         if (prefix !in 1..maxPrefix) {
             return TargetParse.Bad(RuleIssue.INVALID_CIDR, "前缀长度需为 1-$maxPrefix")
@@ -265,6 +269,7 @@ object ExitRuleParser {
         return TargetParse.Ok(ExitRule.Network(exitId, CidrRoute(ip, prefix), null, lineNo))
     }
 
+    @Suppress("ReturnCount") // 纯 IP / IP:端口 / 域名三条分支各自早退, 合并反而绕
     private fun parseHostTarget(
         target: String,
         exitId: String,
@@ -272,11 +277,19 @@ object ExitRuleParser {
     ): TargetParse {
         // 无端口的纯 IP 字面量先判: IPv6 若先按最后一个 ':' 切端口, "2001:db8::1" 会被切坏
         parseIpLiteral(target)?.let { ip ->
+            if (ip.isAnyLocalAddress) {
+                // 0.0.0.0 / :: 是"未指定地址", 用它做规则会误命中规则编辑器的占位目标,
+                // 生产环境却永远不命中 (conn.dstIp 不会是它) —— 直接拒绝, 让用户改 default。
+                return TargetParse.Bad(RuleIssue.INVALID_TARGET, "0.0.0.0 / :: 不是有效目标, 请改用 default")
+            }
             return TargetParse.Ok(ExitRule.Network(exitId, exactRoute(ip), null, lineNo))
         }
         val split = splitPort(target) ?: return TargetParse.Bad(RuleIssue.INVALID_PORT, "端口需为 1-65535")
         val ip = parseIpLiteral(split.first)
         if (ip != null) {
+            if (ip.isAnyLocalAddress) {
+                return TargetParse.Bad(RuleIssue.INVALID_TARGET, "0.0.0.0 / :: 不是有效目标, 请改用 default")
+            }
             return TargetParse.Ok(ExitRule.Network(exitId, exactRoute(ip), split.second, lineNo))
         }
         return parseDomainTarget(split.first, split.second, exitId, lineNo)

@@ -57,6 +57,9 @@ class TcpStateMachine(
 
     /** 因出口软上限而回退主出口的次数 (进快照; >0 = 该出口已被打满)。 */
     private val exitSoftCapTotal = AtomicLong(0)
+    private val exitFailoverTotal = AtomicLong(0)
+    private val uidTimeoutTotal = AtomicLong(0)
+    private val uidMissTotal = AtomicLong(0)
 
     /** 建连前快速失败重试次数 (进快照)。 */
     private val exitRetryTotal = AtomicLong(0)
@@ -522,7 +525,7 @@ class TcpStateMachine(
                     val receivedSeq = seqNum.toLong() and UINT32_MASK
                     if (receivedSeq == expectedBrowserSeq) {
                         buffer.position(payloadStart + dataOffset)
-                        val written = forwardToSocks(conn, buffer, payloadStart + dataOffset, payloadLen)
+                        val written = forwardToSocks(conn, buffer, payloadStart + dataOffset, payloadLen, receivedSeq)
                         if (written > 0) {
                             // 部分写也只推进/ACK 到已写处; 未写完的字节浏览器重传,
                             // 重传段 seq 落在 [expected, expected+written) 之外 → 正常续写或 dup 分支, 不重复
@@ -976,8 +979,15 @@ class TcpStateMachine(
         val uid =
             if (routing.table.hasAppRule) {
                 appRuleWaits.incrementAndGet()
+                val waitStartedAt = System.currentTimeMillis()
                 val resolved = conn.uidRequest?.await(UidRequest.UID_WAIT_TIMEOUT_MS) ?: AppUidResolver.NO_UID
-                if (resolved >= 0) appRuleUids.incrementAndGet()
+                if (resolved >= 0) {
+                    appRuleUids.incrementAndGet()
+                } else if (System.currentTimeMillis() - waitStartedAt >= UidRequest.UID_WAIT_TIMEOUT_MS - 1) {
+                    uidTimeoutTotal.incrementAndGet()
+                } else {
+                    uidMissTotal.incrementAndGet()
+                }
                 resolved
             } else {
                 AppUidResolver.NO_UID
@@ -1002,7 +1012,11 @@ class TcpStateMachine(
         if (atCap || unusable) {
             // 软上限**不是失败** (永远回主出口, 与 failover 开关无关);
             // 真不可用才看设置: 开 → 回主出口, 关 → 直接断开让客户端重试 (设计 §9.5)。
-            if (atCap) exitSoftCapTotal.incrementAndGet()
+            if (atCap) {
+                exitSoftCapTotal.incrementAndGet()
+            } else {
+                exitFailoverTotal.incrementAndGet()
+            }
             return if (atCap || routing.failoverEnabled) ExitChoice.Primary else ExitChoice.Reject
         }
         conn.exitId = exitId
@@ -1441,9 +1455,14 @@ class TcpStateMachine(
             val responsePacket = buildTcpResponsePacket(conn, payload, pos, chunkLen)
             pos += chunkLen
             if (responsePacket != null) {
-                // 回程数据走**阻塞**写入: 组包时 serverSeq 已推进, 本栈无重传, 丢了就是永久洞
-                sink.writeBlocking(responsePacket)
-                conn.downstreamBytes += chunkLen.toLong()
+                // 回程数据走**阻塞**写入: 组包时 serverSeq 已推进, 本栈无重传, 丢了就是永久洞。
+                // 必须认返回值: 失败仍记账会让"下行字节"虚高, 并把真实的零回程上报抑制掉。
+                if (sink.writeBlocking(responsePacket)) {
+                    conn.downstreamBytes += chunkLen.toLong()
+                } else {
+                    droppedDownstreamBytes.addAndGet(chunkLen.toLong())
+                    reportDownstreamDrop(conn, chunkLen)
+                }
             } else {
                 droppedDownstreamBytes.addAndGet(chunkLen.toLong())
                 reportDownstreamDrop(conn, chunkLen)
@@ -2035,6 +2054,7 @@ class TcpStateMachine(
         buffer: ByteBuffer,
         payloadStart: Int,
         payloadLength: Int,
+        payloadSeq: Long,
     ): Int {
         // F7: 没有通道时拒绝
         if (conn.state != TcpConnection.TcpState.Established || conn.socksChannel == null) {
@@ -2070,6 +2090,12 @@ class TcpStateMachine(
                 conn.pendingUpstreamBytes > 0 || conn.uplinkFlushing
             }
         if (queuedOrFlushing && !flushPendingUpstream(conn)) return 0
+
+        // 排空可能刚刚推进了 forwardedBytes (本轮自己, 或建连协程的并发 flush): 此时手里的包
+        // 就是被排空并 ACK 覆盖的那段重传, 再写一遍会在隧道侧产生重复字节。丢给 ACK/重传即可。
+        val expectedNow = (conn.browserSeq + 1 + conn.forwardedBytes) and UINT32_MASK
+        if (payloadSeq and UINT32_MASK != expectedNow) return 0
+        if (conn.state == TcpConnection.TcpState.Closed) return 0
 
         try {
             buffer.position(payloadStart)
@@ -2177,7 +2203,9 @@ class TcpStateMachine(
     fun routingDiagnostics(): String =
         "应用分流 等待 ${appRuleWaits.get()} · 拿到 uid ${appRuleUids.get()} · " +
             "${appIdentity?.diagnostics() ?: "应用映射 —"} · " +
-            "软上限回退 ${exitSoftCapTotal.get()} · 快速重试 ${exitRetryTotal.get()}"
+            "软上限回退 ${exitSoftCapTotal.get()} · 出口回退 ${exitFailoverTotal.get()} · " +
+            "uid 超时 ${uidTimeoutTotal.get()} / 无归属 ${uidMissTotal.get()} · " +
+            "快速重试 ${exitRetryTotal.get()}"
 
     /** 统计键 = 域名 (无映射时 `ip:port` 字面量); 与 [closeTcpConnection] 里那次反查同口径。 */
     private fun statsKey(conn: TcpConnection): String {
@@ -2467,6 +2495,9 @@ class TcpStateMachine(
         appRuleWaits.set(0)
         appRuleUids.set(0)
         exitSoftCapTotal.set(0)
+        exitFailoverTotal.set(0)
+        uidTimeoutTotal.set(0)
+        uidMissTotal.set(0)
         exitRetryTotal.set(0)
         // 两个 gauge: 所有连接已被关闭, 此刻在途应为 0 (清掉是为了不把上一会话的残值当现状)
         flowWaiters.set(0)

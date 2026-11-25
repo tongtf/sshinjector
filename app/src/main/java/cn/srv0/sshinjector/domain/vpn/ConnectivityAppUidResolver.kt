@@ -73,7 +73,10 @@ class ConnectivityAppUidResolver
                 TimeUnit.SECONDS,
                 ArrayBlockingQueue(QUEUE_CAPACITY),
                 { r -> Thread(r, THREAD_NAME).apply { isDaemon = true } },
-                ThreadPoolExecutor.DiscardPolicy(),
+                // AbortPolicy (默认): 队列满时**抛** RejectedExecutionException 走下面的补偿分支。
+                // 曾经的 DiscardPolicy 会静默丢掉任务 → 那个 UidRequest 永不 complete, 违反
+                // "句柄一定完成"的契约 (await 的有界性就靠它)。
+                ThreadPoolExecutor.AbortPolicy(),
             ).apply { allowCoreThreadTimeOut(true) }
 
         override fun request(
@@ -88,13 +91,14 @@ class ConnectivityAppUidResolver
                 handle.complete(AppUidResolver.NO_UID)
                 return handle
             }
-            // 在途上限**远小于**队列容量, 因此 execute 不会触发拒绝 (DiscardPolicy 只是兜底)。
-            if (pending.get() >= MAX_PENDING) {
+            // 在途上限用**原子占位**而不是先 get 再 increment: check-then-act 会让并发调用同时
+            // 通过检查, pending 越界 (上限也就失去意义)。
+            if (pending.incrementAndGet() > MAX_PENDING) {
+                pending.decrementAndGet()
                 dropped.incrementAndGet()
                 handle.complete(AppUidResolver.NO_UID)
                 return handle
             }
-            pending.incrementAndGet()
             queries.incrementAndGet()
             try {
                 executor.execute { resolveAndComplete(srcIp, srcPort, dstIp, dstPort, handle) }
@@ -222,7 +226,7 @@ class ConnectivityAppUidResolver
             /** `IPPROTO_TCP` (android.system.OsConstants); 6 在 MagicNumber 白名单内。 */
             const val IPPROTO_TCP = 6
 
-            /** 在途查询上限 (≪ 队列容量, 保证 `execute` 不触发拒绝)。 */
+            /** 在途查询上限 (≪ 队列容量: 正常路径在入队前就被这里限流, 队列拒绝只是兜底)。 */
             const val MAX_PENDING = 64
             const val QUEUE_CAPACITY = 128
             const val KEEP_ALIVE_SECONDS = 30L
@@ -244,7 +248,14 @@ internal class DisableWindow(
     private val windowMs: Long,
     private val nowMs: () -> Long,
 ) {
-    private var untilMs = 0L
+    /**
+     * 窗口截止时刻。
+     *
+     * `@Volatile`: `trip()` 在单线程查询池里写, `isActive()`/`remainingMs()` 在 packetLoop 与
+     * 快照线程里读 —— 非 volatile 的裸 `Long` 在 32 位 ABI 上会撕裂 (读到"低位新 + 高位旧"),
+     * 暂停窗口凭空变成几十年或直接归零。同类的 [reason] 本来就是 volatile, 这里原先漏了。
+     */
+    @Volatile private var untilMs = 0L
 
     /** 最近一次拒绝原因 (窗口内有效)。 */
     @Volatile var reason: String? = null

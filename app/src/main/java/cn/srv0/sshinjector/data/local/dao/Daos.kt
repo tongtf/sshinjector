@@ -20,6 +20,17 @@ interface ServerDao {
     @Update
     suspend fun update(server: ServerEntity): Int
 
+    /**
+     * 只改密码列, 且仅当密码仍是读取时的旧值 (CAS): 整行 UPDATE 会吞掉并发编辑的表单字段,
+     * 无条件列更新会覆盖用户刚改的新密码。
+     */
+    @Query("UPDATE servers SET password = :password WHERE id = :id AND password = :expectedOld")
+    suspend fun updatePasswordIfUnchanged(
+        id: Long,
+        expectedOld: String,
+        password: String,
+    ): Int
+
     @Query("DELETE FROM servers WHERE id = :id")
     suspend fun delete(id: Long): Int
 

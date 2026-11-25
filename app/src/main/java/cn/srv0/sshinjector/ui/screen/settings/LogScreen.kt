@@ -54,6 +54,9 @@ import java.util.Locale
 /**
  * 日志查看: 按级别过滤、复制、导出 (下载目录)、清空。
  * 内容为 VpnController.addLog 产生的应用日志 (最近 2000 条)。
+ *
+ * 复制/导出**永远导出全量条目** (级别筛选只影响列表展示): 「故障归因」等结论行是 INFO 级,
+ * 跟随筛选导出会让证据与结论对不上 (无 adb 现场全靠这份文件判读)。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -81,7 +84,9 @@ fun LogScreen(
     // 文案在组合作用域解析 (lint: 不允许用 LocalContext 查资源, 配置变更会拿到旧值)
     val msgEmpty = stringResource(R.string.log_empty)
     val msgCleared = stringResource(R.string.log_cleared)
-    val msgCopied = stringResource(R.string.log_copied, visible.size)
+    // 复制/导出走**全量**条目 (不跟随级别筛选): 「故障归因」是 INFO 级, 按级别筛掉后
+    // 导出的证据与结论对不上 —— 那是无 adb 现场唯一的判据来源。
+    val msgCopied = stringResource(R.string.log_copied, entries.size)
     val msgExportTemplate = stringResource(R.string.log_export_done) // 含 %1$s 占位, 点击时替换文件名
     val msgExportFailed = stringResource(R.string.log_export_failed)
 
@@ -90,8 +95,8 @@ fun LogScreen(
     }
 
     fun exportableText(): String? {
-        if (visible.isEmpty()) return null
-        return viewModel.formatEntries(visible, lineFormat)
+        if (entries.isEmpty()) return null
+        return viewModel.formatEntries(entries, lineFormat)
     }
 
     Scaffold(
@@ -189,7 +194,7 @@ fun LogScreen(
                             filter = level
                             if (level == LogLevel.DEBUG) showDebug = true
                         },
-                        label = { Text(level.name, fontSize = 12.sp) },
+                        label = { Text(stringResource(level.labelRes), fontSize = 12.sp) },
                     )
                 }
             }

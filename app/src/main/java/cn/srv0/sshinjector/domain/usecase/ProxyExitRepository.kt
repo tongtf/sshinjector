@@ -37,11 +37,6 @@ class ProxyExitRepository
                 .map { list -> list.map { it.toDomain() } }
                 .flowOn(Dispatchers.IO)
 
-        suspend fun getAll(): List<ProxyExit> =
-            withContext(Dispatchers.IO) {
-                dao.getAllBlocking().map { it.toDomain() }
-            }
-
         /** 连接时启动哪些出口的唯一依据 (只取启用项, priority 升序)。 */
         suspend fun getEnabled(): List<ProxyExit> =
             withContext(Dispatchers.IO) {
@@ -107,20 +102,8 @@ class ProxyExitRepository
             withContext(Dispatchers.IO) { dao.setEnabled(id, enabled, Date()) }
         }
 
-        suspend fun setPriority(
-            id: Long,
-            priority: Int,
-        ) {
-            withContext(Dispatchers.IO) { dao.setPriority(id, priority, Date()) }
-        }
-
         suspend fun delete(id: Long) {
             withContext(Dispatchers.IO) { dao.delete(id) }
-        }
-
-        suspend fun getByName(rawName: String): ProxyExit? {
-            val name = ExitId.normalize(rawName) ?: return null
-            return withContext(Dispatchers.IO) { dao.getByName(name)?.toDomain() }
         }
 
         companion object {

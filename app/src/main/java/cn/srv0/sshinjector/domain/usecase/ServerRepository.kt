@@ -91,9 +91,9 @@ class ServerRepository
                     baseId = -1L
                 } else {
                     val existing = serverDao.getByIdBlocking(existingId) ?: return@withContext existingId
-                    entity =
-                        mergeForEdit(existing, incoming)
-                            .copy(isActive = if (setAsDefault) false else existing.isActive)
+                    // isActive 一律由事务决定: 关掉开关时必须真的取消激活 —— 旧实现
+                    // `else existing.isActive` 让"设为默认"永远关不掉 (保存成功但 DB 仍是 1)。
+                    entity = mergeForEdit(existing, incoming).copy(isActive = false)
                     baseId = existingId
                 }
                 // L7: 写入 + 激活单事务 — 中途失败不会留下"存了但没激活"的半状态
@@ -139,9 +139,12 @@ class ServerRepository
                         !it.password.isNullOrEmpty() && !it.password.startsWith(AesGcmCipher.ENCRYPTED_PREFIX)
                     }
                 for (entity in legacy) {
-                    // encrypt 写端不降级 (失败抛出), 单行失败不阻断其余行的迁移
-                    val encrypted = credentialCrypto.encrypt(entity.password) ?: continue
-                    serverDao.update(entity.copy(password = encrypted))
+                    // encrypt 写端不降级 (失败抛出), 单行失败不阻断其余行的迁移。
+                    // 只更新密码列 (CAS): 整行 UPDATE 会与用户编辑并发, 无条件列更新会覆盖新密码。
+                    val oldPassword = entity.password
+                    val encrypted = oldPassword?.let { credentialCrypto.encrypt(it) }
+                    if (oldPassword == null || encrypted == null) continue
+                    serverDao.updatePasswordIfUnchanged(entity.id, oldPassword, encrypted)
                 }
                 legacy.size
             }

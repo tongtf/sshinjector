@@ -189,6 +189,12 @@ class DnsInterceptor
                 { r -> Thread(r, "dns-probe").apply { isDaemon = true } },
             ).apply { allowCoreThreadTimeOut(true) }
         private val pendingQueries = ConcurrentHashMap<Int, DnsPendingQuery>()
+
+        /**
+         * 会话代际: disconnect/connect 都会自增。在途查询的应答返回时若代际已变, 直接丢弃 ——
+         * 否则断连后 5s 内重连, 旧 DNS 应答会投给新 TUN (端口复用时甚至拿到错误 IP)。
+         */
+        private val sessionGeneration = AtomicLong(0)
         private val dnsCache = ConcurrentHashMap<String, CacheEntry>()
 
         // F12-d: DNS 缓存/假 IP 映射键的唯一构造 — Name.toString(true) 无尾点 + "." + 类型;
@@ -350,6 +356,8 @@ class DnsInterceptor
             val dstPort: Int,
             val question: Record,
             val timestamp: Long = System.currentTimeMillis(),
+            /** 发起查询时的会话代际 (见 [resetSessionState])。 */
+            val generation: Long = 0L,
         )
 
         data class CacheEntry(
@@ -531,7 +539,7 @@ class DnsInterceptor
         // 用于绕过 VPN 的 socket 保护函数 (由 VpnService 提供)
         @Volatile private var protectSocket: ((DatagramSocket) -> Boolean)? = null
 
-        fun setProtectFunction(protectSocket: (DatagramSocket) -> Boolean) {
+        fun setProtectFunction(protectSocket: ((DatagramSocket) -> Boolean)?) {
             this.protectSocket = protectSocket
         }
 
@@ -720,6 +728,7 @@ class DnsInterceptor
                         dstIp = dstIp,
                         dstPort = dstPort,
                         question = question,
+                        generation = sessionGeneration.get(),
                     )
 
                 pendingQueries[queryId] = pending
@@ -924,7 +933,14 @@ class DnsInterceptor
         ) {
             val pending = pendingQueries.remove(queryId)
             if (pending == null) {
-                Log.w(TAG, ">>> [DnsInterceptor] [$queryId] onDnsResponse: no pending query found")
+                // 会话切换时 resetSessionState 会清空 pendingQueries, 在途应答在这里被丢弃是常态,
+                // 不是故障 (WARN 会进"故障归因"并制造假噪声)。
+                Log.d(TAG, ">>> [DnsInterceptor] [$queryId] onDnsResponse: pending already cleared")
+                return
+            }
+            if (pending.generation != sessionGeneration.get()) {
+                // 跨会话应答: 旧 TUN 的 5-tuple, 投给新会话只会污染结果
+                Log.d(TAG, ">>> [DnsInterceptor] [$queryId] stale response from previous session dropped")
                 return
             }
 
@@ -938,14 +954,18 @@ class DnsInterceptor
                         dnsCacheKey(pending.question.name, pending.question.type),
                         CACHE_TAG_DIRECT,
                     )
-                val minTtl = records.map { it.ttl }.minOrNull() ?: 300
-                cacheDns(
-                    cacheKey,
-                    CacheEntry(
-                        records = records.toList(),
-                        expireAt = System.currentTimeMillis() + minTtl.toLong() * 1000,
-                    ),
-                )
+                // 只缓存成功且有答案的响应: NXDOMAIN/SERVFAIL/空 ANSWER 若按 300s 缓存,
+                // 上游一次抖动会让域名在 5 分钟内一直"解析不到"。
+                if (response.header.rcode == Rcode.NOERROR && records.isNotEmpty()) {
+                    val minTtl = records.map { it.ttl }.minOrNull() ?: 300
+                    cacheDns(
+                        cacheKey,
+                        CacheEntry(
+                            records = records.toList(),
+                            expireAt = System.currentTimeMillis() + minTtl.toLong() * 1000,
+                        ),
+                    )
+                }
 
                 // 建立 IP → 域名映射 (A/AAAA 记录)。
                 // 本函数只由 sendDnsOverProtectedSocket 调用 (SYSTEM / DOMAIN_SPLIT 未命中),
@@ -1110,6 +1130,7 @@ class DnsInterceptor
                         dstIp = dstIp,
                         dstPort = 53,
                         question = question,
+                        generation = sessionGeneration.get(),
                     )
                 val msg = Message(originalQueryId)
                 msg.addRecord(question, Section.QUESTION)
@@ -1277,6 +1298,17 @@ class DnsInterceptor
             while (pendingResponses.tryReceive().isSuccess) {
                 // 丢弃残留响应
             }
+        }
+
+        /**
+         * 会话边界 (connect 与 disconnect 都调用): 在途查询、DNS 缓存、待投递应答全部作废。
+         * 上次会话的应答留在缓存里会让网络切换后继续返回旧网络的真实 IP (最长 TTL)。
+         */
+        fun resetSessionState() {
+            sessionGeneration.incrementAndGet()
+            pendingQueries.clear()
+            dnsCache.clear()
+            clearPendingResponses()
         }
 
         fun getStats() =
