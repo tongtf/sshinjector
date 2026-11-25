@@ -424,6 +424,11 @@ class SshVpnService : VpnService() {
             when (connectIntent(true, currentServer?.id, serverId)) {
                 ConnectIntent.ALREADY_CONNECTED -> {
                     vpnController.addLog("已连接该服务器 · 无需重复连接", LogLevel.INFO)
+                    // onStartCommand 刚用占位文案覆盖过通知; 同值 StateFlow 不会再发事件,
+                    // 必须在这里用当前真实状态恢复, 否则通知一直停在"正在连接"。
+                    currentServer?.let { cfg ->
+                        updateNotification(cfg, StatusDisplay.build(serviceVpnState.value, this::getString))
+                    }
                     return
                 }
                 ConnectIntent.SWITCH -> {

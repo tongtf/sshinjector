@@ -1883,10 +1883,14 @@ class JschSshClient
                             interrupted = true
                         }
                     }
-                    // 通道关闭前可能残留未读数据
-                    if (exec.isClosed && outStream.available() > 0) {
-                        val n = outStream.read(buf)
-                        if (n > 0) stdout.write(buf, 0, n)
+                    // 通道关闭前可能残留未读数据: 必须循环读到空 (单次 8192B 会把
+                    // "脚本在关闭瞬间集中输出"的 >8KB 结果截断, 却仍返回成功 exitCode)
+                    if (exec.isClosed) {
+                        while (outStream.available() > 0) {
+                            val n = outStream.read(buf)
+                            if (n <= 0) break
+                            stdout.write(buf, 0, n)
+                        }
                     }
                     if (timedOut) {
                         exec.disconnect()

@@ -24,6 +24,8 @@ class CredentialCrypto
 
         private fun cipher(): AesGcmCipher = AesGcmCipher(getOrCreateKey())
 
+        // 并发 check-then-generate 会二次生成并**替换**同别名密钥, 已写入的密码密文全部解不开
+        @Synchronized
         private fun getOrCreateKey(): SecretKey {
             if (keyStore.containsAlias(KEY_ALIAS)) {
                 val entry =

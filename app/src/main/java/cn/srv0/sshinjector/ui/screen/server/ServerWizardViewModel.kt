@@ -119,8 +119,24 @@ class ServerWizardViewModel
         }
 
         fun retry() {
+            // 失败/篡改的密钥已经没用了: 下次 startProvision 生成新的
+            if (_result.value is WizardResult.Failed || _result.value is WizardResult.Tampered) {
+                discardProvisionAlias()
+            }
             _currentStep.value = WizardStep.LOGIN_CREDENTIALS
             _result.value = WizardResult.None
+        }
+
+        /** 删除向导生成但未落库的 key (幂等)。 */
+        private fun discardProvisionAlias() {
+            provisionAlias?.let { runCatching { keyManager.deleteKey(it) } }
+            provisionAlias = null
+        }
+
+        override fun onCleared() {
+            // 用户放弃向导 (未 save) 时不留无主密钥; 已保存的由服务器引用, 不能删
+            if (!_saved.value) discardProvisionAlias()
+            super.onCleared()
         }
 
         /** 校验 Step1 输入，合法则进入 Step2 */
@@ -175,12 +191,15 @@ class ServerWizardViewModel
             }
         }
 
+        /** 向导生成的 key 别名: 重试时复用, 失败/放弃时删除 (否则 Keystore 累积无主密钥)。 */
+        private var provisionAlias: String? = null
+
         private fun startProvision() {
             if (_currentStep.value == WizardStep.PROVISIONING) return
             _currentStep.value = WizardStep.PROVISIONING
             _result.value = WizardResult.None
             viewModelScope.launch {
-                val alias = "server_key_${System.currentTimeMillis()}"
+                val alias = provisionAlias ?: "server_key_${System.currentTimeMillis()}".also { provisionAlias = it }
                 try {
                     // 与 KeyManager/ServerEdit 对齐: 生物识别解锁开关打开时, 向导生成的密钥
                     // 也必须 setUserAuthenticationRequired — 否则向导(密钥主入口)建的密钥
@@ -190,6 +209,7 @@ class ServerWizardViewModel
                 } catch (e: Exception) {
                     _currentStep.value = WizardStep.RESULT
                     _result.value = WizardResult.Failed("密钥生成失败: ${e.message}")
+                    discardProvisionAlias()
                     return@launch
                 }
                 val publicKey = keyManager.getPublicKey(alias)
@@ -220,9 +240,11 @@ class ServerWizardViewModel
                                 }
                                 is ServerProvisioning.Outcome.TamperDetected -> {
                                     _result.value = WizardResult.Tampered("脚本完整性校验失败，可能被篡改")
+                                    discardProvisionAlias()
                                 }
                                 is ServerProvisioning.Outcome.Failed -> {
                                     _result.value = WizardResult.Failed(outcome.message)
+                                    discardProvisionAlias()
                                 }
                             }
                         }

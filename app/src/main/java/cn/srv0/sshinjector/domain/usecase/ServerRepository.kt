@@ -54,11 +54,6 @@ class ServerRepository
                 serverDao.getByIdBlocking(id)?.toDomain(credentialCrypto)
             }
 
-        suspend fun getActiveServer(): ServerConfig? =
-            withContext(Dispatchers.IO) {
-                serverDao.getActiveSync()?.toDomain(credentialCrypto)
-            }
-
         /**
          * 编辑/新建服务器并保留表单未展示的字段（已加密密码、指纹、DNS 模式等）。
          *

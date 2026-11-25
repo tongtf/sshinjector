@@ -5,7 +5,10 @@ import cn.srv0.sshinjector.domain.vpn.RemoteDomainResolver
 import cn.srv0.sshinjector.domain.vpn.RemoteResolveOutcome
 import cn.srv0.sshinjector.domain.vpn.SshIoDispatcher
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -71,7 +74,17 @@ class DomainIpResolver
                 logFallback(domain, "SSH IO 池饱和")
                 return null
             }
-            return when (val outcome = remoteResolver.resolveIps(domain)) {
+            val outcome =
+                try {
+                    remoteResolver.resolveIps(domain)
+                } catch (e: CancellationException) {
+                    // 会话重连会取消 pooled.scope, 探活 async 的取消不应把用户点"解析"整条链取消;
+                    // 但调用方自己的超时/取消必须继续传播 (isActive=false 时 rethrow)。
+                    if (!currentCoroutineContext().isActive) throw e
+                    logFallback(domain, "会话已切换")
+                    return null
+                }
+            return when (outcome) {
                 is RemoteResolveOutcome.Ok ->
                     if (outcome.ips.isEmpty()) {
                         logFallback(domain, "远端无记录")

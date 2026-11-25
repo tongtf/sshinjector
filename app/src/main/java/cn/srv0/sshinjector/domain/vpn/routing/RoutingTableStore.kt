@@ -95,8 +95,12 @@ class RoutingTableStore
                 snapshot
             }
 
-        /** 断开/回滚到关闭态 (之后所有连接走 default, 与改造前一致)。 */
-        fun reset() {
-            current = RoutingSnapshot.DISABLED
+        /**
+         * 断开/回滚到关闭态 (之后所有连接走 default, 与改造前一致)。
+         * 必须与 [refresh] 共用 refreshMutex: 否则"断开时的 reset"与"UI toggle 触发的 refresh"
+         * 并发时, 旧 refresh 可能在 reset 之后把 enabled 快照写回去 (跨会话残留)。
+         */
+        suspend fun reset() {
+            refreshMutex.withLock { current = RoutingSnapshot.DISABLED }
         }
     }
