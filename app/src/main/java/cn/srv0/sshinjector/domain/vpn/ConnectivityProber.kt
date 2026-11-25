@@ -1,6 +1,8 @@
 package cn.srv0.sshinjector.domain.vpn
 
 import cn.srv0.sshinjector.domain.model.HealthStep
+import cn.srv0.sshinjector.domain.usecase.VpnController
+import cn.srv0.sshinjector.ui.viewmodel.LogLevel
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.ConnectException
@@ -181,7 +183,15 @@ class ConnectivityProber(
             socket.soTimeout = readTimeoutMs
             if (socksHandshake(socket, endpoint) != null) return null
             readIpBody(socket, endpoint)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            // 出口 IP 失败不影响健康 (设计), 但**必须可见**: 否则现场只有一条
+            // "隧道通道空转关闭" 或首页占位符 "-", 无法判断是 TLS 握手/端点/远端关闭。
+            VpnController.appLogThrottled(
+                "出口 IP 获取失败 · ${endpointUrl.substringBefore('?')} — " +
+                    "${e.javaClass.simpleName}: ${e.message}",
+                level = LogLevel.INFO,
+                throttleKey = "出口 IP 获取失败",
+            )
             null
         } finally {
             runCatching { socket.close() }

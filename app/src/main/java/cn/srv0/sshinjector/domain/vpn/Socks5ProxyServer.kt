@@ -1304,10 +1304,18 @@ private class Socks5Connection(
     private fun reportEmptyChannelCloseIfNeeded(tunnel: TunnelChannel) {
         if (state != SocksState.Relaying) return
         if (toTunnelTotal.get() != 0L || fromTunnelTotal.get() != 0L) return
+        val handed = bytesToTunnel.get()
+        // 0 与 >0 是两种完全不同的成因, 旧文案对 0B 也印">0 = ..." 会把判读带偏
+        val detail =
+            if (handed > 0) {
+                "请求已进本栈但没写进通道, 通道被远端关闭"
+            } else {
+                "客户端未发送数据 (通道打开即被远端关闭)"
+            }
         VpnController.appLogThrottled(
             "隧道通道空转关闭 · ${targetForLog()}:$remotePort — SSH 0B 写出 / 0B 读回 · " +
-                "客户端已交 ${bytesToTunnel.get()}B · 存活 ${System.currentTimeMillis() - openedAt}ms " +
-                "(会话 ${tunnel.sessionId}; 客户端已交>0 = 请求还没出去通道就被远端关了)",
+                "客户端已交 ${handed}B · 存活 ${System.currentTimeMillis() - openedAt}ms " +
+                "(会话 ${tunnel.sessionId}; $detail)",
             level = LogLevel.WARNING,
             throttleKey = "隧道通道空转关闭",
         )
