@@ -18,6 +18,7 @@ import com.jcraft.jsch.JSchException
 import com.jcraft.jsch.Session
 import com.jcraft.jsch.UserInfo
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -356,6 +357,59 @@ internal data class PooledSession(
 }
 
 /**
+ * "已建成但还未交给池"的会话登记表 (P1-14, 纯逻辑, 单测 `SessionCleanupRegistryTest`)。
+ *
+ * 并行建连时 `createSession` 一返回, 会话就已经拥有 socket + 线程; 而 `awaitAll()` 抛
+ * `CancellationException` 时那个局部结果再没人接得住 —— 泄漏到进程结束。登记表把
+ * "谁负责关它"写清楚:
+ * - [track]: 会话建成, 暂时由本表负责;
+ * - [commit]: 所有权转移给会话池 (此后 `releaseUncommitted` 不再碰它);
+ * - [releaseUncommitted]: 取消/失败/`finally` 里兜底回收, **幂等** (多处调用是正常形态)。
+ *
+ * 提交按**身份** (`===`) 判定: `PooledSession` 是 data class, `keepAliveJob` 等可变字段
+ * 会让 equals 前后不一致, 用 equals 摘除会漏掉真正该回收的那条。
+ */
+internal class SessionCleanupRegistry<T>(
+    private val release: (T) -> Unit,
+) {
+    private val lock = Any()
+    private val pending = ArrayList<T>()
+
+    fun track(item: T) {
+        synchronized(lock) { pending.add(item) }
+    }
+
+    /** @return true = 本条确实尚未提交并被标记为已提交 (所有权已转移)。 */
+    fun commit(item: T): Boolean =
+        synchronized(lock) {
+            val idx = pending.indexOfFirst { it === item }
+            if (idx < 0) {
+                false
+            } else {
+                pending.removeAt(idx)
+                true
+            }
+        }
+
+    /** 释放所有仍未被 [commit] 的条目; 重复调用不会再释放同一条 (表已清空)。 */
+    fun releaseUncommitted() {
+        val doomed =
+            synchronized(lock) {
+                if (pending.isEmpty()) {
+                    return
+                }
+                val copy = ArrayList<T>(pending)
+                pending.clear()
+                copy
+            }
+        doomed.forEach {
+            // 一条失败的会话不能让后面的会话漏掉 (回收路径优先保证"都尝试过")
+            runCatching { release(it) }
+        }
+    }
+}
+
+/**
  * `createDirectChannel` 候选循环的预算算术与「坏会话后置」判据 (纯逻辑, 单测锁死)。
  *
  * 为什么要单独抽出来: 曾经把「总预算 / 候选数」**当成总预算**用
@@ -668,6 +722,14 @@ class JschSshClient
             connectionState.value = ConnectionState.Connecting
             currentConfig = config
 
+            // P1-14: 并行建连里"已连上但还没入池"的会话必须有人负责关掉。
+            // 取消 (用户断开/上游超时) 会让 `awaitAll()` 直接抛出, 那个局部结果再没人接得住 ——
+            // socket + 读线程泄漏到进程结束。登记表在 catch/finally 里兜底回收。
+            val created =
+                SessionCleanupRegistry<PooledSession> { pooled ->
+                    releasePooledSession(pooled)
+                }
+
             return try {
                 // 并行建连: 3 条 session 彼此无依赖, 串行会把 3 次 TCP+SSH 握手的 RTT
                 // 全部串进连接耗时 (实测建连 1.6~4s 的主要来源之一)。失败容忍逻辑不变。
@@ -675,13 +737,15 @@ class JschSshClient
                     coroutineScope {
                         (0 until SESSION_POOL_SIZE)
                             .map { i ->
-                                async(Dispatchers.IO) { i to createSession(config, i) }
+                                async(Dispatchers.IO) { i to createSession(config, i, created) }
                             }.awaitAll()
                     }
                 var successCount = 0
                 for ((i, pooled) in results) {
                     if (pooled != null) {
                         pool.add(pooled)
+                        // 入池即提交: 从此归 pool 管, 收尾逻辑不得再断它
+                        created.commit(pooled)
                         successCount++
                         Log.d(TAG, "Session pool [$i/$SESSION_POOL_SIZE] connected")
                     } else {
@@ -704,20 +768,39 @@ class JschSshClient
                 isConnectedFlag.set(true)
                 connectionState.value = ConnectionState.Connected
 
+                // keepAlive 必须**入池之后**才起 (P1-14): 不实现"入池即起"的话,
+                // createSession 里起的 heartbeat 协程会挂在一个永远不会被 drainPool 看见的
+                // 会话上。也不能再提前 —— 循环条件读 `isConnectedFlag`, 上面那行置位之前
+                // 启动会立刻退出 (心跳到这里才真正开始)。
+                for ((i, pooled) in results) {
+                    if (pooled != null) {
+                        startSessionKeepAlive(pooled, config.keepAliveInterval.toLong(), i)
+                    }
+                }
+
                 Log.d(TAG, "Session pool ready: $successCount/$SESSION_POOL_SIZE sessions active")
                 SshChannelFactory.ConnectionResult(true)
+            } catch (e: CancellationException) {
+                // **取消不是"连接失败"**: 折叠成 failure 会让发布层打 ERROR "连接失败",
+                // 也让 VpnController/SshVpnService 的取消分支 (以及它们自己的清理) 永远进不去。
+                connectionState.value = ConnectionState.Disconnected
+                throw e
             } catch (e: JSchException) {
                 handleError("SSH connection failed: ${e.message}")
                 SshChannelFactory.ConnectionResult(false, error = e.message)
             } catch (e: Exception) {
                 handleError("Unexpected error: ${e.message}")
                 SshChannelFactory.ConnectionResult(false, error = e.message)
+            } finally {
+                // 幂等: 正常路径上已全部 commit (空操作); 取消/失败路径在这里回收未入池会话
+                created.releaseUncommitted()
             }
         }
 
         private fun createSession(
             config: ServerConfig,
             index: Int,
+            created: SessionCleanupRegistry<PooledSession>,
         ): PooledSession? {
             var session: Session? = null
             return try {
@@ -798,9 +881,19 @@ class JschSshClient
 
                 val sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
                 val pooled = PooledSession(session = s, scope = sessionScope)
-                startSessionKeepAlive(pooled, config.keepAliveInterval.toLong(), index)
+                // 先登记再交出去 (P1-14): 从这一刻起它的存活由 connect 的收尾负责。
+                // keepAlive 由 connect 在**入池之后**启动 —— 未入池的会话不该持有 heartbeat 协程。
+                created.track(pooled)
 
                 pooled
+            } catch (e: CancellationException) {
+                // 取消要原样抛给 connect 的 catch(CancellationException), 不能被下面的
+                // "打成 ERROR + 返回 null" 吃掉 (那会变成"全池失败"而不是"用户取消了")
+                try {
+                    session?.disconnect()
+                } catch (_: Exception) {
+                }
+                throw e
             } catch (e: Exception) {
                 // 校验/连接失败的 Session 必须断开，否则 socket + 线程泄漏
                 try {
@@ -1321,22 +1414,30 @@ class JschSshClient
                 }
 
                 try {
-                    val newPooled = createSession(config, index)
-                    if (newPooled == null) {
-                        continue
+                    val created =
+                        SessionCleanupRegistry<PooledSession> { p -> releasePooledSession(p) }
+                    try {
+                        val newPooled = createSession(config, index, created)
+                        if (newPooled != null) {
+                            // 原子替换: 取出旧的, 放入新的
+                            pool.remove(pooled)
+                            pool.add(newPooled)
+                            created.commit(newPooled)
+
+                            statReconnectOk.incrementAndGet()
+                            Log.d(TAG, "Session pool-$index: reconnected successfully")
+                            // 取消旧 session 的 keepAlive 及其 scope (避免 CoroutineScope 泄漏)
+                            pooled.keepAliveJob?.cancel()
+                            pooled.scope.cancel()
+                            startSessionKeepAlive(newPooled, config.keepAliveInterval.toLong(), index)
+                            return
+                        }
+                    } finally {
+                        // 未入池的新会话 (取消/异常) 必须在离开本次尝试前回收
+                        created.releaseUncommitted()
                     }
-
-                    // 原子替换: 取出旧的, 放入新的
-                    pool.remove(pooled)
-                    pool.add(newPooled)
-
-                    statReconnectOk.incrementAndGet()
-                    Log.d(TAG, "Session pool-$index: reconnected successfully")
-                    // 取消旧 session 的 keepAlive 及其 scope (避免 CoroutineScope 泄漏)
-                    pooled.keepAliveJob?.cancel()
-                    pooled.scope.cancel()
-                    startSessionKeepAlive(newPooled, config.keepAliveInterval.toLong(), index)
-                    return
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Log.w(TAG, "Session pool-$index: reconnect failed: ${e.message}")
                     VpnController.appLogThrottled(
@@ -1395,17 +1496,27 @@ class JschSshClient
             var drained = 0
             while (pool.isNotEmpty()) {
                 val pooled = pool.poll() ?: break
-                pooled.keepAliveJob?.cancel()
-                try {
-                    pooled.session.disconnect()
-                } catch (_: Exception) {
-                }
-                pooled.scope.cancel()
+                releasePooledSession(pooled)
                 drained++
             }
             if (drained > 0) {
                 Log.i(TAG, "Session pool drained: $drained session(s)")
             }
+        }
+
+        /**
+         * 释放一条**不归池管**的会话 (取消/建连失败的收尾): 取消 keepAlive、断开 Session、取消 scope。
+         *
+         * 与 [drainPool] 共用同一口径 —— 两条回收路径各写一遍, 迟早漏掉其中一步
+         * (早期 [PooledSession.scope] 就是漏的那个, 每条泄漏会话约等于一条常驻协程)。
+         */
+        private fun releasePooledSession(pooled: PooledSession) {
+            pooled.keepAliveJob?.cancel()
+            try {
+                pooled.session.disconnect()
+            } catch (_: Exception) {
+            }
+            pooled.scope.cancel()
         }
 
         /** 仅供单测: 往池里种一条假会话, 用于锁死「无条件排空」语义。 */

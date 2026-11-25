@@ -6,6 +6,7 @@ import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
 import cn.srv0.sshinjector.data.remote.ssh.KnownHostsManager
 import cn.srv0.sshinjector.data.remote.ssh.SshKeyManager
 import cn.srv0.sshinjector.domain.model.ServerConfig
+import cn.srv0.sshinjector.domain.usecase.ServerDeleter
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -23,6 +24,7 @@ class ServerEditViewModel
     @Inject
     constructor(
         private val serverRepository: ServerRepository,
+        private val serverDeleter: ServerDeleter,
         private val keyManager: SshKeyManager,
         private val knownHostsManager: KnownHostsManager,
         private val settingsDataStore: SettingsDataStore,
@@ -149,11 +151,7 @@ class ServerEditViewModel
             onDone: () -> Unit,
         ) {
             viewModelScope.launch {
-                val wasActive = serverRepository.getServerById(serverId)?.isActive == true
-                serverRepository.deleteServer(serverId)
-                if (wasActive) {
-                    serverRepository.getAllServers().firstOrNull()?.let { serverRepository.setActiveServer(it.id) }
-                }
+                serverDeleter.delete(serverId)
                 onDone()
             }
         }

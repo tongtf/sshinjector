@@ -126,6 +126,15 @@ class TunnelManager
                         Log.d(TAG, "Discarding exit $id started after session change")
                         Result.failure(IllegalStateException("Session changed while starting exit $id"))
                     }
+                    exits[id] !== entry -> {
+                        // 启动期间被 `stopExit(id)` 摘掉 (用户禁用/降级回收): 立刻回收刚建好的池。
+                        // **不能**递增全局 `sessionGeneration` 来覆盖这一情形 —— 那会把其它正在
+                        // 启动的出口一并判成过期 ("禁用 A, B 也启动失败", P1-13)。
+                        exits.remove(id, entry)
+                        runCatching { plugin.disconnect() }
+                        Log.d(TAG, "Discarding exit $id stopped while starting")
+                        Result.failure(IllegalStateException("Exit $id stopped while starting"))
+                    }
                     result.isSuccess -> {
                         entry.health = ExitHealth.Ready
                         activePlugin.value = exits[ExitId.DEFAULT]?.plugin
@@ -155,7 +164,13 @@ class TunnelManager
             }
         }
 
-        /** 停止并移除单个出口 (断开/禁用/降级后回收)。不存在的 id 是 no-op。 */
+        /**
+         * 停止并移除单个出口 (断开/禁用/降级后回收)。不存在的 id 是 no-op。
+         *
+         * **只动自己的条目**: 不递增 [sessionGeneration] —— 那是 `stopAll()` 的全局语义,
+         * 用在这里会让其它正在启动的出口全部作废 (P1-13)。启动中的出口由 `startExit`
+         * 的 `exits[id] === entry` 身份复查兜住 (late success 自我回收)。
+         */
         suspend fun stopExit(id: String) {
             val exit = exits.remove(id) ?: return
             exit.health = ExitHealth.Stopped

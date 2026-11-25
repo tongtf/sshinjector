@@ -12,9 +12,11 @@ internal fun extractSha256(stdout: String): String? =
 internal fun isValidPublicKey(key: String): Boolean {
     // 单行约束: key 被写进 authorized_keys 的一行, 含 \n/\r 的输入可夹带第二行(甚至
     // command=... 前缀) — 公钥由本机 Keystore 生成/导入, 但上传路径不假设输入可信
-    if (key.any { it == '\n' || it == '\r' }) return false
-    val parts = key.trim().split(Regex("\\s+"))
-    if (parts.size < 2 || parts.size > 3) return false
+    if (key.any { it == '\n' || it == '\r' || it.isISOControl() }) return false
+    // comment 允许任意非换行文本 (包括空格): 生成器用的是 `android-generated@<millis>`,
+    // 但用户也可能粘贴带空格 comment 的公钥。前两个 token 必须严格 (算法白名单 + base64)。
+    val parts = key.trim().split(Regex("\\s+"), limit = 3)
+    if (parts.size < 2) return false
     val algo = parts[0]
     if (algo !in setOf("ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521")) {
         return false

@@ -7,6 +7,7 @@ import cn.srv0.sshinjector.domain.vpn.Socks5ProxyServer
 import cn.srv0.sshinjector.domain.vpn.tunnel.SessionTraffic
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelConfig
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelPlugin
+import kotlinx.coroutines.CancellationException
 
 /**
  * SOCKS5-over-SSH 隧道插件。
@@ -24,6 +25,16 @@ class Socks5TunnelPlugin(
 ) : TunnelPlugin {
     override val id = "socks5"
     private var socksServer: Socks5ProxyServer? = null
+
+    /**
+     * "启动途中已被要求关闭" 标志 (P1-13)。
+     *
+     * `stopExit` 可能在 `connect()` 还挂在 SSH 建池上时就调 `disconnect()` —— 那一刻
+     * `socksServer` 还是 null, 于是什么也没关掉, 而 `connect()` 随后才 `proxy.start(...)`:
+     * 没有这道门, 那个监听端口和 SSH 池就成了**没人看得见的孤儿** (出口条目已摘除)。
+     * `TunnelManager` 的身份复查兜住"启动完成之后", 这里兜住"启动完成之前"。
+     */
+    @Volatile private var closing = false
 
     /** 活跃连接数单一真相源 = 本地代理的连接表 (I-19), 不另记一份计数。 */
     override val activeConnections: Int
@@ -67,6 +78,8 @@ class Socks5TunnelPlugin(
 
     override suspend fun connect(config: TunnelConfig): Result<Unit> {
         val c = config as TunnelConfig.Socks5
+        // 每次启动重新武装: 上一次会话的 disconnect 不得影响本次启动
+        closing = false
 
         return try {
             val sshConfig =
@@ -102,8 +115,23 @@ class Socks5TunnelPlugin(
             val proxyResult = proxy.start(c.socksPort, "127.0.0.1")
             if (proxyResult.isFailure) throw proxyResult.exceptionOrNull()!!
 
+            if (closing) {
+                // 启动途中已被 stopExit 要求关闭: 刚起的监听/刚建的池必须自己收掉,
+                // 否则端口一直有人 accept, 而出口条目已经不在了 (孤儿出口)
+                runCatching { proxy.stop() }
+                runCatching { client.disconnect() }
+                _socksAuth = null
+                return Result.failure(IllegalStateException("Exit $exitId closed while starting"))
+            }
+
             socksServer = proxy
             Result.success(Unit)
+        } catch (e: CancellationException) {
+            // 取消**不是**"连接失败": 折叠成 Result.failure 会让发布层把用户断开记成 ERROR,
+            // 也会把刚建好的 SSH 池/监听留给下个会话。先回收再原样抛出。
+            // (disconnect() 目前没有挂起点, 所以在已取消的协程里调用是安全的 —— 别往里加 suspend 调用)
+            disconnect()
+            throw e
         } catch (e: Exception) {
             disconnect()
             Result.failure(e)
@@ -111,6 +139,8 @@ class Socks5TunnelPlugin(
     }
 
     override suspend fun disconnect() {
+        // 必须先置位再关资源: connect() 在 proxy.start 之后复查该标志 (P1-13)
+        closing = true
         try {
             socksServer?.stop()
         } catch (_: Exception) {

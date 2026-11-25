@@ -3,6 +3,7 @@ package cn.srv0.sshinjector.domain.vpn.tunnel
 import cn.srv0.sshinjector.data.remote.tunnel.TunnelPluginFactory
 import cn.srv0.sshinjector.domain.vpn.exit.ExitHealth
 import cn.srv0.sshinjector.domain.vpn.exit.ExitId
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -243,5 +244,145 @@ class TunnelManagerExitTest {
             assertTrue("代际变了之后完成的启动不得登记", manager.exitsSnapshot().isEmpty())
             assertNull(manager.exit(ExitId.DEFAULT))
             assertTrue("必须自我回收刚建的池", plugin.disconnects.isNotEmpty())
+        }
+
+    // ------------------------------------------------------------------ P1-13 / P1-14
+
+    /** 按出口 id 分配闸门: A/B 并发启动用例需要 A 卡住、B 正常返回。 */
+    private class PerExitGateFactory(
+        private val gates: Map<String, CompletableDeferred<Unit>> = emptyMap(),
+    ) : TunnelPluginFactory {
+        override val protocolId = "socks5"
+        val created = CopyOnWriteArrayList<FakePlugin>()
+        val firstCreated = CompletableDeferred<FakePlugin>()
+        val secondCreated = CompletableDeferred<FakePlugin>()
+
+        override fun create(
+            exitId: String,
+            label: String,
+        ): TunnelPlugin =
+            FakePlugin(exitId, gates[exitId]).also {
+                created += it
+                firstCreated.complete(it)
+                if (created.size == 2) secondCreated.complete(it)
+            }
+    }
+
+    /** 模拟"插件连接被取消": 必须向上传播成 CancellationException, 而不是 Result.failure。 */
+    private class CancellingPlugin(
+        override val exitId: String,
+    ) : TunnelPlugin {
+        override val id = "socks5"
+        val disconnects = CopyOnWriteArrayList<String>()
+
+        override suspend fun connect(config: TunnelConfig): Result<Unit> = throw CancellationException("启动被取消")
+
+        override suspend fun disconnect() {
+            disconnects += exitId
+        }
+    }
+
+    private class CancellingFactory : TunnelPluginFactory {
+        override val protocolId = "socks5"
+        val plugins = CopyOnWriteArrayList<CancellingPlugin>()
+
+        override fun create(
+            exitId: String,
+            label: String,
+        ): TunnelPlugin = CancellingPlugin(exitId).also { plugins += it }
+    }
+
+    @Test
+    fun `stopExit during connect releases the entry and late success does not revive it`() =
+        runBlocking {
+            val gate = CompletableDeferred<Unit>()
+            val factory = PerExitGateFactory(mapOf("hk" to gate))
+            val manager = TunnelManager(mapOf("socks5" to factory))
+
+            // connect() 挂在闸门上 —— 模拟"SSH 建池进行中用户禁用了这个出口"
+            var result: Result<Unit>? = null
+            val starting =
+                launch {
+                    result = manager.startExit("hk", "socks5", "hk", "hk.example.com", config())
+                }
+            val plugin = withTimeout(5_000) { factory.firstCreated.await() }
+            val entry = manager.exit("hk")
+            assertNotNull(entry)
+            withTimeout(5_000) { plugin.connectStarted.await() }
+
+            withTimeout(5_000) { manager.stopExit("hk") }
+
+            // 不等 connect 返回就必须已经回收: 否则这套池要等建连结束才有人看见 (孤儿出口)
+            assertNull("stopExit 之后条目必须不存在", manager.exit("hk"))
+            assertTrue("必须断开正在建池的插件", plugin.disconnects.isNotEmpty())
+            assertEquals("条目被摘掉时健康状态必须是 Stopped", ExitHealth.Stopped, entry?.health)
+
+            gate.complete(Unit)
+            withTimeout(5_000) { starting.join() }
+
+            assertNull("late success 不得把条目复活", manager.exit("hk"))
+            assertEquals("late success 不得置 Ready", ExitHealth.Stopped, entry?.health)
+            assertTrue("late success 也必须补一次 disconnect", plugin.disconnects.isNotEmpty())
+            assertTrue(
+                "启动结果必须是失败 (调用方不能以为出口可用, 实际: $result)",
+                result?.isFailure == true,
+            )
+        }
+
+    @Test
+    fun `stopExit of one exit does not abort another exit that is still starting`() =
+        runBlocking {
+            // A 卡在建连, B 立即成功 —— 若 stopExit 递增全局代际, B 会被连带判为过期
+            val gate = CompletableDeferred<Unit>()
+            val factory = PerExitGateFactory(mapOf("hk" to gate))
+            val manager = TunnelManager(mapOf("socks5" to factory))
+
+            val startingA =
+                launch {
+                    manager.startExit("hk", "socks5", "hk", "hk.example.com", config())
+                }
+            val pluginA = withTimeout(5_000) { factory.firstCreated.await() }
+            withTimeout(5_000) { pluginA.connectStarted.await() }
+
+            // B 在 A 仍处于 Starting 时启动, 必须成功 Ready
+            val resultB =
+                withTimeout(5_000) {
+                    manager.startExit("jp", "socks5", "jp", "jp.example.com", config())
+                }
+            val pluginB = withTimeout(5_000) { factory.secondCreated.await() }
+            assertTrue("B 必须正常启动", resultB.isSuccess)
+            assertEquals(ExitHealth.Ready, manager.exit("jp")?.health)
+
+            withTimeout(5_000) { manager.stopExit("hk") }
+            assertNull(manager.exit("hk"))
+
+            // 禁用 A 不得殃及 B (per-entry 身份复查, 不是全局代际)
+            assertEquals("stopExit(A) 不得影响 B", ExitHealth.Ready, manager.exit("jp")?.health)
+            assertTrue("B 不得被断开", pluginB.disconnects.isEmpty())
+
+            gate.complete(Unit)
+            withTimeout(5_000) { startingA.join() }
+            assertEquals(ExitHealth.Ready, manager.exit("jp")?.health)
+        }
+
+    @Test
+    fun `a cancelled connect propagates instead of being folded into failure`() =
+        runBlocking {
+            val factory = CancellingFactory()
+            val manager = TunnelManager(mapOf("socks5" to factory))
+
+            // runCatching 捕获的必须仍是 CancellationException (发布层要能识别"取消"而不是"连接失败")
+            val thrown =
+                runCatching {
+                    manager.startExit("hk", "socks5", "hk", "hk.example.com", config())
+                }.exceptionOrNull()
+
+            assertTrue(
+                "取消必须向上传播, 不能被 catch(Exception) 折叠成 Result.failure (实际: $thrown)",
+                thrown is CancellationException,
+            )
+            assertNull(manager.exit("hk"))
+            val plugin = factory.plugins.single()
+            assertTrue("取消路径也必须回收刚建的池", plugin.disconnects.isNotEmpty())
         }
 }

@@ -4,6 +4,7 @@ import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
 import cn.srv0.sshinjector.data.remote.ssh.KnownHostsManager
 import cn.srv0.sshinjector.data.remote.ssh.SshKeyManager
 import cn.srv0.sshinjector.domain.model.ServerConfig
+import cn.srv0.sshinjector.domain.usecase.ServerDeleter
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -33,6 +34,7 @@ import org.mockito.kotlin.whenever
 @OptIn(ExperimentalCoroutinesApi::class)
 class ServerEditViewModelTest {
     private lateinit var serverRepository: ServerRepository
+    private lateinit var serverDeleter: ServerDeleter
     private lateinit var knownHostsManager: KnownHostsManager
     private lateinit var viewModel: ServerEditViewModel
 
@@ -41,12 +43,14 @@ class ServerEditViewModelTest {
         // ViewModel init 会在构造时 launch (collect 全局设置流), 需先初始化 Main dispatcher
         Dispatchers.setMain(StandardTestDispatcher())
         serverRepository = mock()
+        serverDeleter = mock()
         knownHostsManager = mock()
         val settings = mock<SettingsDataStore>()
         doReturn(emptyFlow<Int?>()).`when`(settings).mtu
         doReturn(emptyFlow<Int?>()).`when`(settings).keepAlive
         doReturn(emptyFlow<Boolean?>()).`when`(settings).enableIPv6
-        viewModel = ServerEditViewModel(serverRepository, mock<SshKeyManager>(), knownHostsManager, settings)
+        viewModel =
+            ServerEditViewModel(serverRepository, serverDeleter, mock<SshKeyManager>(), knownHostsManager, settings)
     }
 
     @After
@@ -92,23 +96,16 @@ class ServerEditViewModelTest {
         }
 
     @Test
-    fun `delete reactivates next server when deleting active one`() =
+    fun `delete delegates to the shared server deleter`() =
         runTest {
             Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-            val active = ServerConfig(id = 7, name = "a", host = "h", username = "u", keyAlias = "k", isActive = true)
-            whenever(serverRepository.getServerById(7)).thenReturn(active)
-            whenever(serverRepository.getAllServers()).thenReturn(
-                listOf(ServerConfig(id = 8, name = "b", host = "h2", username = "u", keyAlias = "k")),
-            )
-            whenever(serverRepository.deleteServer(any())).thenReturn(0)
-            whenever(serverRepository.setActiveServer(any())).thenReturn(0)
-
+            // 提升默认/清 lastServerId 的规则由 ServerDeleter 统一负责 (ServerDeletionPlanTest 覆盖),
+            // ViewModel 只做委托 —— 三个删除入口必须走同一条路径。
             var done = false
             viewModel.delete(7) { done = true }
             testScheduler.advanceUntilIdle()
 
-            verify(serverRepository).deleteServer(7)
-            verify(serverRepository).setActiveServer(8)
+            verify(serverDeleter).delete(7)
             assertTrue(done)
         }
 

@@ -35,9 +35,11 @@ import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import cn.srv0.sshinjector.ui.StatusDisplay
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -49,6 +51,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import cn.srv0.sshinjector.domain.model.VpnState as DomainVpnState
@@ -415,21 +418,36 @@ class SshVpnService : VpnService() {
     // autoReconnect 的 catch → disconnectInternal) — Mutex 不可重入, 锁内再拿锁必死锁。
     private val connectMutex = Mutex()
 
+    @Suppress("ThrowsCount") // 配置/establish/controller 三层各有自己的失败原因, 统一抛出后由 catch 收敛
     private suspend fun connect(serverId: Long) {
-        // 已连接时点另一台服务器 = 切换, 不是静默 no-op (旧实现在这里只有一行 logcat,
-        // 用户看到的是"点了没反应", UI 那行还会一直停在 Connecting)。
-        when (connectIntent(vpnController.isVpnRunning(), currentServer?.id, serverId)) {
-            ConnectIntent.ALREADY_CONNECTED -> {
-                vpnController.addLog("已连接该服务器 · 无需重复连接", LogLevel.INFO)
-                return
+        // 已连接时点另一台服务器 = 切换, 不是静默 no-op。
+        // 注意: switchServer → autoReconnect 自己会取 connectMutex, 这条快速路径必须在锁外。
+        if (vpnController.isVpnRunning()) {
+            when (connectIntent(true, currentServer?.id, serverId)) {
+                ConnectIntent.ALREADY_CONNECTED -> {
+                    vpnController.addLog("已连接该服务器 · 无需重复连接", LogLevel.INFO)
+                    return
+                }
+                ConnectIntent.SWITCH -> {
+                    switchServer(serverId)
+                    return
+                }
+                ConnectIntent.CONNECT -> Unit
             }
-            ConnectIntent.SWITCH -> {
-                switchServer(serverId)
-                return
-            }
-            ConnectIntent.CONNECT -> Unit
         }
+        // 进锁后必须复查: 双击 / BootReceiver 与手动点击并发时, 第二次若直接往下走,
+        // 会先关掉第一次刚建好的 TUN, 再被 "VPN already running" 拒绝 → 连上又断。
+        // 不同服务器的请求不能在锁内调 autoReconnect (Mutex 不可重入), 先记下、出锁后再切。
+        var switchAfterUnlock: Long? = null
         connectMutex.withLock {
+            if (vpnController.isVpnRunning()) {
+                if (currentServer?.id == serverId) {
+                    vpnController.addLog("已连接该服务器 · 无需重复连接", LogLevel.INFO)
+                } else {
+                    switchAfterUnlock = serverId
+                }
+                return@withLock
+            }
             Log.d("SshVpnService", "Connecting to server $serverId")
             serviceVpnState.value = DomainVpnState(status = DomainVpnState.VpnStatus.Connecting)
 
@@ -475,21 +493,21 @@ class SshVpnService : VpnService() {
                 startHealthMonitor(merged)
                 updateNotification(merged, StatusDisplay.build(serviceVpnState.value, this::getString))
                 startWhitelistObserver()
+            } catch (e: CancellationException) {
+                // 服务销毁/协程取消: 不是"连接失败", 不能记 ERROR; 但资源仍要清理
+                withContext(NonCancellable) { disconnectInternal(userInitiated = false) }
+                throw e
             } catch (e: Exception) {
-                // 顺序: 先清理、后置 Failed — 旧序 (先 Failed 后清理) 会让 vpnState 观察者
-                // 看见中间 Failed 帧再触发第二次 disconnect (此时 vpnInterface 还在);
-                // 清理后再置 Failed, 资源已空, 兜底分支自动跳过。最终显示由下方
-                // reportHealth 的 failedStep 驱动 ("连接失败 · <步骤>"), 不靠 Failed 帧。
+                // 顺序: 先清理、后置终态 — 反过来会让 vpnState 观察者看见中间 Failed 帧
+                // 再触发第二次 disconnect (此时 vpnInterface 还在)。清理后再发终态,
+                // 资源已空, 兜底分支自动跳过。
                 disconnectInternal(userInitiated = false)
-                serviceVpnState.value =
-                    DomainVpnState(
-                        status = DomainVpnState.VpnStatus.Failed,
-                        error = e.message,
-                    )
-                // 断开清理不抹健康字段 (controller 侧保留), 失败归因在断开后补写, 供 UI 显示"连接失败 · <步骤>"
-                vpnController.reportHealth(verified = false, failedStep = mapConnectFailureToStep(e.message))
+                // 早期失败 (server 不存在 / establish 失败) 时 controller 仍停在 Connecting,
+                // 必须补一帧终态, 否则 UI 永久转圈; 汇总也在这里补一次 (幂等)。
+                vpnController.reportConnectFailure(mapConnectFailureToStep(e.message))
             }
         }
+        switchAfterUnlock?.let { switchServer(it) }
     }
 
     /**
@@ -508,14 +526,20 @@ class SshVpnService : VpnService() {
             vpnController.addLog("切换服务器失败 · 服务器不存在 (id=$serverId)", LogLevel.WARNING)
             return
         }
-        vpnController.addLog(
-            "切换服务器 · ${currentServer?.name ?: "当前会话"} → ${target.name}",
-            LogLevel.INFO,
-        )
-        // lastServerId 必须先写: autoReconnect 用它判断"用户是否已主动断开" (0 = 跳过重连)
-        settingsDataStore.setLastServerId(serverId)
-        serverRepository.setActiveServer(serverId)
+        val from = currentServer?.name ?: "当前会话"
+        vpnController.addLog("切换服务器 · $from → ${target.name}", LogLevel.INFO)
         autoReconnect(mergeGlobalSettings(target))
+        // 只有真的切过去了才写持久化: 否则会出现"DB 指向新服务器、隧道还在旧服务器"
+        // (autoReconnect 被在途重连的 CAS 拒掉时尤其明显)。
+        if (vpnController.isVpnRunning() && currentServer?.id == target.id) {
+            serverRepository.setActiveServer(target.id)
+            settingsDataStore.setLastServerId(target.id)
+        } else {
+            vpnController.addLog(
+                "切换服务器未完成 · 保持原会话 (${currentServer?.name ?: "-"})",
+                LogLevel.WARNING,
+            )
+        }
     }
 
     /**
@@ -1249,15 +1273,13 @@ class SshVpnService : VpnService() {
                     updateNotification(cfg, StatusDisplay.build(serviceVpnState.value, this::getString))
                     startWhitelistObserver()
                     Log.d("SshVpnService", "Auto reconnect succeeded to ${cfg.name}")
+                } catch (e: CancellationException) {
+                    withContext(NonCancellable) { disconnectInternal(userInitiated = false) }
+                    throw e
                 } catch (e: Exception) {
-                    // 同 connect catch: 先清理、后置 Failed, 避免观察者看见中间 Failed 帧二次 disconnect
+                    // 同 connect catch: 先清理、后置终态, 避免观察者看见中间 Failed 帧二次 disconnect
                     disconnectInternal(userInitiated = false)
-                    serviceVpnState.value =
-                        DomainVpnState(
-                            status = DomainVpnState.VpnStatus.Failed,
-                            error = e.message,
-                        )
-                    vpnController.reportHealth(verified = false, failedStep = mapConnectFailureToStep(e.message))
+                    vpnController.reportConnectFailure(mapConnectFailureToStep(e.message))
                 }
             }
         } finally {

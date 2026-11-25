@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.model.VpnState
+import cn.srv0.sshinjector.domain.usecase.ServerDeleter
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import cn.srv0.sshinjector.domain.usecase.VpnController
 import cn.srv0.sshinjector.vpn.SshVpnService
@@ -29,6 +30,7 @@ class ServerListViewModel
     constructor(
         application: Application,
         private val serverRepository: ServerRepository,
+        private val serverDeleter: ServerDeleter,
         private val vpnController: VpnController,
     ) : AndroidViewModel(application) {
         private val _servers = MutableStateFlow<List<ServerConfig>>(emptyList())
@@ -48,12 +50,7 @@ class ServerListViewModel
 
         fun delete(id: Long) {
             viewModelScope.launch {
-                val wasActive = serverRepository.getServerById(id)?.isActive == true
-                serverRepository.deleteServer(id)
-                // 删除默认服务器后, 提升一条其他服务器作为默认 (若有)
-                if (wasActive) {
-                    serverRepository.getAllServers().firstOrNull()?.let { serverRepository.setActiveServer(it.id) }
-                }
+                serverDeleter.delete(id)
             }
         }
 

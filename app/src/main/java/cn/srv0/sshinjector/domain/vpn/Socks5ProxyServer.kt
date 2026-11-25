@@ -589,17 +589,21 @@ private class Socks5Connection(
             buf = pendingWrites.peek()
         }
         // If queue is empty, remove OP_WRITE
-        if (pendingWrites.isEmpty()) {
-            try {
-                if (key.isValid) {
-                    // 与 sendReply (sshIoDispatcher) 并发修改 interestOps, 加锁避免 RMW 丢失位
-                    synchronized(backpressureLock) {
-                        key.interestOps(key.interestOps() and SelectionKey.OP_WRITE.inv())
-                    }
+        //
+        // P1-9: 判空与清位必须在**同一临界区**。sendReply (sshIo/回程线程) 是"先 add 再置位",
+        // 若这里在锁外读到空、随后 sendReply 完成 add+置位, 紧接着的清位就把它的 OP_WRITE 抹掉 ——
+        // 那条应答永远躺在 pendingWrites 里没人写, 客户端只会看到连接悬挂 (最容易误判成
+        // "远端不回话"的一类)。锁内再判空即可: 队列此刻为空 = 之后所有 add 的置位都在释放锁之后。
+        // 注意 add/poll/write 仍在锁外 (锁内不做 IO, 也不拉长临界区)。
+        try {
+            synchronized(backpressureLock) {
+                if (pendingWrites.isEmpty() && key.isValid) {
+                    // 与 sendReply 的置位共用 backpressureLock, 避免 RMW 丢失 interestOps 位
+                    key.interestOps(key.interestOps() and SelectionKey.OP_WRITE.inv())
                 }
-            } catch (e: java.nio.channels.CancelledKeyException) {
-                close()
             }
+        } catch (e: java.nio.channels.CancelledKeyException) {
+            close()
         }
     }
 

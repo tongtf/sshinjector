@@ -18,6 +18,7 @@ import cn.srv0.sshinjector.R
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.model.VpnState
+import cn.srv0.sshinjector.domain.usecase.ServerDeleter
 import cn.srv0.sshinjector.domain.usecase.ServerRepository
 import cn.srv0.sshinjector.domain.usecase.VpnController
 import cn.srv0.sshinjector.domain.vpn.DNS_MODE_COUNT
@@ -50,6 +51,7 @@ class MainViewModel
         @ApplicationContext private val context: Context,
         private val vpnController: VpnController,
         private val serverRepository: ServerRepository,
+        private val serverDeleter: ServerDeleter,
         private val settingsDataStore: SettingsDataStore,
     ) : ViewModel() {
         enum class RatioLevel {
@@ -518,31 +520,40 @@ class MainViewModel
             val current = _uiState.value
             if (current.isConnected && current.currentServerId == serverId) return
 
-            // 更新服务器连接状态为 Connecting
-            val newServerStatus =
-                _uiState.value.serverConnectionStatus.toMutableMap().apply {
-                    put(serverId, "Connecting")
-                }
-            _uiState.update { it.copy(serverConnectionStatus = newServerStatus) }
-
-            // 检查 VPN 权限
+            // 先检查权限: 只有真的要去连接时才置乐观状态。否则用户拒绝/取消授权后
+            // 没有任何 vpnState 事件能把这一行改回来 → 永久转圈。
             val prepareIntent = VpnService.prepare(context)
             if (prepareIntent != null) {
                 _uiState.update { it.copy(vpnPermissionIntent = prepareIntent, pendingConnectServerId = serverId) }
                 return
             }
+            markConnecting(serverId)
             startVpnService(serverId)
         }
 
         fun onVpnPermissionGranted(serverId: Long) {
             _uiState.update { it.copy(vpnPermissionIntent = null, pendingConnectServerId = null) }
+            markConnecting(serverId)
             startVpnService(serverId)
         }
 
         // F12-h: 授权被拒/取消 — 清除 intent 防止 LaunchedEffect 反复重弹,
-        // 保留 pendingConnectServerId 供用户重试
+        // 并收回乐观的 Connecting (否则该服务器行永久转圈)。
         fun clearVpnPermissionRequest() {
-            _uiState.update { it.copy(vpnPermissionIntent = null) }
+            val pending = _uiState.value.pendingConnectServerId
+            _uiState.update {
+                it.copy(
+                    vpnPermissionIntent = null,
+                    pendingConnectServerId = null,
+                    serverConnectionStatus = clearConnectingStatus(it.serverConnectionStatus, pending),
+                )
+            }
+        }
+
+        private fun markConnecting(serverId: Long) {
+            _uiState.update {
+                it.copy(serverConnectionStatus = it.serverConnectionStatus + (serverId to "Connecting"))
+            }
         }
 
         private fun startVpnService(serverId: Long) {
@@ -596,7 +607,7 @@ class MainViewModel
 
         fun deleteServer(id: Long) {
             viewModelScope.launch {
-                serverRepository.deleteServer(id)
+                serverDeleter.delete(id)
             }
         }
 

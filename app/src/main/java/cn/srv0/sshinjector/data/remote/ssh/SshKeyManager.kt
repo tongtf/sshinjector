@@ -676,7 +676,7 @@ class SshKeyManager
                 }
 
             val encoded = Base64.encodeToString(keyBytes, Base64.NO_WRAP)
-            return "$algorithm $encoded android-generated@${Date()}"
+            return "$algorithm $encoded ${generatedKeyComment(System.currentTimeMillis())}"
         }
 
         private fun writeString(
@@ -809,3 +809,12 @@ class SshKeyManager
             private const val MAX_IMPORTED_KEY_SIZE = 4096
         }
     }
+
+/**
+ * 生成公钥 comment (顶层, 便于纯 JVM 单测)。
+ *
+ * 必须是**单 token**: `Date().toString()` 含空格, 会把 `authorized_keys` 行切成多段;
+ * 旧校验按 `\s+` 严格 2..3 段 → 一键配置向导恒报"公钥格式非法" (2026-11-25 复核)。
+ * 毫秒时间戳同时保证每次生成的 comment 不重复。
+ */
+internal fun generatedKeyComment(nowMs: Long): String = "android-generated@$nowMs"

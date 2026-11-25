@@ -11,6 +11,7 @@ import cn.srv0.sshinjector.domain.model.ConnectionStats
 import cn.srv0.sshinjector.domain.model.HealthStep
 import cn.srv0.sshinjector.domain.model.ServerConfig
 import cn.srv0.sshinjector.domain.model.VpnState
+import cn.srv0.sshinjector.domain.model.connectFailureState
 import cn.srv0.sshinjector.domain.obs.AppMetrics
 import cn.srv0.sshinjector.domain.vpn.AdBlocker
 import cn.srv0.sshinjector.domain.vpn.AppIdentity
@@ -35,6 +36,7 @@ import cn.srv0.sshinjector.domain.vpn.exit.ProxyExit
 import cn.srv0.sshinjector.domain.vpn.routing.DomainExitPromotion
 import cn.srv0.sshinjector.domain.vpn.routing.RoutingSnapshot
 import cn.srv0.sshinjector.domain.vpn.routing.RoutingTableStore
+import cn.srv0.sshinjector.domain.vpn.routing.staleExitIds
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelConfig
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
@@ -53,7 +55,9 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -95,6 +99,7 @@ class VpnController
         private val connectionBudgetHolder: ConnectionBudgetHolder,
         private val serverRepository: ServerRepository,
         private val routingTableStore: RoutingTableStore,
+        private val proxyExitRepository: ProxyExitRepository,
         private val appIdentity: AppIdentity,
         @ApplicationContext private val context: Context,
     ) : CoroutineScope by CoroutineScope(Dispatchers.IO + SupervisorJob()) {
@@ -159,6 +164,27 @@ class VpnController
             // 数据面 (TcpStateMachine/UdpRelay) 由 DI 独立提供、拿不到本实例,
             // 经静态 sink 写应用内诊断日志 (VpnController 是 @Singleton, 注册一次即可)
             setAppLogSink { message, level -> addLog(message, level) }
+            // 出口对账: 服务器删除会由外键级联删掉 proxy_exits, 但运行中的隧道对象不会自己消失。
+            // 不回收就是"端口 + 3 条 SSH 会话"跨会话泄漏, 而且新连接仍可能被派发到它。
+            launch {
+                proxyExitRepository.allExitsFlow
+                    .map { list -> list.filter { it.enabled }.mapTo(HashSet()) { it.name } }
+                    .distinctUntilChanged()
+                    .collect { desired ->
+                        delay(EXIT_RECONCILE_DEBOUNCE_MS)
+                        if (!isRunning) return@collect
+                        val running =
+                            tunnelManager
+                                .exitsSnapshot()
+                                .filter { it.id != ExitId.DEFAULT }
+                                .map { it.id }
+                        val stale = staleExitIds(running, desired)
+                        if (stale.isEmpty()) return@collect
+                        stale.forEach { tunnelManager.stopExit(it) }
+                        routingTableStore.refresh()
+                        addLog("出口对账 · 已回收 ${stale.size} 个 (服务器/出口已删除)", LogLevel.INFO)
+                    }
+            }
         }
 
         /**
@@ -330,6 +356,9 @@ class VpnController
         companion object {
             /** 附加出口启动错峰 (设计 §9.3): 避免多个 SSH 握手同时撞服务器 MaxStartups。 */
             private const val ADDITIONAL_EXIT_STAGGER_MS = 300L
+
+            /** 出口表变化后的合并窗口: rename 是 delete+insert, 不合并会误停一次。 */
+            private const val EXIT_RECONCILE_DEBOUNCE_MS = 200L
             private const val TAG = "VpnController"
             private const val IPPROTO_UDP = 17
             private const val DNS_PORT = 53
@@ -645,7 +674,7 @@ class VpnController
             // 随机 reset 表现为"某个出口莫名其妙启动失败"。
             snapshot.exits.forEachIndexed { index, exit ->
                 launch {
-                    delay(ADDITIONAL_EXIT_STAGGER_MS * index)
+                    delay(ADDITIONAL_EXIT_STAGGER_MS * (index + 1))
                     // 错峰窗口内可能已断开, 或用户在 UI 上禁用了该出口 —— 别再把它拉起来
                     if (!isRunning) return@launch
                     if (routingTableStore.current().exits.none { it.name == exit.name }) return@launch
@@ -737,6 +766,8 @@ class VpnController
             // F12-j: 释放对 VpnService 的 lambda 引用 (早退路径也必须清)
             setProtectFunction(null)
             setProtectTcpFunction(null)
+            // 建连早期失败走不到下面完整清理段: 先补一次汇总 (幂等, 重复调用不会重复打)
+            AppMetrics.summaryOnce().takeIf { it.isNotEmpty() }?.let { addLog(it, LogLevel.INFO) }
             if (!isRunning) return
 
             addLog("正在断开 VPN 连接...", LogLevel.INFO)
@@ -798,7 +829,7 @@ class VpnController
             }
             // 会话结束前打一次最终归因: 导出的日志末尾就能看到"这次会话哪类故障占主导",
             // 不用在几百行里数 (无 adb 现场的唯一判据)
-            AppMetrics.summary().takeIf { it.isNotEmpty() }?.let { addLog(it, LogLevel.INFO) }
+            AppMetrics.summaryOnce().takeIf { it.isNotEmpty() }?.let { addLog(it, LogLevel.INFO) }
             addLog("VPN 连接已完全断开", LogLevel.INFO)
         }
 
@@ -1815,6 +1846,17 @@ class VpnController
             failedStep: HealthStep?,
         ) {
             updateState { it.copy(verified = verified, failedStep = failedStep) }
+        }
+
+        /**
+         * 建连**早期**失败 (发生在 [connect] 之前) 的终态发布。
+         *
+         * 必须由 SshVpnService 在资源清理**之后**调用: Failed 会触发失败观察者,
+         * 先发会让它在旧 TUN 还在时再拆一次。补这一帧是为了让 UI 不再永久停在 Connecting。
+         */
+        fun reportConnectFailure(step: HealthStep?) {
+            updateState { connectFailureState(it, step) }
+            AppMetrics.summaryOnce().takeIf { it.isNotEmpty() }?.let { addLog(it, LogLevel.INFO) }
         }
 
         /**

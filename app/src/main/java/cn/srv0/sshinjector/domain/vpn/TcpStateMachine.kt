@@ -346,6 +346,26 @@ class TcpStateMachine(
         var pendingUpstreamBytes: Long = 0
 
         /**
+         * 上行写出口互斥 (P1-8)。[TcpStateMachine.flushPendingUpstream] (建连协程排空缓存)
+         * 与 [TcpStateMachine.forwardToSocks] (packetLoop 直写) 是两条线程, 都会对
+         * `socksChannel` 做非阻塞写 —— 不串行化就会把两段字节**交错**写进隧道, 而本栈没有
+         * 重排也没有隧道级重传, 一次交错 = 这条连接永久错位。
+         *
+         * 只包住 `write` 本身: 队列操作走 [pendingUpstreamLock], TUN 写严禁进这把锁
+         * (回程/ACK 走单写者队列, 队列满时会阻塞)。
+         */
+        val uplinkWriteLock = Any()
+
+        /**
+         * 是否有路径正在排空 [pendingUpstream] (只在 [pendingUpstreamLock] 内读写)。
+         *
+         * 光看 [pendingUpstreamBytes] 不够: 队首是在**取出的同一临界区**里减计数的, 从"取出"
+         * 到"写完"之间计数已经是 0 —— 这条缝隙里新数据若被放行, 就会抢在正在写的那块之前
+         * 进入隧道 (字节序错乱)。所以排空期间必须整体置位, 新数据一律让路 (等待重传)。
+         */
+        var uplinkFlushing: Boolean = false
+
+        /**
          * SYN-ACK 尚未发出时到达的回程数据 (服务端 banner 最典型): 排队等通道就绪后按序下发。
          *
          * [pendingReturn] 非线程安全, 一律只在 [pendingReturnLock] 内访问。
@@ -1477,52 +1497,65 @@ class TcpStateMachine(
         }
 
     /**
-     * 通道就绪后按序下发缓存的上行数据并补 ACK。
-     * ACK 记账与正常路径一致 (forwardedBytes += 实发字节), 因此客户端重传的旧段会走 dup 分支,
-     * 不会重复转发。写不进去 (write==0) 时把该段放回队首等下次, 不丢数据。
+     * 通道就绪后按序下发缓存的上行数据并补 ACK (P1-8: 队列优先 + **单轮不重试**)。
+     *
+     * 旧实现在写 0 / IOException 之后把数据放回队首**继续 `while(true)`**: loopback 缓冲满时
+     * 写 0 会持续一整轮背压, 同一条连接把 packetLoop/建连协程钉死; 通道坏掉时更是
+     * "放回队首 → 再写 → 再抛"的无限循环。现在两条路径都**结束本轮**:
+     * - 写不动 → 未写部分留在队首, 由客户端 RTO 重传 (重传包会再走
+     *   `forwardToSocks` 的队列优先闸门) 或下一条新数据触发;
+     * - 通道坏 → 关连接 (数据已无法交付, 让客户端重连, 而不是留在队列里自旋)。
+     *
+     * 队列顺序与记账 (forwardedBytes) 都在 [UplinkDrain] 里, 本函数只补 ACK / 日志 / 关闭。
+     *
+     * @return true = 队列已排空 (此后新数据可以直接写, 不会越过旧数据);
+     *   false = 写不动 (未写部分已放回队首) / 另一条路径正在排空 / 通道坏掉 (连接已关闭)。
      */
-    private fun flushPendingUpstream(conn: TcpConnection) {
-        val channel = conn.socksChannel ?: return
-        while (true) {
-            val data: ByteArray
-            synchronized(conn.pendingUpstreamLock) {
-                data = conn.pendingUpstream.removeFirstOrNull() ?: return
-                conn.pendingUpstreamBytes -= data.size.toLong()
-            }
-            val buf = ByteBuffer.wrap(data)
-            var written = 0
-            try {
-                while (buf.hasRemaining()) {
-                    val n = channel.write(buf)
-                    if (n == 0) break
-                    written += n
-                }
-            } catch (e: IOException) {
-                Log.w(TAG, "flushPendingUpstream write failed for conn ${conn.id}: ${e.message}")
+    internal fun flushPendingUpstream(conn: TcpConnection): Boolean {
+        val channel = conn.socksChannel ?: return false
+        val result = UplinkDrain.drain(conn) { buf -> channel.write(buf) }
+        if (result.written > 0) {
+            // 只按**真实写入**的字节补 ACK: 未写部分没有推进 forwardedBytes, 客户端会重传
+            sendAckToBrowser(conn)
+            val partialNote = if (result.drained) "" else " (部分)"
+            VpnController.appLogThrottled(
+                "上行缓存已补发 · ${target(conn)} — ${result.written}B$partialNote",
+                level = LogLevel.INFO,
+                throttleKey = "上行缓存已补发",
+            )
+        }
+        return when {
+            result.failed -> {
+                val detail = result.error?.let { "${it::class.simpleName}:${it.message}" } ?: "通道已坏"
+                Log.w(TAG, "flushPendingUpstream write failed for conn ${conn.id}: $detail")
                 VpnController.appLogThrottled(
-                    "上行转发失败 · ${target(conn)} — ${e::class.simpleName}:${e.message}",
+                    "上行转发失败 · ${target(conn)} — $detail (关闭连接等客户端重连)",
                     level = LogLevel.WARNING,
                     throttleKey = "上行转发失败",
                 )
+                closeTcpConnection(conn.key, conn)
+                false
             }
-            if (written < data.size) {
-                // 只发了部分: 未发部分放回队首, 且不推进 forwardedBytes (客户端会重传这部分)
-                val rest = data.copyOfRange(written, data.size)
-                synchronized(conn.pendingUpstreamLock) {
-                    conn.pendingUpstream.addFirst(rest)
-                    conn.pendingUpstreamBytes += rest.size.toLong()
-                }
-            }
-            if (written > 0) {
-                synchronized(conn) { conn.forwardedBytes += written.toLong() }
-                sendAckToBrowser(conn)
-                VpnController.appLogThrottled(
-                    "上行缓存已补发 · ${target(conn)} — ${written}B${if (written < data.size) " (部分)" else ""}",
-                    level = LogLevel.INFO,
-                    throttleKey = "上行缓存已补发",
-                )
+            // 另一条路径正在排空: 本轮不写、不 ACK。并发排空会打乱字节序 (见 uplinkFlushing)
+            result.busy -> false
+            result.drained -> true
+            else -> {
+                // 滞留必须可见: 队列里有数据但通道写不动时, packetLoop 会一直返回 0 (不 ACK),
+                // 现场只剩"客户端反复重传 + 下行 0B", 与"远端不回话"完全同形。
+                logUpstreamStall(conn)
+                false
             }
         }
+    }
+
+    /** 上行缓存写不动 (背压) 的可见化: 与「上行背压丢段」同一类现场, 但数据还在队列里。 */
+    private fun logUpstreamStall(conn: TcpConnection) {
+        VpnController.appLogThrottled(
+            "上行缓存滞留 · ${target(conn)} — 队列 ${conn.pendingUpstreamBytes}B 写不动, " +
+                "不 ACK, 等客户端重传 (通道背压)",
+            level = LogLevel.WARNING,
+            throttleKey = "上行缓存滞留",
+        )
     }
 
     /**
@@ -1997,7 +2030,7 @@ class TcpStateMachine(
      *   0 < return < payloadLength = 部分写, 只推进已写处)。
      */
     @Suppress("ReturnCount") // 背压/降级路径各自早退, 调用方按返回值分派
-    private fun forwardToSocks(
+    internal fun forwardToSocks(
         conn: TcpConnection,
         buffer: ByteBuffer,
         payloadStart: Int,
@@ -2026,13 +2059,27 @@ class TcpStateMachine(
         }
 
         val socksChannel = conn.socksChannel ?: return 0
+        // **队列优先闸门 (P1-8)**: 建连期间缓存的上行数据必须先送出。`markEstablished` 早于
+        // flush 置 Established, packetLoop 的新数据一旦走下面这段直写, 旧队列就被**越过** ——
+        // 隧道侧字节序错乱 (本栈没有重排, 也没有隧道级重传), 这条连接从此永久坏掉。
+        //
+        // 排空失败 (写不动 / 另一条路径正在排空) 时本轮**不写、不 ACK、不推进 forwardedBytes**:
+        // 客户端按 RTO 重传这一段, 重传包就是天然的重试触发点, 不需要额外定时器/协程。
+        val queuedOrFlushing =
+            synchronized(conn.pendingUpstreamLock) {
+                conn.pendingUpstreamBytes > 0 || conn.uplinkFlushing
+            }
+        if (queuedOrFlushing && !flushPendingUpstream(conn)) return 0
+
         try {
             buffer.position(payloadStart)
             buffer.limit(payloadStart + payloadLength)
             // 非阻塞写: loopback 缓冲满 (SSH 背压) 时返回已写字节数,
-            // 调用方只 ACK 到已写处, 浏览器重传剩余部分 —— packetLoop 不被单连接拖死
+            // 调用方只 ACK 到已写处, 浏览器重传剩余部分 —— packetLoop 不被单连接拖死。
+            // 与 flushPendingUpstream 共用 uplinkWriteLock: 两条线程的字节不得交错 (见该字段 KDoc)。
             while (buffer.hasRemaining()) {
-                if (socksChannel.write(buffer) == 0) {
+                val written = synchronized(conn.uplinkWriteLock) { socksChannel.write(buffer) }
+                if (written == 0) {
                     // 关键监控点: 丢段只靠客户端重传, 是"上行暴涨/下载卡死"的唯一早期信号。
                     // 曾经只有 IS_DEBUG 日志, 导致"上行 16MB / 下行 0.4MB"的重传风暴完全不可见。
                     val dropped = buffer.remaining()
@@ -2463,6 +2510,109 @@ class TcpStateMachine(
             } else {
                 false
             }
+        }
+    }
+}
+
+/** [UplinkDrain.drain] 的单轮结果。 */
+internal data class UplinkDrainResult(
+    /** 队列是否已排空 (true = 之后的新数据可以直接写, 不会越过旧数据)。 */
+    val drained: Boolean,
+    /** 本轮真正写进通道的字节数 (调用方据此补一次累积 ACK)。 */
+    val written: Int,
+    /** 另一条路径正在排空: 本轮什么都没写, 调用方**不得**越过队列。 */
+    val busy: Boolean = false,
+    /** 写通道抛了 IOException: 调用方必须关闭连接 (数据已无法交付)。 */
+    val failed: Boolean = false,
+    val error: IOException? = null,
+)
+
+/**
+ * 上行排队数据的**单轮**下发策略 (P1-8)。
+ *
+ * 为什么单独抽出来: "写 0 之后怎么走"和"通道坏掉怎么走"这两条路径在旧实现里都是
+ * `while (true)` 自旋 —— 写 0 把数据放回队首后**立刻**再写同一段 (loopback 缓冲满时写 0
+ * 会持续一整轮背压, packetLoop 被一条连接钉住); 通道坏掉时则是"放回队首 → 再写 → 再抛"
+ * 的无限循环。两者都只能靠真机复现, 所以策略与 SocketChannel 解耦: 这里只做
+ * "取队首 → 非阻塞写 → 记账", 生产由 [TcpStateMachine.flushPendingUpstream] 补 ACK / 日志 /
+ * 关闭, 单测直接注入脚本化的 write (返回 0 / 抛 ClosedChannelException)。
+ *
+ * 三条不变量 (违反任何一条 = 不可恢复的字节序错乱或无限自旋):
+ * 1. 所有写都在 [TcpStateMachine.TcpConnection.uplinkWriteLock] 内 —— 建连协程与 packetLoop
+ *    两条线程都写同一个通道, 不串行化就会交错;
+ * 2. 排空期间 [TcpStateMachine.TcpConnection.uplinkFlushing] 置位, 另一条路径**让路**
+ *    (返回 [UplinkDrainResult.busy], 不写) —— 队首取出后计数已归零, 只靠计数判空会漏掉
+ *    "正在写的那一块";
+ * 3. 任何失败都**结束本轮**: 未写部分放回队首 / 由调用方关连接, 绝不在原地重试。
+ */
+internal object UplinkDrain {
+    @Suppress("ReturnCount") // 排空 / 让路 / 写不动 / 通道坏各有明确出口, 合并反而绕
+    fun drain(
+        conn: TcpStateMachine.TcpConnection,
+        write: (ByteBuffer) -> Int,
+    ): UplinkDrainResult {
+        synchronized(conn.pendingUpstreamLock) {
+            if (conn.uplinkFlushing) return UplinkDrainResult(drained = false, written = 0, busy = true)
+            if (conn.pendingUpstreamBytes <= 0) return UplinkDrainResult(drained = true, written = 0)
+            conn.uplinkFlushing = true
+        }
+        var total = 0
+        try {
+            while (true) {
+                val data: ByteArray
+                synchronized(conn.pendingUpstreamLock) {
+                    data = conn.pendingUpstream.removeFirstOrNull()
+                        ?: return UplinkDrainResult(drained = true, written = total)
+                    conn.pendingUpstreamBytes -= data.size.toLong()
+                }
+                var chunkWritten = 0
+                try {
+                    synchronized(conn.uplinkWriteLock) {
+                        val buf = ByteBuffer.wrap(data)
+                        while (buf.hasRemaining()) {
+                            val n = write(buf)
+                            if (n <= 0) break
+                            chunkWritten += n
+                        }
+                    }
+                } catch (e: IOException) {
+                    // 通道已坏: 未写部分放回队首 (语义上仍属未交付), 由调用方关闭连接。
+                    restore(conn, data, chunkWritten)
+                    if (chunkWritten > 0) synchronized(conn) { conn.forwardedBytes += chunkWritten.toLong() }
+                    return UplinkDrainResult(
+                        drained = false,
+                        written = total + chunkWritten,
+                        failed = true,
+                        error = e,
+                    )
+                }
+                if (chunkWritten > 0) {
+                    synchronized(conn) { conn.forwardedBytes += chunkWritten.toLong() }
+                    total += chunkWritten
+                }
+                if (chunkWritten < data.size) {
+                    // 写 0 / 部分写: 未写部分放回队首并**结束本轮**。下一轮由客户端 RTO 重传
+                    // (重传包会再走 forwardToSocks 的队列优先闸门) 拉起, 不需要自旋。
+                    restore(conn, data, chunkWritten)
+                    return UplinkDrainResult(drained = false, written = total)
+                }
+            }
+        } finally {
+            synchronized(conn.pendingUpstreamLock) { conn.uplinkFlushing = false }
+        }
+    }
+
+    /** 未写部分放回队首 (整块未写时不复制 —— 背压路径每轮一条, 不值得多一次分配)。 */
+    private fun restore(
+        conn: TcpStateMachine.TcpConnection,
+        data: ByteArray,
+        alreadyWritten: Int,
+    ) {
+        if (alreadyWritten >= data.size) return
+        val rest = if (alreadyWritten == 0) data else data.copyOfRange(alreadyWritten, data.size)
+        synchronized(conn.pendingUpstreamLock) {
+            conn.pendingUpstream.addFirst(rest)
+            conn.pendingUpstreamBytes += rest.size.toLong()
         }
     }
 }

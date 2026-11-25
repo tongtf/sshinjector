@@ -45,6 +45,15 @@ object AppMetrics {
     private val counts = ConcurrentHashMap<String, Long>()
 
     /**
+     * 本会话是否已经输出过汇总。
+     *
+     * 建连早期失败会绕过 `VpnController.disconnect()` 的完整清理段, 必须在失败 catch 里
+     * 单独补一次汇总; 而 `forceReset` / 重复 disconnect 也会走到同一个出口 —— 没有这个标志
+     * 就会把同一份归因重复打多遍, 把导出的日志末尾冲乱。
+     */
+    @Volatile private var summaryEmitted = false
+
+    /**
      * 记一次失败 (仅 WARNING / ERROR 计; INFO / SUCCESS / DEBUG 是生命周期与过程, 不是故障)。
      */
     fun record(
@@ -73,9 +82,18 @@ object AppMetrics {
         return "故障归因 · 本会话 ${sorted.size} 类 $total 次 — $head$more"
     }
 
+    /** 会话结束/早期失败时调用: 同一会话只输出一次 (幂等)。 */
+    fun summaryOnce(): String =
+        synchronized(this) {
+            if (summaryEmitted) return ""
+            summaryEmitted = true
+            summary()
+        }
+
     /** 会话开始 (VpnController.connect) 清零: "本会话"必须名副其实。 */
     fun resetSession() {
         counts.clear()
+        summaryEmitted = false
     }
 
     /**
