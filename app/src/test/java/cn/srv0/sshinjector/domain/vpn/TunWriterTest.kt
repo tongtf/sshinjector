@@ -138,6 +138,43 @@ class TunWriterTest {
         writer.close()
     }
 
+    // ---------------------------------------------------------------- 批量
+
+    @Test
+    fun `batched data write preserves order and counts every packet`() {
+        val sink = GateSink()
+        val packets = AtomicInteger()
+        val writer = TunWriter(onWritten = { packets.incrementAndGet() })
+        writer.attach(sink)
+
+        assertTrue(writer.writeBlockingBatch(listOf("x".toByteArray(), "y".toByteArray(), "z".toByteArray())))
+        writer.close()
+
+        assertEquals("批量写入必须保持包序", "xyz", sink.bytes.toString("UTF-8"))
+        assertEquals("每个包都要回调 (packetsSentCounter 按包计数)", 3, packets.get())
+    }
+
+    @Test
+    fun `batch write reports failure when the stream throws mid batch`() {
+        val failures = AtomicInteger()
+        val writer = TunWriter(onWriteFailed = { failures.incrementAndGet() })
+        writer.attach(
+            object : OutputStream() {
+                private var writes = 0
+
+                override fun write(b: Int) = throw IOException("boom")
+
+                override fun write(b: ByteArray) {
+                    if (++writes == 2) throw IOException("boom")
+                }
+            },
+        )
+
+        assertFalse(writer.writeBlockingBatch(listOf(ByteArray(1), ByteArray(1), ByteArray(1))))
+        assertTrue("批量中途失败必须计数", failures.get() >= 1)
+        writer.close()
+    }
+
     // ---------------------------------------------------------------- 失败
 
     @Test
@@ -239,6 +276,7 @@ class TunWriterTest {
 
         assertFalse(writer.write(ByteArray(4)))
         assertFalse(writer.writeBlocking(ByteArray(4)))
+        assertFalse(writer.writeBlockingBatch(listOf(ByteArray(4), ByteArray(4))))
         assertEquals("会话已结束的写入不是数据面故障, 不得计数", 0, failures.get())
         assertEquals(0, dropped.get())
         writer.close() // 幂等

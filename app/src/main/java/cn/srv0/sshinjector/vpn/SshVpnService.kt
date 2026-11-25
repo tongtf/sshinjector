@@ -177,6 +177,12 @@ class SshVpnService : VpnService() {
     private var lastReportedStep: HealthStep? = null
 
     /**
+     * 出口 IP 每会话已尝试轮数。候选端点全不可达时不每 15s 重试 (每次都要开 SSH 通道,
+     * 且纯展示项): 试满 [MAX_EXIT_IP_FETCH_ATTEMPTS] 轮就放弃并写一条 INFO。
+     */
+    private var exitIpFetchAttempts = 0
+
+    /**
      * 连接刚建立 → 未验证 (UI 显示"网络验证中"): 立即探测 + 15s 周期循环。
      * 探测失败只降级显示 (spec D3), 自动重连仍走解锁/网络切换/keepAlive 既有钩子。
      */
@@ -184,6 +190,7 @@ class SshVpnService : VpnService() {
         stopHealthMonitor()
         healthTracker.reset()
         lastReportedStep = null
+        exitIpFetchAttempts = 0
         vpnController.reportHealth(verified = false, failedStep = null)
         healthJob =
             scope.launch {
@@ -243,10 +250,19 @@ class SshVpnService : VpnService() {
                 is ConnectivityProber.Result.Ok -> {
                     healthTracker.onSuccess()
                     // 出口 IP: 探测成功说明通道可用, 未取回时顺带回显取一次 (会话级, 成功后不再发请求)
-                    if (vpnController.vpnState.value.exitIp == null) {
-                        prober.fetchExitIp()?.let { ip ->
-                            vpnController.reportExitIp(ip)
-                            Log.d("SshVpnService", "exit ip: $ip")
+                    if (vpnController.vpnState.value.exitIp == null &&
+                        exitIpFetchAttempts < MAX_EXIT_IP_FETCH_ATTEMPTS
+                    ) {
+                        exitIpFetchAttempts++
+                        val exitIp = prober.fetchExitIp()
+                        if (exitIp != null) {
+                            vpnController.reportExitIp(exitIp)
+                            Log.d("SshVpnService", "exit ip: $exitIp")
+                        } else if (exitIpFetchAttempts >= MAX_EXIT_IP_FETCH_ATTEMPTS) {
+                            vpnController.addLog(
+                                "出口 IP 获取失败 · 回显端点均不可达 — 不影响隧道",
+                                LogLevel.INFO,
+                            )
                         }
                     }
                     Log.d("SshVpnService", "health probe ok (verified)")
@@ -1303,6 +1319,7 @@ class SshVpnService : VpnService() {
         private const val NETWORK_RECONNECT_DEBOUNCE_MS = 2000L
         private const val POOL_FAIL_RECONNECT_BACKOFF_MS = 10_000L
         private const val HEALTH_PROBE_INTERVAL_MS = 15_000L
+        private const val MAX_EXIT_IP_FETCH_ATTEMPTS = 2
         private const val FORCE_DISCONNECT_LOCK_WAIT_MS = 3_000L // 强制断开抢锁限时, 超时降级为无锁强拆
     }
 }

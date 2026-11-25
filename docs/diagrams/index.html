@@ -14,6 +14,9 @@
              letter-spacing:0.18em; text-transform:uppercase; color:var(--muted); margin:0; }
   h1 { font-family:'Instrument Serif',serif; font-weight:400; font-size:44px; margin:8px 0 8px; }
   .sub { color:var(--muted); font-size:15px; margin:0 0 12px; line-height:1.6; }
+  .stale { margin:0 0 24px; padding:12px 16px; border:1px solid #d9a400;
+           border-left:4px solid #d9a400; border-radius:6px; background:#fff8e1;
+           color:#6b4e00; font-size:13px; line-height:1.6; }
   .summary { display:grid; grid-template-columns: 1.1fr 1fr 0.9fr; gap:16px; margin:24px 0 32px; }
   .card { background:#ffffff; border:1px solid var(--rule); border-radius:6px; padding:1.25rem; }
   .card p.eyebrow { font-size:10px; margin:0 0 8px; }
@@ -40,6 +43,7 @@
   <p class="eyebrow">DIAGRAM INDEX · SSHINJECTOR</p>
   <h1>功能逻辑图集</h1>
   <p class="sub">基于代码事实梳理的架构、状态机、流程与时序图。每个图均对照源码调用链（file:line）生成，图集随代码演进需同步更新。</p>
+  <div class="stale"><b>⚠ 图集已过期：</b>本图集最后同步于 <b>2026-10-08</b>，部分细节（file:line、容量常量、新功能）已滞后；现状以仓库根 <b>AGENTS.md</b> 为准。</div>
 
   <div class="summary">
     <div class="card">
@@ -55,20 +59,25 @@
       <p class="eyebrow"><span class="dot blue"></span>KEY FACTS</p>
       <h3>核心事实</h3>
       <ul>
-        <li>回向直通跳过本地 SOCKS 往返</li>
-        <li>出向背压: Channel(256) + 单槽 + OP_READ 暂停（backpressureLock 保护）+ 非阻塞丢弃/重传兜底</li>
-        <li>SSH 会话池 ×3 + 线性退避重连；池饱和时 connectToTarget 提前拒绝</li>
+        <li>回向直通跳过本地 SOCKS 往返（TunWriter 单写者）</li>
+        <li>出向背压: Channel(128) + 单槽 + OP_READ 暂停（backpressureLock 保护）+ 非阻塞丢弃/重传兜底</li>
+        <li>SSH 会话池 ×3 + 线性退避重连；三态探活 ROUND_TRIP_OK / UNAVAILABLE / FAILED（UNAVAILABLE 不判死）</li>
+        <li>开通道预算两层：总 9s + 单候选 3s；全候选秒拒归为「目标不存在」INFO</li>
+        <li>池饱和时 connectToTarget 提前拒绝（0x05）；SSH IO 线程池饱和亦提前回绝</li>
         <li>SSH 池全失败 → VPN 整体自动重连（10s 退避窗）</li>
         <li>全局设置运行时生效（mtu/keepAlive/IPv6，全局优先 + per-server 回退）</li>
         <li>lastServerId 持久化 → 开机自启（goAsync 保护）</li>
-        <li>UDP 中继当前不工作</li>
+        <li>非 DNS UDP（QUIC/游戏）明确丢弃并按目的端口计数；DNS 回程仍由 TUN 侧组包</li>
       </ul>
     </div>
     <div class="card">
       <p class="eyebrow"><span class="dot blue"></span>KNOWN DEVIATIONS</p>
       <h3>代码漂移点</h3>
       <ul>
-        <li>UDP relay 已降级: 非 DNS UDP 明确丢弃</li>
+        <li>假 IP 应答 TTL=5s；引用归零后 60s 释放宽限（非立即删映射）</li>
+        <li>白名单空名单退化为 SYSTEM 本地解析（DnsTransportPolicy）</li>
+        <li>DNS 上游取址排除 VPN 网络（allNetworks 过滤 TRANSPORT_VPN，并滤掉 TUN_IP）</li>
+        <li>域名统计仅内存聚合、不落盘（DomainStatsStore，上限 20000）</li>
         <li>非 A/AAAA DNS 走保护 socket 系统直查</li>
       </ul>
     </div>
@@ -87,7 +96,7 @@
   <div class="grid">
     <a class="item" href="vpn-state.html">
       <p class="t">VPN 连接状态机</p>
-      <p class="d">Disconnected ↔ Connecting ↔ Connected ↔ Disconnecting + Failed；标注死代码枚举值。</p>
+      <p class="d">Disconnected ↔ Connecting ↔ Connected ↔ Disconnecting + Failed；死枚举已清理（图中不画），另标注 ConnectStage 与健康叠加态。</p>
       <span class="tag">State Machine</span>
     </a>
     <a class="item" href="socks5-state.html">
@@ -116,7 +125,7 @@
     </a>
     <a class="item" href="tcp-flow.html">
       <p class="t">TCP 数据通路流程</p>
-      <p class="d">SYN → 本地 SOCKS5 通道建立 → 回向直通；seq 校验；远端正常 EOF 发 FIN+ACK，错误/拒绝/陈旧发 RST。</p>
+      <p class="d">SYN → 本地 SOCKS5 通道建立 → 回向直通；seq 校验；关闭路径 RST，回向按客户端窗口闸门限流（图未展开 FIN+ACK 细节）。</p>
       <span class="tag">Flowchart</span>
     </a>
     <a class="item" href="dns-flow.html">
@@ -159,12 +168,14 @@
   <div class="grid">
     <a class="item" href="timeline-gantt.html">
       <p class="t">优化与发版时间线</p>
-      <p class="d">性能重写（批1-3）、审计修复、ABI 打包与 v1.0.4 / v1.0.5 发布的甘特图。</p>
+      <p class="d">历史排期（2026-08）：性能重写（批1-3）、审计修复、ABI 打包与 v1.0.4 / v1.0.5 发布（均已完成，仅作回顾）。</p>
       <span class="tag">Gantt</span>
     </a>
   </div>
 
-  <p class="foot">SSHInjector · docs/diagrams/ · 2026-08-06 功能逻辑梳理工作流（dev-workflow explore → design）；2026-08-18 审计修复同步（背压锁、DNS 会话清理、重连退避）</p>
+  <p class="sub" style="margin-top:24px">注：域名统计 / 健康探测 / 诊断快照尚未绘图，见仓库根 AGENTS.md。</p>
+
+  <p class="foot">SSHInjector · docs/diagrams/ · 2026-08-06 功能逻辑梳理工作流（dev-workflow explore → design）；2026-08-18 审计修复同步（背压锁、DNS 会话清理、重连退避）· 最后同步 2026-10-08，现状见 AGENTS.md</p>
 </div>
 </body>
 </html>

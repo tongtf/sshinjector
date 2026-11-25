@@ -29,15 +29,20 @@
 
 | Feature | Description |
 |---------|-------------|
-| **SSH key auth** | ECDSA P-256/P-384 keys stored in Android Keystore, biometric unlock, in-app generate/import/copy public key |
-| **SOCKS5 proxy** | TCP CONNECT proxy with IPv4/IPv6/domain support (UDP ASSOCIATE not yet supported) |
+| **One-click server provisioning (wizard)** | Server list → **+** → "One-click server provisioning": creates the `sshproxy` account, chroot isolation, deploys the public key and hardens sshd (OpenSSH / dropbear / OpenWrt) |
+| **SSH key auth** | ECDSA P-256 (wizard default); P-384 / RSA 4096 / Ed25519 can be imported. Keys stored in Android Keystore, biometric unlock, public key export |
+| **SOCKS5 proxy** | TCP CONNECT proxy with IPv4/IPv6/domain support. **No UDP relay**: non-DNS UDP (QUIC/games) is dropped and counted — see note below |
 | **Whitelist mode** | `VpnService.addAllowedApplication()` — only selected apps go through the proxy |
 | **Dual-stack network** | IPv4 + IPv6 with dual-stack addresses on the TUN interface |
-| **Remote DNS** | Intercepts UDP:53 and sends it over the SSH tunnel to a remote resolver, preventing leaks |
+| **Remote DNS** | Intercepts UDP:53; REMOTE/WHITELIST return fake IPs (`198.18.x.x` / `fd00::x`) and resolve domain names at the remote end over SSH; SYSTEM/domain-split use protected local sockets |
+| **Domain access stats** | Per-session domain list (connections/bytes/app UID), local & remote real-IP resolve, CSV export, suggest → review → apply to ad/proxy lists (undo supported) |
 | **Connection stats** | Connection status, traffic, session time (in-process real-time stats) |
 | **Auto-reconnect** | Auto-reconnect on network switch (WiFi↔5G, 2s debounce); SSH session-level linear backoff |
-| **Connectivity health** | End-to-end probe every 15s (established != verified); failures attributed per step: degraded/failed · &lt;step&gt; |
-| **Material 3 UI** | Dashboard, server management, whitelist, settings, key management |
+| **Connectivity health** | 15s end-to-end probe + staged health (TUN/DNS/forward); failures attributed per step: degraded/failed · &lt;step&gt; |
+| **In-app log** | Copy/export logs to `Download/`; includes data-plane snapshots and a failure-attribution summary — no adb required |
+| **Material 3 UI** | Dashboard, servers, whitelist, domain stats, logs, settings, key management |
+
+> **UDP note**: this is a TCP SOCKS5 proxy — no UDP ASSOCIATE. DNS (UDP:53) is intercepted by the app; all other UDP (QUIC/games) entering the TUN is dropped and counted (snapshot line "UDP dropped N"). QUIC does not fall back to TCP on ICMP errors, so affected apps retry on their own and may appear stuck.
 
 ---
 
@@ -75,6 +80,8 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
+> Simplified diagram. For the current data plane (`SshIoDispatcher`, `TunWriter`, domain stats, staged health) see `AGENTS.md` in the repo root.
+
 ---
 
 ## 🔧 Tech Stack
@@ -103,14 +110,22 @@
 - A server running mainstream Linux or **OpenWrt**, with OpenSSH or dropbear (one-click setup needs root or sudo)
 - OpenSSH requires `AllowTcpForwarding yes` (default; dropbear allows TCP forwarding by default)
 
-### Server setup
+### Server setup: one-click wizard (recommended)
 
-**Option A: One-click setup in-app (recommended)**
+> **Where to find it (easy to miss)**: the **+** on the home screen opens *manual* add.
+> The wizard is at **Settings → Server management → + (top right of the server list) → "One-click server provisioning"**.
 
-In the "Add server" wizard, enter an account with **root or sudo** access on your server and the app does everything:
+The wizard has 4 steps:
+
+1. **Server**: name, host, SSH port (default 22)
+2. **Login**: a user with **root/sudo** access and its password — used for this setup only, **never stored**
+3. **Configure**: the app generates an ECDSA P-256 keypair (biometric-protected if that setting is on), then: checks privileges (root → passwordless sudo → password sudo), uploads the setup script and verifies its SHA-256 remotely, uploads the public key via stdin, runs the script and verifies the result
+4. **Done**: the server is saved automatically with login user `sshproxy` and the generated key
+
+On OpenSSH the script:
 
 - Creates a dedicated tunnel account `sshproxy`: `nologin` + locked password, cannot log into a shell
-- Chroot isolation, exposing only a minimal filesystem (`ChrootDirectory`)
+- Builds a chroot jail exposing only a minimal filesystem (`ChrootDirectory`; the parent directory is forced to root ownership)
 - Public-key-only auth (`PasswordAuthentication no`), `authorized_keys` locked with `chattr +i`
 - Appends a `Match User sshproxy` hardening block to sshd; backs up the config and reloads only after `sshd -t` passes
 
@@ -118,7 +133,7 @@ In the "Add server" wizard, enter an account with **root or sudo** access on you
 
 Follow **[docs/server-setup.md](docs/server-setup.md)** to create the `sshproxy` account, chroot directory and sshd hardening yourself.
 
-> **OpenWrt**: install `openssh-server` for full hardening (chroot + Match); the default dropbear uses basic compatibility mode (`sshproxy` account + pubkey-only, no chroot isolation) and does not modify the global dropbear config. See [docs/server-setup.md](docs/server-setup.md).
+> **OpenWrt/dropbear**: dropbear uses basic compatibility mode (create account + pubkey only, **no chroot / `chattr +i` / sshd reload**) and does not modify global dropbear config. Install `openssh-server` to get full hardening. See [docs/server-setup.md](docs/server-setup.md).
 
 ### Build
 
@@ -130,53 +145,66 @@ export JAVA_HOME=/path/to/jdk-17
 git clone https://github.com/tongtf/sshinjector.git
 cd sshinjector
 
-# Debug APK (split per ABI)
+# Debug APK (split per ABI; version is in the filename — use globs in scripts)
 ./gradlew assembleDebug
-#   app/build/outputs/apk/debug/sshinjector-<version>-debug-<abi>.apk
+#   app/build/outputs/apk/debug/sshinjector-<version>-<abi>-debug.apk
 
-# Release APK (debug keystore signed, split per ABI)
+# Release APK (shared keystore via root keystore.properties; falls back to the local debug key only if unconfigured)
 ./gradlew assembleRelease
 #   app/build/outputs/apk/release/sshinjector-<version>-<abi>.apk
-#   ABI: arm64-v8a / armeabi-v7a / x86_64
+#   ABI: arm64-v8a / armeabi-v7a only
 
 # Release AAB
 ./gradlew bundleRelease
+#   app/build/outputs/bundle/release/sshinjector-<version>-release.aab
+
+# CI Release builds require the shared keystore and verify the APK signer fingerprint.
 ```
 
 ---
 
 ## 📖 Usage
 
-> Full guide: **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)** (installation, configuration, troubleshooting, FAQ)
+> Full guide: **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)** (installation, configuration, troubleshooting, FAQ); **[docs/README.md](docs/README.md)** separates living docs from historical records
+> Server commands and rollback: **[docs/server-setup.md](docs/server-setup.md)**.
+> Diagrams: **[docs/diagrams/index.html](docs/diagrams/index.html)**.
 
 ### 1. Add a server
 
-1. Tap **+** to open the add-server wizard
-2. Fill in: name, host, port (default 22), username/password (root or sudo access)
-3. The wizard generates an ECDSA key pair and provisions the server automatically (dedicated `sshproxy` account + sshd hardening)
-4. Or choose **generate key only**: copy the public key → paste into `~/.ssh/authorized_keys` on the VPS
+- **One-click (recommended)**: Settings → Server management → **+** → "One-click server provisioning" (4-step wizard, see above).
+- **Manual**: home screen **+** or server list **+** → "Add manually". Generate/import a key separately and install its public key in `~/.ssh/authorized_keys`.
+- Both land in the same server list; wizard-created servers use login user `sshproxy`.
 
 ### 2. Configure the whitelist
 
-1. Open the **Whitelist** page
-2. Search/browse installed apps
-3. Check the apps to route through the proxy (only checked apps are intercepted)
+1. Open **Settings → Whitelist**
+2. Search/browse installed apps; filter by **All / Selected / System**
+3. Check the apps to route through the proxy (non-whitelist mode routes all apps)
 
 ### 3. Connect
 
 1. Tap the big **Connect** button
 2. Grant the VPN permission when prompted
-3. On success: local IP / remote IP / connection status
+3. On success: local IP / exit IP / connection status, derived from the end-to-end probe and staged health
 4. Persistent status in the notification; tap to disconnect
 
 ### 4. Settings
 
 | Setting | Description |
 |---------|-------------|
-| DNS mode | Remote resolve (default, leak-prevention) / direct / whitelist / domain split |
+| DNS mode | Remote resolve (default, leak-prevention) / direct / whitelist / domain split; an empty whitelist falls back to local DNS to avoid unroutable fake IPs |
 | Domain list | Configure domains for the domain-split rules |
+| Domain access stats | Session domain/connections/bytes/app UID; suggest domains into ad/proxy lists, review then apply (instant effect) |
+| MTU / keep-alive | Override per-server values; empty = "follow server". Keep-alive 0 disables heartbeats |
+| Probe URL | Blank uses the default NCSI endpoint; change it if probes keep failing after switching servers |
 | Language | 中文 / English / Русский / system default |
 | Biometric | When enabled, unlocking the private key requires fingerprint/face |
+
+### 5. Domain stats & troubleshooting
+
+- **Settings → Domain access stats**: per-session domains with connections/bytes/app UID; CSV export to `Download/`
+- The "Ad / Proxy" chips only add domains to a **pending suggestion** — review before applying; Snackbar undo is available
+- **Settings → Logs**: copy or export the in-app log (DEBUG hidden by default). With no adb, the data-plane snapshot and failure-attribution lines at the end of the log are the primary diagnostic surface
 
 ---
 
@@ -197,7 +225,7 @@ Public key → OpenSSH format → deployed to the server
 - Server passwords and imported private keys are stored **AES-256-GCM encrypted** (key held in the Android Keystore); ciphertext never leaves the device. Passphrase-protected imported keys keep the passphrase encrypted alongside the key
 - Server form inputs (hostname/IPv4/IPv6, ports, MTU, keep-alive interval) are validated before saving; invalid values are rejected
 - First-connection TOFU (Trust On First Use) + host key fingerprint cache; connections are rejected if the fingerprint changes (MITM protection)
-- Only secure algorithms enabled: curve25519 / diffie-hellman-group14+ key exchange, ed25519 / ECDSA P-256+ host keys
+- Algorithm allowlist: ECDH (nistp256/384/521) + DH group14/group-exchange KEX (curve25519 is retained for JVM tests only — Android drops it because D8 ignores JSch's MR-JAR), ed25519 / ECDSA / RSA-SHA2 host keys; `ssh-rsa` removed
 - Foreground service type `FOREGROUND_SERVICE_SPECIAL_USE`
 
 ---
@@ -226,8 +254,10 @@ SSHInjector/
 │   │   └── AndroidManifest.xml
 │   └── build.gradle.kts
 ├── docs/
-│   ├── server-setup.md             # Server setup guide
+│   ├── README.md                   # Doc index: living docs vs historical records
+│   ├── server-setup.md             # Server setup & rollback guide
 │   ├── USER_GUIDE.md               # User guide
+│   ├── specs/                      # Designs/audits/plans (mostly point-in-time records)
 │   └── diagrams/                   # Architecture/flow/state/sequence diagrams
 ├── .github/workflows/ci.yml        # CI/CD
 ├── detekt.yml                      # Code style rules

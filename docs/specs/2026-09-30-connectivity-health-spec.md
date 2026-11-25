@@ -1,6 +1,8 @@
 # Spec — 连接状态检测 / 步骤级健康归因 (connectivity-health)
 
-**Date:** 2026-09-30 · **批次:** B1 · **状态:** 定稿（brainstorm 4 项决策全按推荐）
+> ⚠️ **历史设计文档**（2026-09-30 定稿），只记录首版设计决策，**勿当现状**。当前实现已扩展：`HealthStep` 增加 `FORWARD`、分阶段健康（`StageCounters` / `StageHealthEvaluator`）、出口 IP 回显；探测「首字节即 EOF」现归 **TUNNEL** 而非本文第 40/62 行写的 REMOTE。现状以仓库根 `AGENTS.md` 为准。
+
+**Date:** 2026-09-30 · **批次:** B1 · **状态:** 历史定稿（brainstorm 4 项决策全按推荐；仅作设计意图记录）
 
 ## 需求
 
@@ -11,7 +13,7 @@
 
 | # | 决策 | 结论 |
 |---|------|------|
-| D1 | 探测端点 | 默认 `http://www.gstatic.com/generate_204`（**2026-10-18 订正**: 本行/设置页提示一直写着中国区 `connect.rom.miui.com/generate_204`, 代码默认值其实已在 `fff76a8` 改为 gstatic —— 海外 VPS 出口可达, 当时漏改文档）, **可配置**（SettingsDataStore 全局 `probeUrl`，null=默认）；收到任意 HTTP 响应状态行（204/200/3xx…）= 端到端可用 |
+| D1 | 探测端点 | 默认 `http://www.msftconnecttest.com/connecttest.txt`（**2026-10-26**: 旧默认 gstatic 在中国家宽/国内节点上 TCP 被墙, 会把健康探测误判为失败; NCSI 境内外出口都可达）, **可配置**（SettingsDataStore 全局 `probeUrl`，null=默认）；收到任意 HTTP 响应状态行（204/200/3xx…）= 端到端可用 |
 | D2 | 节奏 | 15s 周期 + 事件触发（连接成功/网络切换/解锁/重连成功）；**连败 2 次降级，1 次成功恢复** |
 | D3 | 失败处置 | **仅显示**；自动重连继续走既有钩子（解锁/网络切换/keepAlive），不因探测失败杀连接 |
 | D4 | 连接阶段归因 | 要，统一步骤枚举；复用 `lastError`/异常消息映射 |

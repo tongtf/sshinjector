@@ -63,6 +63,13 @@ class MainViewModel
         private val _uiState = MutableStateFlow(UiState())
         val uiState = _uiState.asStateFlow()
 
+        // 峰值速率采样 (仅主线程访问): 计数器是进程累计的, 会话开始时清空样本/峰值,
+        // delta 只含本会话字节。滑动 1s 窗口取平均值 —— 单看 100ms 单帧会把突发放大 10 倍,
+        // 而空闲后只重设基线又会丢掉突发, 所以保留最近 1s 的 (t, up, down) 采样。
+        private val peakSamples = ArrayDeque<LongArray>()
+        private var peakUpBps = 0L
+        private var peakDownBps = 0L
+
         private val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
         private val networkCallback =
@@ -131,6 +138,9 @@ class MainViewModel
             // 会话统计 (进程生命周期累计)
             val bytesUp: Long = 0,
             val bytesDown: Long = 0,
+            /** 本会话峰值速率 (1s 窗口内最大平均速率, 字节/秒)。 */
+            val peakUpBps: Long = 0,
+            val peakDownBps: Long = 0,
             val connectedDurationMs: Long = 0,
         )
 
@@ -295,6 +305,8 @@ class MainViewModel
                         val isHealthy = isConnected && state.verified && state.failedStep == null
                         val serverId = state.server?.id ?: 0
                         val status = state.status.name
+                        // 会话边界: 非 Connected 一律清零峰值, 下次连接重新记录。
+                        if (!isConnected) resetPeakRate()
 
                         val newServerStatus =
                             if (serverId > 0) {
@@ -333,13 +345,37 @@ class MainViewModel
             }
         }
 
+        private fun resetPeakRate() {
+            peakSamples.clear()
+            peakUpBps = 0L
+            peakDownBps = 0L
+            _uiState.update { it.copy(peakUpBps = 0, peakDownBps = 0) }
+        }
+
         private fun observeSessionStats() {
             viewModelScope.launch {
                 vpnController.connectionStats.collect { stats ->
+                    val now = System.currentTimeMillis()
+                    val up = stats.bytesReceived
+                    val down = stats.bytesSent
+                    val previous = peakSamples.lastOrNull()
+                    if (previous != null && (up < previous[1] || down < previous[2])) peakSamples.clear()
+                    peakSamples.addLast(longArrayOf(now, up, down))
+                    while (peakSamples.size > 1 && now - peakSamples.first()[0] > PEAK_RATE_WINDOW_MS) {
+                        peakSamples.removeFirst()
+                    }
+                    val oldest = peakSamples.first()
+                    val span = now - oldest[0]
+                    if (span >= PEAK_RATE_MIN_SPAN_MS) {
+                        peakUpBps = maxOf(peakUpBps, (up - oldest[1]) * 1000L / span)
+                        peakDownBps = maxOf(peakDownBps, (down - oldest[2]) * 1000L / span)
+                    }
                     _uiState.update {
                         it.copy(
-                            bytesUp = stats.bytesReceived,
-                            bytesDown = stats.bytesSent,
+                            bytesUp = up,
+                            bytesDown = down,
+                            peakUpBps = peakUpBps,
+                            peakDownBps = peakDownBps,
                         )
                     }
                 }
@@ -436,6 +472,8 @@ class MainViewModel
             // L1: 刷屏节奏 — connectedDuration 与资源监控均降频到 5s
             private const val CONNECTED_DURATION_TICK_MS = 5000L
             private const val RESOURCE_MONITOR_TICK_MS = 5000L
+            private const val PEAK_RATE_WINDOW_MS = 1000L
+            private const val PEAK_RATE_MIN_SPAN_MS = 500L
 
             @JvmStatic
             fun formatMemorySize(bytes: Long): String =

@@ -22,9 +22,10 @@
 </head>
 <body>
 <div class="wrap">
+<div style="margin:0 0 20px;padding:10px 14px;border:1px solid #d9a400;border-radius:8px;background:rgba(217,164,0,.08);font-size:12px;line-height:1.6">⚠ 本图最后同步于 <b>2026-10-08</b>，file:line、容量常量与新功能可能滞后；现状以仓库根 <b>AGENTS.md</b> 为准（见 <code>docs/diagrams/review-checklist.md</code>）。</div>
   <p class="eyebrow">STATE MACHINE · SOCKS5</p>
   <h1>SOCKS5 连接状态机</h1>
-  <p class="sub">Socks5ProxyServer.Socks5Connection — 本地代理握手中继（Socks5ProxyServer.kt:319-326）</p>
+  <p class="sub">Socks5ProxyServer.Socks5Connection — 本地代理握手中继（Socks5ProxyServer.kt:319-326 · SocksState 定义于 :441-447）</p>
   <div class="fig">
   <svg viewBox="0 0 1080 500" xmlns="http://www.w3.org/2000/svg" font-family="'Roboto',sans-serif">
     <defs>
@@ -57,11 +58,11 @@
     <rect x="810" y="172" width="84" height="12" rx="2" fill="#f8f9ff"/>
     <text x="852" y="181" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">连接成功</text>
     <rect x="140" y="340" width="160" height="12" rx="2" fill="#f8f9ff"/>
-    <text x="220" y="349" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">可选：无认证跳过</text>
+    <text x="220" y="349" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">客户端须支持 0x02</text>
     <rect x="380" y="340" width="120" height="12" rx="2" fill="#f8f9ff"/>
     <text x="440" y="349" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">UDP ASSOCIATE</text>
-    <rect x="640" y="280" width="180" height="12" rx="2" fill="#f8f9ff"/>
-    <text x="730" y="289" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">connect 失败 / 超时(10s)</text>
+    <rect x="620" y="280" width="240" height="12" rx="2" fill="#f8f9ff"/>
+    <text x="740" y="289" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">connect 失败 / 连接 10s · CONNECT 应答独立 15s</text>
     <rect x="888" y="300" width="100" height="12" rx="2" fill="#f8f9ff"/>
     <text x="938" y="309" fill="#7a8399" font-size="8" font-family="'Geist Mono',monospace" text-anchor="middle" letter-spacing="0.06em">EOF/空闲 300s</text>
 
@@ -70,7 +71,7 @@
     <rect x="160" y="160" width="200" height="56" rx="8" fill="#f8f9ff"/>
     <rect x="160" y="160" width="200" height="56" rx="8" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
     <text x="260" y="188" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">Handshake</text>
-    <text x="260" y="204" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">读 greeting · 回复 [0x05,0x00]</text>
+    <text x="260" y="204" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">读 greeting · 回复 [0x05,0x02]（强制用户名密码）</text>
 
     <rect x="420" y="160" width="180" height="56" rx="8" fill="#f8f9ff"/>
     <rect x="420" y="160" width="180" height="56" rx="8" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
@@ -89,8 +90,8 @@
 
     <rect x="120" y="300" width="180" height="56" rx="8" fill="#f8f9ff"/>
     <rect x="120" y="300" width="180" height="56" rx="8" fill="rgba(25,28,32,0.02)" stroke="rgba(25,28,32,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
-    <text x="210" y="328" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">AuthMethods</text>
-    <text x="210" y="344" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">枚举保留 · 直通</text>
+    <text x="210" y="328" fill="#191c20" font-size="12" font-weight="600" text-anchor="middle">UserPass 认证</text>
+    <text x="210" y="344" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace" text-anchor="middle">仅 0x02 · 无凭据 0xFF 拒绝</text>
 
     <rect x="300" y="396" width="140" height="56" rx="8" fill="#f8f9ff"/>
     <rect x="300" y="396" width="140" height="56" rx="8" fill="#ffffff" stroke="#191c20" stroke-width="1"/>
@@ -101,8 +102,9 @@
 
     <!-- note -->
     <text x="700" y="360" fill="#73777f" font-size="11" font-family="'Geist Mono',monospace">
-注意：UDP ASSOCIATE 仅回 0.0.0.0:0 空回复，
-连接保持打开但无 UDP 转发 —— UDP 中继实际不工作
+注意：UDP ASSOCIATE 立即回 rep=0x07 并关闭连接
+（本地代理仅转发 TCP · 非 A/AAAA 之外 UDP 中继不工作）；
+无认证凭据直接 [0x05,0xFF] 拒绝
     </text>
 
     <!-- legend -->
@@ -116,7 +118,7 @@
     <text x="416" y="479" fill="#73777f" font-size="9" font-family="'Geist Mono',monospace">成功路径</text>
   </svg>
   </div>
-  <p class="foot">SSHInjector · SocksState 定义于 Socks5ProxyServer.kt:319-326 · 超时 10s(连接)/300s(空闲)/5s 检查</p>
+  <p class="foot">SSHInjector · SocksState 定义于 Socks5ProxyServer.kt:441-447 · 强制用户名密码认证（greeting 回 [0x05,0x02]，无凭据 [0x05,0xFF]）· 超时 10s(连接)/300s(空闲)/5s 检查 · CONNECT 应答独立 15s 预算</p>
 </div>
 </body>
 </html>

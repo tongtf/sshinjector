@@ -32,6 +32,16 @@ class JschAlgorithmWhitelistTest {
     }
 
     @Test
+    fun `kex whitelist keeps ECDH for Android (MR-JAR stubs strip curve25519)`() {
+        // Android 的 D8 不处理 jsch 的 META-INF/versions/*, 所以 curve25519 在真机上被
+        // JSch 静默过滤; OpenSSH 10 默认又已移除有限域 DH → 没有 ECDH 就是必然协商失败。
+        assertTrue(
+            "ECDH must stay in the KEX whitelist",
+            JschSshClient.KEX_ALGORITHMS.contains("ecdh-sha2-nistp256"),
+        )
+    }
+
+    @Test
     fun `every whitelisted algorithm name is known to JSch`() {
         assertNamesKnown("kex", JschSshClient.KEX_ALGORITHMS)
         assertNamesKnown("server_host_key", JschSshClient.HOST_KEY_ALGORITHMS)

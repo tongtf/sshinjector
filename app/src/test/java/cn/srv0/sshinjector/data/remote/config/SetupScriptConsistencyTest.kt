@@ -76,9 +76,12 @@ class SetupScriptConsistencyTest {
     }
 
     @Test
-    fun `script sets strict error handling and cleans up temp files`() {
+    fun `script sets POSIX-portable strict error handling and cleans up temp files`() {
         val script = readScript()
-        assertTrue("must set -euo pipefail", script.contains("set -euo pipefail"))
+        // Provisioner 用 `sh <script>` 执行: Debian/Ubuntu 的 dash 不支持 pipefail,
+        // `set -euo pipefail` 会让脚本在第一行就退出, 一键配置全平台失败。
+        assertTrue("must use POSIX-portable `set -eu`", script.contains("\nset -eu\n"))
+        assertFalse("must not require pipefail", script.contains("set -euo pipefail"))
         assertTrue(
             "must clean pubkey temp file",
             script.contains("rm -f"),

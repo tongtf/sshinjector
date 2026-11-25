@@ -145,7 +145,7 @@ class ConnectivityProber(
         val requestSentAt = System.currentTimeMillis()
         val statusLine = readLine(input)
         return when {
-            // 0 字节关闭: 探测端点 (gstatic 204 / ipify) 是**必然**回状态行的健康服务,
+            // 0 字节关闭: 探测端点 (NCSI / ipify) 是**必然**回状态行的健康服务,
             // 一个字节都没回来 = 本栈到远端之间的路径断了。归 TUNNEL 而非 REMOTE ——
             // 归 REMOTE 会把排查方向带向"远端不可达", 而真正该看的是隧道侧的
             // 零回程 / 回程读取异常 / 隧道无回程 日志 (SSH 会话健康但单条通道死也长这样)。
@@ -169,7 +169,9 @@ class ConnectivityProber(
      * 任何失败返回 null — 仅影响显示, 不参与健康归因、不重试风暴
      * (调用方在探测成功且未取回时才重试)。
      */
-    fun fetchExitIp(endpointUrl: String = DEFAULT_EXIT_IP_ENDPOINT): String? {
+    fun fetchExitIp(): String? = EXIT_IP_ENDPOINTS.firstNotNullOfOrNull { fetchExitIp(it) }
+
+    fun fetchExitIp(endpointUrl: String): String? {
         val endpoint =
             try {
                 parseEndpoint(endpointUrl)
@@ -350,10 +352,23 @@ class ConnectivityProber(
 
     companion object {
         /** 默认探测端点: 香港/海外服务器出口可达; 收到任意 HTTP 状态行都算可用 (可配置覆盖)。 */
-        const val DEFAULT_ENDPOINT = "http://www.gstatic.com/generate_204"
+        const val DEFAULT_ENDPOINT = "http://www.msftconnecttest.com/connecttest.txt"
 
-        /** 默认出口 IP 回显端点 (JSON body {"ip":"..."}; 失败仅显示占位符, 不影响健康状态)。 */
-        const val DEFAULT_EXIT_IP_ENDPOINT = "https://api.ipify.org/?format=json"
+        /**
+         * 出口 IP 回显候选 (按序尝试, 全失败仅显示占位符, 不影响健康状态)。
+         * 中国出口/北京 NAT 节点上 `api.ipify.org` 常解析失败或被墙 (旧默认, 真机日志实证),
+         * 故把「纯文本 + Content-Length」的 ifconfig.me 放首位; ipinfo 备用; ipify 留最后。
+         * 不用 `ip.3322.net` 这类 chunked 响应端点 — [readIpBody] 不解析 chunk 分帧。
+         */
+        val EXIT_IP_ENDPOINTS =
+            listOf(
+                "https://ifconfig.me/ip",
+                "https://ipinfo.io/ip",
+                "https://api.ipify.org/?format=json",
+            )
+
+        /** 首个候选 (保留给显式传参的调用方)。 */
+        val DEFAULT_EXIT_IP_ENDPOINT = EXIT_IP_ENDPOINTS.first()
 
         private val JSON_IP = Regex("\"ip\"\\s*:\\s*\"([^\"]+)\"")
         private const val DEFAULT_CONNECT_TIMEOUT_MS = 5000

@@ -160,7 +160,7 @@ diff -u before.snapshot after.snapshot
 
 ---
 
-## 5. L4 真机验收 (S17–S35)
+## 5. L4 真机验收 (S17–S44)
 
 > 追加到 `docs/specs/2026-10-18-device-verification-checklist.md`。
 > 每条都写成"你做什么 → 日志里必须 / 不得出现什么"。

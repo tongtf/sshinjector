@@ -93,7 +93,7 @@ class TcpWindowGateTest {
             assertEquals("MSS option len", 0x04, synAck[41].toInt() and 0xFF)
             assertEquals("MSS 1460 (big-endian)", 1460, be16(synAck, 42))
             assertEquals("WS option kind", 0x03, synAck[45].toInt() and 0xFF)
-            assertEquals("WS echo must be offered-with-shift-0", 0x00, synAck[47].toInt() and 0xFF)
+            assertEquals("WS echo must be shift-3 (uplink window 512KB)", 0x03, synAck[47].toInt() and 0xFF)
 
             assertTrue("tun callback must register", awaitUntil { plugin.tunCallback != null })
             assertTrue(server.awaitConnect(5, TimeUnit.SECONDS))
