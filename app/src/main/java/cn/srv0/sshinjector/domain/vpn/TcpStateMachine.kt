@@ -2427,11 +2427,17 @@ class TcpStateMachine(
         tunnelBlackHoleConns.incrementAndGet()
         val immediate = lifetimeMs < BLACK_HOLE_IMMEDIATE_MS
         if (immediate) tunnelBlackHoleImmediate.incrementAndGet() else tunnelBlackHoleDelayed.incrementAndGet()
-        // 存活越短越像"客户端主动放弃", 需要连同是否已就绪一起看才有意义
+        // 关闭原因必须参与归因: clean EOF = 远端在收到请求后主动关, 与"客户端等不到"是相反方向
+        val remoteClosed = why.contains("远端正常关闭")
+        val hint =
+            when {
+                remoteClosed -> "远端在收到请求后关闭 (目标/CDN 侧, 与本栈回程无关)"
+                immediate -> "客户端等不到响应即放弃"
+                else -> "本栈中途丢, 非客户端主动断开"
+            }
         VpnController.appLogThrottled(
             "隧道零回程 · ${target(conn)} — 收了 ${conn.forwardedBytes}B 上行, 下行 0B, " +
-                "存活 ${lifetimeMs}ms, 关闭原因 $why " +
-                "(${if (immediate) "客户端等不到响应即放弃" else "本栈中途丢, 非客户端主动断开"})",
+                "存活 ${lifetimeMs}ms, 关闭原因 $why ($hint)",
             BLACK_HOLE_LOG_THROTTLE_MS,
             level = LogLevel.WARNING,
             throttleKey = "隧道零回程",
