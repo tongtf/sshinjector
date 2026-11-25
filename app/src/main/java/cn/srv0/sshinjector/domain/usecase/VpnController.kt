@@ -32,6 +32,7 @@ import cn.srv0.sshinjector.domain.vpn.exit.ExitHealthChange
 import cn.srv0.sshinjector.domain.vpn.exit.ExitHealthEvaluator
 import cn.srv0.sshinjector.domain.vpn.exit.ExitId
 import cn.srv0.sshinjector.domain.vpn.exit.ProxyExit
+import cn.srv0.sshinjector.domain.vpn.routing.DomainExitPromotion
 import cn.srv0.sshinjector.domain.vpn.routing.RoutingSnapshot
 import cn.srv0.sshinjector.domain.vpn.routing.RoutingTableStore
 import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelConfig
@@ -39,14 +40,12 @@ import cn.srv0.sshinjector.domain.vpn.tunnel.TunnelManager
 import cn.srv0.sshinjector.ui.viewmodel.LogLevel
 import cn.srv0.sshinjector.ui.viewmodel.LogLine
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelChildren
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -329,6 +328,8 @@ class VpnController
         }
 
         companion object {
+            /** 附加出口启动错峰 (设计 §9.3): 避免多个 SSH 握手同时撞服务器 MaxStartups。 */
+            private const val ADDITIONAL_EXIT_STAGGER_MS = 300L
             private const val TAG = "VpnController"
             private const val IPPROTO_UDP = 17
             private const val DNS_PORT = 53
@@ -489,22 +490,10 @@ class VpnController
                 // 再按快照启动附加出口。启动失败只降级该出口 (规则在匹配时跳过), 绝不阻断主出口。
                 appIdentity.clear()
                 val routing = routingTableStore.refresh()
-                // D-5: DOMAIN_SPLIT 下"有出口规则的域名"也必须进隧道 (假 IP), 否则真实 IP 没有
-                // TUN 路由 → 连接根本不进 TUN → 规则永远匹配不到。关闭多出口时闭包恒 false。
+                // D-5 (2026-11-25 决策): 只判规则文本, 不看出口可用性。出口没起来时也要提升成假 IP
+                // 把连接拉进隧道, 由 TCP 阶段的 selectExit 回退主出口; 否则真实 IP 不进 TUN, 规则静默失效。
                 val promotesDomain: (String) -> Boolean = { domain ->
-                    val snapshot = routingTableStore.current()
-                    val exitId = if (snapshot.enabled) snapshot.table.domainExitFor(domain) else null
-                    when {
-                        exitId == null -> false
-                        // 规则指向主出口 = 用户就是要它走隧道 (原本可能是直连的域名)
-                        exitId == ExitId.DEFAULT -> true
-                        else -> {
-                            // 指向附加出口但该出口没起来/不健康 → **不提升**: 提升只会让本应
-                            // 直连的域名绕进主出口, 与用户的意图相反 (等出口就绪再提升)。
-                            val active = tunnelManager.exit(exitId)
-                            active != null && active.health == ExitHealth.Ready && active.plugin.isHealthy
-                        }
-                    }
+                    DomainExitPromotion.shouldPromote(routingTableStore.current(), domain)
                 }
                 dnsInterceptor.setExitDomainRulePredicate(promotesDomain)
                 if (routing.enabled) startAdditionalExits(routing)
@@ -648,26 +637,27 @@ class VpnController
          * - 单出口失败只记 WARNING 并继续: 该出口的路由在匹配时因插件不存在被跳过 (回主出口),
          *   不能让一个坏出口把整个会话拖死。
          */
-        private suspend fun startAdditionalExits(snapshot: RoutingSnapshot) {
+        private fun startAdditionalExits(snapshot: RoutingSnapshot) {
             if (snapshot.exits.isEmpty()) return
-            // **并行启动**: 每个出口都是一次完整的 SSH 建池 (可达数秒), 串行会把
-            // `connect()` 拉长到 N×数秒 —— 用户在这段时间里看到的就是"点连接没反应"。
-            coroutineScope {
-                val jobs =
-                    snapshot.exits.map { exit ->
-                        async {
-                            // 单个出口的异常不能冒泡出 coroutineScope: 那会取消其余出口并让整个
-                            // connect() 失败 —— 一个坏出口不该拖死整个会话。
-                            try {
-                                startAdditionalExit(exit)
-                            } catch (e: kotlinx.coroutines.CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                addLog("出口 ${exit.name} 启动异常 · ${e.message}", LogLevel.WARNING)
-                            }
-                        }
+            // 设计 §5.4 / I-13: **不阻塞 connect() 返回**。每个出口都是一次完整 SSH 建池 (可达数秒),
+            // awaitAll 会让 UI 一直停在 Connecting —— 用户看到的就是"点连接没反应"。
+            // 300ms 错峰: N 个出口同时 handshake 容易撞 sshd 的 MaxStartups (默认 10:30:100),
+            // 随机 reset 表现为"某个出口莫名其妙启动失败"。
+            snapshot.exits.forEachIndexed { index, exit ->
+                launch {
+                    delay(ADDITIONAL_EXIT_STAGGER_MS * index)
+                    // 错峰窗口内可能已断开, 或用户在 UI 上禁用了该出口 —— 别再把它拉起来
+                    if (!isRunning) return@launch
+                    if (routingTableStore.current().exits.none { it.name == exit.name }) return@launch
+                    // 单出口异常不能取消兄弟任务 (SupervisorJob 下各自独立), 更不能冒泡到 connect()
+                    try {
+                        startAdditionalExit(exit)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        addLog("出口 ${exit.name} 启动异常 · ${e.message}", LogLevel.WARNING)
                     }
-                jobs.awaitAll()
+                }
             }
         }
 

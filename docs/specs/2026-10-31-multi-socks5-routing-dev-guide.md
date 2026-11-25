@@ -474,7 +474,7 @@ class ConnectionBudgetHolder @Inject constructor() {
 | `failoverEnabled=false` | 命中不可用出口 → 直接 RST (不再悄悄换出口) | `3baebc5` |
 | 出口可用性 | `TunnelPlugin.isHealthy` (端口在 + SSH 池有活口), 池全死不再被选中 | `486e794` |
 | 禁用出口 | 会话中途禁用: 新连接立即停派发, **空闲后**回收 SSH 池 + 监听 (有连接时保留, 最长等 120s) | `3baebc5` |
-| 并行启动 | `startAdditionalExits` 改 `async/awaitAll`; 每个出口打建连耗时 | `3baebc5` |
+| 并行启动 | `startAdditionalExits` 曾改 `async/awaitAll`; **2026-11-25 按设计改为非阻塞 `launch` + `delay(300L*index)` 错峰**, 并在错峰窗口后复查 `isRunning` / 出口是否仍启用 | `3baebc5` → 2026-11-25 |
 | DOMAIN_SPLIT | UI 明确提示"该模式规则暂不生效" (D-5 未实现前不误导) | `3baebc5` |
 | 健康巡检 | `ExitHealthEvaluator` (纯逻辑, 6 例单测): 失健康立即 Degraded / 连续 2 次健康才恢复 / 终态不复活; 15s 节拍 | `58a4c88` |
 | 应用分流计数 | 快照追加 `应用分流 等待 N · 拿到 uid M` (会话级清零) | `58a4c88` |
@@ -486,7 +486,7 @@ class ConnectionBudgetHolder @Inject constructor() {
 |---|---|
 | 建连前重试 (§9.5) | **做**, 完全按设计的 8 个条件, 只重试一次 → `3078ae7` |
 | D-5 隧道提升 | **做** (原建议延后, 用户要求现在做) → `3078ae7` |
-| `Failed` 终态 | 不做: 只有 `Ready ↔ Degraded`, 靠 `isHealthy` 每条连接实时判定 |
+| `Failed` 终态 | 暂不做: 只有 `Ready ↔ Degraded`。2026-11-25 用户要求给出建议方案 (见 `2026-11-25-full-audit.md` §2), 待裁决 |
 | 附加出口上限 | 4 个 (主出口之外) → `ef55cf7` |
 | 非 default 软上限 | 启用 128 → `3078ae7`; default 不受此限 |
 | 会话中途开总开关 | **不**当场拉起出口, UI 明确提示"下次连接生效" → `ef55cf7` |
@@ -507,13 +507,23 @@ class ConnectionBudgetHolder @Inject constructor() {
 | 启用多出口但一个出口都没起来 → 快照没有 `出口` 段, 看起来像功能没开 | 输出 `无运行中的出口` |
 | 两条 `default` + 第一条不在末尾 → 两条都被丢 | default 单独收集, 只保留"最后一条且在末尾" |
 | 握手期重试绕过 `failoverEnabled=false` | 关闭时**不重试**, 直接 RST (与 UI 文案一致) |
-| D-5 在出口未就绪时也提升域名 → 本应直连的域名绕进主出口 | 提升要求目标出口 `Ready` 且 `isHealthy`; 指向 `default` 的规则仍直接提升 |
+| D-5 在出口未就绪时也提升域名 → 本应直连的域名绕进主出口 | **2026-11-25 反悔此修法**: 用户裁决"不可用也需要走隧道" —— 谓词改为**纯文本判定** (`DomainExitPromotion.shouldPromote`), 不看出口健康; 可用性由 TCP 阶段 `selectExit` 回退 default, 单测 `DomainExitPromotionTest` 锁死 |
 | IP/CIDR 规则在 REMOTE 假 IP 下不生效 (设计 §6.4 表格写错) | 设计表已改为"只对字面量 IP"; 规则页加提示文案 |
 | 全数字目标 (`1.2.3.4.5`) 被当作域名规则接受 | `isValidDomain` 拒绝全数字标签 (多打一个点的笔误) |
 | `RoutingTableStore.refresh` 两次写非原子 / 并发 refresh 交错 | 加 `Mutex` 串行化 |
 | 出口列表页在主线程按"出口×规则行"算引用数 | 组合流 `flowOn(Dispatchers.Default)` |
 | 快照只有"连接数", 看不出每个出口干了多少活 (§12.1) | `Socks5ProxyServer` 关闭连接时累加会话总量 → `TunnelPlugin.sessionTraffic` → 快照 `↑1.2MB ↓8.4MB`; `DataPlaneSnapshot.bytesText` 固定 `Locale.ROOT`(俄语小数点是逗号); 集成测试跑真实 socket + 假隧道验证双向计数 |
 | `ExitHealth.Starting` 不可观测; 启动中途断开时 SSH 池残留; `ActiveExit` 计数是死字段 | `TunnelManager.startExit` **先登记 (health=Starting) 再 connect**: `stopAll/stopExit` 能回收"正在建池"的出口; 启动中的重复调用明确失败; 新增 `noteConnection/noteHandshakeFailure/noteDegraded/noteRecovered` 填四个计数, 快照显示 `失败 N · 降级 N` |
+
+#### 2026-11-25 裁决落地
+
+| 议题 | 裁决 | 落地 |
+|---|---|---|
+| D-5 谓词 | **不可用也需要走隧道** (纯文本, 设计 §6.5/§8.8) | `DomainExitPromotion.shouldPromote`; 单测 `DomainExitPromotionTest`(5) 锁死"出口未启动仍提升"; 出口可用性交给 `selectExit` 回退 |
+| `ExitHealth.Failed` | 先给建议方案 (见 `2026-11-25-full-audit.md` 附录 A), 暂不改代码 | 待用户确认 |
+| 附加出口上限 | **4** (总 5 出口 / 15 会话) | 设计 D-7 与资源表已同步 |
+| 附加出口启动 | **按设计**: 不阻塞 `connect()` + 300ms 错峰 | `startAdditionalExits` 改 `launch + delay(300L*index)`, 错峰后复查 `isRunning` 与出口仍启用 |
+| 资源验收 | **3 出口与 5 出口两套都测** | 验收 §6 加内存/ MaxStartups 两行, S23 注明两套 |
 
 #### 真机第一轮 (2026-11-03)
 

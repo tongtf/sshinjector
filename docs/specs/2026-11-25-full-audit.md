@@ -148,6 +148,26 @@ P1-9（OP_WRITE 竞态）、P1-13（孤儿出口）。
 
 ---
 
+## 附录 A · `ExitHealth.Failed` 建议方案（2026-11-25 用户要求给出建议）
+
+**推荐：方案 A —— 轻量 Failed（登记但不重试）**
+
+| 步骤 | 改动 | 理由 |
+|---|---|---|
+| 1 | `TunnelManager.startExit` 失败时**不再 `exits.remove(id, entry)`**，改为 `entry.health = ExitHealth.Failed` + `entry.lastError = message`，保留条目 | 失败出口不再"凭空消失"，快照能看出"配了但没起来"及其原因 —— 这是"规则配了没反应"最难排的形态 |
+| 2 | `selectExit` 无需改：现有 `health != Ready → unusable → 回 default` 天然跳过 Failed | 保持单一判据，不给失败出口任何新连接 |
+| 3 | `ExitHealthEvaluator` 无需改：现有"其它状态不动"分支让 Failed 不被探活复活 | 符合设计"本次会话不再自动恢复" |
+| 4 | `exitDiagnostics` 补 `出口 jz: Failed · <lastError>`（现有 `失败 N · 降级 N` 保留） | 无 adb 现场靠日志判读，必须可定位 |
+| 5 | UI 出口卡片状态 chip 顺带显示 Failed（审计 P2-10） | 用户不用导出日志也能看到 |
+| 6 | 测试：`TunnelManagerExitTest` 加"失败保留 Failed + 不被选中 + stopAll 可回收"；`ExitHealthEvaluatorTest` 加"Failed 不被探活复活" | 锁住终态语义 |
+
+**不选方案 B（删掉 Failed 枚举）**：用户无法区分"配了但没启动"与"启动失败"，出口从快照消失后
+排障只能靠猜。
+**不选方案 C（Failed 自动重试）**：与设计"本次会话不再自动恢复"冲突，且会和 300ms 错峰、
+网络切换/池失败重连节拍打架，把坏服务器反复握手。
+
+下次 `connect()` 重建隧道管理器时条目自然清空 —— 恢复路径唯一且可预期。
+
 ## 5. 建议处理顺序（待用户确认后实施）
 
 1. **P0-1** 向导公钥校验（含回归测试）—— 一行注释改单 token 即可，先解掉"功能不可用"。
