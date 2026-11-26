@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Редактор правил маршрутизации (простой режим + импорт/экспорт) -->
+    <string name="routing_mode_simple">Простой</string>
+    <string name="routing_mode_advanced">Расширенный</string>
+    <string name="routing_default_exit">Выход по умолчанию</string>
+    <string name="routing_main_exit">Основной выход</string>
+    <string name="routing_apps">Исключения приложений</string>
+    <string name="routing_domains">Исключения доменов</string>
+    <string name="routing_add_app">Добавить приложение</string>
+    <string name="routing_add_domain">Добавить домен</string>
+    <string name="routing_domain_hint">напр. example.com или *.example.com</string>
+    <string name="routing_domain_invalid">Неверный домен</string>
+    <string name="routing_no_apps">Нет исключений приложений (все приложения используют выход по умолчанию)</string>
+    <string name="routing_no_domains">Нет исключений доменов (все домены используют выход по умолчанию)</string>
+    <string name="routing_priority_note">Правила упорядочиваются автоматически: приложение &gt; домен (самый длинный суффикс) &gt; выход по умолчанию</string>
+    <string name="routing_simple_unsupported">Эти правила нельзя выразить в простом режиме (подсети IP, ограничения портов, синтаксис), поэтому используется расширенный режим</string>
+    <string name="routing_saved">Правила маршрутизации сохранены</string>
+    <string name="routing_import">Импорт</string>
+    <string name="routing_export">Экспорт</string>
+    <string name="routing_import_ok">Импортировано — не забудьте сохранить</string>
+    <string name="routing_import_failed">Не удалось импортировать (файл недоступен или больше 64 КБ)</string>
+    <string name="routing_export_ok">Экспортировано</string>
+    <string name="routing_export_failed">Не удалось экспортировать</string>
+    <string name="routing_remove">Удалить</string>
+</resources>

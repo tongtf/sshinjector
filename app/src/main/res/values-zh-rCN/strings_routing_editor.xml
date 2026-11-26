@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 多出口路由规则编辑器 (简单模式 + 导入/导出) -->
+    <string name="routing_mode_simple">简单</string>
+    <string name="routing_mode_advanced">高级</string>
+    <string name="routing_default_exit">默认出口</string>
+    <string name="routing_main_exit">主出口</string>
+    <string name="routing_apps">应用例外</string>
+    <string name="routing_domains">域名例外</string>
+    <string name="routing_add_app">添加应用</string>
+    <string name="routing_add_domain">添加域名</string>
+    <string name="routing_domain_hint">如 example.com 或 *.example.com</string>
+    <string name="routing_domain_invalid">域名格式不正确</string>
+    <string name="routing_no_apps">暂无应用例外 (全部应用走默认出口)</string>
+    <string name="routing_no_domains">暂无域名例外 (全部域名走默认出口)</string>
+    <string name="routing_priority_note">规则自动按「应用 &gt; 域名(最长后缀) &gt; 默认出口」排序</string>
+    <string name="routing_simple_unsupported">当前规则无法用简单模式表达 (网段 / 端口限定 / 语法问题等), 已使用高级模式</string>
+    <string name="routing_saved">路由规则已保存</string>
+    <string name="routing_import">导入</string>
+    <string name="routing_export">导出</string>
+    <string name="routing_import_ok">已导入, 记得点保存</string>
+    <string name="routing_import_failed">导入失败 (文件不可读或超过 64KB)</string>
+    <string name="routing_export_ok">已导出</string>
+    <string name="routing_export_failed">导出失败</string>
+    <string name="routing_remove">删除</string>
+</resources>

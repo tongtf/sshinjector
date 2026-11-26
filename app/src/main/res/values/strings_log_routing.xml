@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 日志页: 一键固定域名出口 (设计 2026-11-26-routing-ux-redesign §D) -->
+    <string name="log_routing_action">出口</string>
+    <string name="log_routing_title">固定域名出口 · %1$s</string>
+    <string name="log_routing_main_exit">主出口</string>
+    <string name="log_routing_applied">已固定 %1$s 的出口</string>
+    <string name="log_routing_applied_disabled">已固定 %1$s 的出口（多出口未启用）</string>
+    <string name="log_routing_undo">撤销</string>
+    <string name="log_routing_failed">固定 %1$s 的出口失败</string>
+</resources>

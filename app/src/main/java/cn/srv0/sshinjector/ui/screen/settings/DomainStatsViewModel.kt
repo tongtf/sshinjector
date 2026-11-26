@@ -10,6 +10,7 @@ import cn.srv0.sshinjector.data.local.DomainListManager
 import cn.srv0.sshinjector.data.local.preferences.SettingsDataStore
 import cn.srv0.sshinjector.domain.model.VpnState.VpnStatus
 import cn.srv0.sshinjector.domain.usecase.DomainIpResolver
+import cn.srv0.sshinjector.domain.usecase.ProxyExitRepository
 import cn.srv0.sshinjector.domain.usecase.ResolvePath
 import cn.srv0.sshinjector.domain.usecase.VpnController
 import cn.srv0.sshinjector.domain.vpn.AppUidProbe
@@ -22,7 +23,15 @@ import cn.srv0.sshinjector.domain.vpn.Suggestion
 import cn.srv0.sshinjector.domain.vpn.SuggestionDirection
 import cn.srv0.sshinjector.domain.vpn.SuggestionNote
 import cn.srv0.sshinjector.domain.vpn.SuggestionTarget
+import cn.srv0.sshinjector.domain.vpn.exit.ExitId
+import cn.srv0.sshinjector.domain.vpn.routing.RoutingRuleEditor
+import cn.srv0.sshinjector.domain.vpn.routing.RoutingSnapshot
+import cn.srv0.sshinjector.domain.vpn.routing.RoutingSuggestion
+import cn.srv0.sshinjector.domain.vpn.routing.RoutingSuggestions
+import cn.srv0.sshinjector.domain.vpn.routing.RoutingTableStore
+import cn.srv0.sshinjector.domain.vpn.routing.SimpleRoutingPolicyCodec
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -95,6 +104,21 @@ data class DomainStatsUiState(
      * 未解析到 (超预算 / 已卸载) 的 uid 由页面退化成 `uid N`。
      */
     val appLabels: Map<Int, String> = emptyMap(),
+    /** 可选的出口 (主出口 [ExitId.DEFAULT] 恒在首位, 其后是按 priority 升序的**启用**附加出口)。 */
+    val routingExits: List<String> = listOf(ExitId.DEFAULT),
+    /** 多出口总开关 (来自路由快照); 关闭时只能保存规则, 不生效 (`routingMessage` 会区分)。 */
+    val routingEnabled: Boolean = false,
+    /**
+     * 域名 → 当前生效出口。**键是统计行的 `domain` 原值** (非 IP 行就是纯域名), 页面直接
+     * `domainExits[row.domain]` 查表 —— 行内不做规范化/拼接, 20000 行也不会每行算字符串。
+     */
+    val domainExits: Map<String, String> = emptyMap(),
+    /** 「路由建议」= 失败多 / 下行大的域名 (未命中现有域名规则); 由 `RoutingSuggestions.pick` 产出。 */
+    val routingSuggestions: List<RoutingSuggestion> = emptyList(),
+    /** 一次性路由结果 (**语言无关的哨兵常量**, 页面映射成 `stringResource` 后走 Snackbar)。 */
+    val routingMessage: String? = null,
+    /** 上一次保存的规则文本是否还在 (Snackbar「撤销」是否可用)。 */
+    val routingCanUndo: Boolean = false,
 )
 
 /**
@@ -111,6 +135,7 @@ data class DomainStatsUiState(
  * `stringResource` 再 Toast —— ViewModel 拿不到 `Context`, 不能在这里解析资源 (i18n 硬要求)。
  */
 @HiltViewModel
+@Suppress("LongParameterList") // ViewModel 汇总页面所需的全部依赖, 拆分反而增加胶水层
 class DomainStatsViewModel
     @Inject
     constructor(
@@ -122,12 +147,18 @@ class DomainStatsViewModel
         private val settingsDataStore: SettingsDataStore,
         private val appUidProbe: AppUidProbe,
         private val appUidLabels: AppUidLabels,
+        private val proxyExitRepository: ProxyExitRepository,
+        private val routingTableStore: RoutingTableStore,
+        private val routingRuleEditor: RoutingRuleEditor,
     ) : ViewModel() {
         private val _state = MutableStateFlow(DomainStatsUiState())
         val state: StateFlow<DomainStatsUiState> = _state.asStateFlow()
 
         /** 最近一次抓取的全量快照 (未排序/未筛选); 只在 Default 线程写, 主线程也读 → @Volatile。 */
         @Volatile private var allRows: List<DomainStatSnapshot> = emptyList()
+
+        /** 最近一次「出口」写入前的规则文本 (撤销用; null = 无可撤销)。跨协程读写 → @Volatile。 */
+        @Volatile private var routingUndoText: String? = null
 
         /** 已解析出的名单成员关系 (不含待确认); 键 = 规范化域名。跨 Dispatchers 读写 → @Volatile。 */
         @Volatile private var membership: Map<String, RowListMarks> = emptyMap()
@@ -160,15 +191,35 @@ class DomainStatsViewModel
                     _state.update { it.copy(useRemoteResolve = enabled) }
                 }
             }
+            // 出口增删/启停 → 更新下拉候选; 候选变化时重算建议 (canRoute 依赖"主出口之外还有出口")
+            viewModelScope.launch {
+                proxyExitRepository.allExitsFlow.collect { exits ->
+                    val names =
+                        listOf(ExitId.DEFAULT) +
+                            exits.filter { it.enabled }.sortedBy { it.priority }.map { it.name }
+                    if (_state.value.routingExits == names) return@collect
+                    _state.update { it.copy(routingExits = names) }
+                    if (allRows.isNotEmpty()) {
+                        val snapshot = routingTableStore.current()
+                        withContext(Dispatchers.Default) { applyRoutingState(allRows, snapshot) }
+                    }
+                }
+            }
         }
 
         /** 抓一次快照并重建展示行。开屏与手动刷新调用; 数据面不触发它。 */
         fun refresh() {
             viewModelScope.launch {
                 _state.update { it.copy(loading = true) }
+                // 规则/出口可能在别的页面刚改过: 先重建路由快照 (只读 DataStore + Room, 不解析文本做决策)
+                val routing =
+                    withContext(Dispatchers.IO) {
+                        runCatching { routingTableStore.refresh() }.getOrElse { routingTableStore.current() }
+                    }
                 withContext(Dispatchers.Default) {
                     val rows = store.snapshot()
                     allRows = rows
+                    applyRoutingState(rows, routing)
                     val computed = computeMembership(rows)
                     synchronized(membershipLock) { membership = computed }
                     publishRows(
@@ -177,6 +228,106 @@ class DomainStatsViewModel
                         loading = false,
                     )
                 }
+            }
+        }
+
+        /**
+         * 行内 / 建议卡片选出口: 写规则文本 → 刷新 → 弹「已保存 (可撤销)」。
+         *
+         * `routingMessage` 只放**语言无关的哨兵** (ViewModel 没有 `Context`), 页面映射成 stringResource。
+         * 保存失败不写 undo 文本 (撤销一个没成功的写入只会把规则改坏)。
+         */
+        fun setDomainExit(
+            domain: String,
+            exitId: String,
+        ) = applyDomainExit(domain, exitId, MSG_ROUTING_FAILED)
+
+        /** 路由建议卡片里的「应用」: 与行内保存同一条写入路径, 只是失败文案区分来源。 */
+        fun applySuggestion(
+            domain: String,
+            exitId: String,
+        ) = applyDomainExit(domain, exitId, MSG_ROUTING_FAILED_APPLY)
+
+        /** Snackbar「撤销」: 原样回写保存前的规则文本 (不做反向操作 —— 反向操作会越撤越乱)。 */
+        fun undoRouting() {
+            val previous = routingUndoText ?: return
+            viewModelScope.launch {
+                try {
+                    routingRuleEditor.undo(previous)
+                    routingUndoText = null
+                    _state.update { it.copy(routingCanUndo = false) }
+                    refresh()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    _state.update { it.copy(routingMessage = MSG_ROUTING_FAILED) }
+                }
+            }
+        }
+
+        /** 消费一次性路由消息 (页面弹完 Snackbar 后调用)。 */
+        fun consumeRoutingMessage() {
+            _state.update { it.copy(routingMessage = null) }
+        }
+
+        private fun applyDomainExit(
+            domain: String,
+            exitId: String,
+            failureMessage: String,
+        ) {
+            val key = domain.trim()
+            if (key.isEmpty()) return
+            // 统计行里可能有单标签主机名/IP: 写不成域名规则, 不能弹"已保存"
+            if (SimpleRoutingPolicyCodec.normalizeDomain(key) == null) {
+                _state.update { it.copy(routingMessage = failureMessage, routingCanUndo = false) }
+                return
+            }
+            viewModelScope.launch {
+                try {
+                    val result = routingRuleEditor.upsertDomain(key, exitId)
+                    routingUndoText = result.previousText
+                    val applied = if (result.enabled) MSG_ROUTING_APPLIED else MSG_ROUTING_APPLIED_DISABLED
+                    _state.update {
+                        it.copy(routingCanUndo = true, routingMessage = applied)
+                    }
+                    refresh()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    _state.update { it.copy(routingMessage = failureMessage, routingCanUndo = false) }
+                }
+            }
+        }
+
+        /**
+         * 重算「域名 → 有效出口」与「路由建议」; **只在 Default 线程调用** (20000 行遍历)。
+         *
+         * `canRoute` 要求多出口已启用且主出口之外还有出口 —— 否则建议卡片的「应用」只会写出
+         * 规则却永远不生效 (保存本身仍允许, 由 `routingMessage` 提示"多出口未启用")。
+         */
+        private fun applyRoutingState(
+            rows: List<DomainStatSnapshot>,
+            snapshot: RoutingSnapshot,
+        ) {
+            val table = snapshot.table
+            val exitCount = _state.value.routingExits.size
+            val domainExits = HashMap<String, String>(rows.size)
+            for (row in rows) {
+                if (row.isIpLiteral) continue
+                domainExits[row.domain] = table.domainExitFor(row.domain) ?: ExitId.DEFAULT
+            }
+            val suggestions =
+                RoutingSuggestions.pick(
+                    rows = rows,
+                    hasDomainRule = table::hasDomainRule,
+                    canRoute = snapshot.enabled && exitCount > 1,
+                )
+            _state.update {
+                it.copy(
+                    routingEnabled = snapshot.enabled,
+                    domainExits = domainExits,
+                    routingSuggestions = suggestions,
+                )
             }
         }
 
@@ -555,5 +706,11 @@ class DomainStatsViewModel
 
             /** 远端解析不可用 → 已回退本地视角 (设计 §7.2 的 `本地视角 (远端不可用)`)。 */
             const val MSG_REMOTE_UNAVAILABLE = "remote_unavailable"
+
+            /** 路由 (一键出口) 结果哨兵: 页面按它映射 Snackbar 文案 (含「撤销」是否出现)。 */
+            const val MSG_ROUTING_APPLIED = "routing_applied"
+            const val MSG_ROUTING_APPLIED_DISABLED = "routing_applied_disabled"
+            const val MSG_ROUTING_FAILED = "routing_failed"
+            const val MSG_ROUTING_FAILED_APPLY = "routing_failed_apply"
         }
     }

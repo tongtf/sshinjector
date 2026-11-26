@@ -27,6 +27,10 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -34,6 +38,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -61,6 +69,9 @@ import cn.srv0.sshinjector.domain.vpn.DomainStatSnapshot
 import cn.srv0.sshinjector.domain.vpn.DomainSuffixSet
 import cn.srv0.sshinjector.domain.vpn.SuggestionDirection
 import cn.srv0.sshinjector.domain.vpn.SuggestionTarget
+import cn.srv0.sshinjector.domain.vpn.exit.ExitId
+import cn.srv0.sshinjector.domain.vpn.routing.RoutingSuggestion
+import cn.srv0.sshinjector.domain.vpn.routing.RoutingSuggestionReason
 import cn.srv0.sshinjector.ui.component.BackNavIcon
 import cn.srv0.sshinjector.ui.component.formatTime
 import cn.srv0.sshinjector.ui.viewmodel.MainViewModel
@@ -86,6 +97,7 @@ fun DomainStatsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var expanded by remember { mutableStateOf<String?>(null) }
+    val snackbarHost = remember { SnackbarHostState() }
 
     // 一次性结果文案在组合作用域解析 (lint: 不允许用 LocalContext 查资源)
     val msgCleared = stringResource(R.string.domain_stats_cleared)
@@ -94,6 +106,40 @@ fun DomainStatsScreen(
     val msgResolveFailed = stringResource(R.string.domain_stats_resolve_failed)
     val msgIpUnavailable = stringResource(R.string.domain_stats_ip_unavailable)
     val msgRemoteUnavailable = stringResource(R.string.domain_stats_remote_unavailable)
+
+    // 路由 (一键出口) 结果: 走 Snackbar 的一半带「撤销」, 另一半只是失败提示
+    val routingApplied = stringResource(R.string.domain_routing_applied)
+    val routingAppliedDisabled = stringResource(R.string.domain_routing_applied_disabled)
+    val routingFailed = stringResource(R.string.domain_routing_failed)
+    val routingFailedApply = stringResource(R.string.domain_routing_failed_apply)
+    val routingUndo = stringResource(R.string.domain_routing_undo)
+
+    LaunchedEffect(state.routingMessage) {
+        val code = state.routingMessage ?: return@LaunchedEffect
+        val text =
+            when (code) {
+                DomainStatsViewModel.MSG_ROUTING_APPLIED -> routingApplied
+                DomainStatsViewModel.MSG_ROUTING_APPLIED_DISABLED -> routingAppliedDisabled
+                DomainStatsViewModel.MSG_ROUTING_FAILED -> routingFailed
+                DomainStatsViewModel.MSG_ROUTING_FAILED_APPLY -> routingFailedApply
+                else -> null
+            }
+        if (text == null) {
+            viewModel.consumeRoutingMessage()
+            return@LaunchedEffect
+        }
+        val canUndo =
+            code == DomainStatsViewModel.MSG_ROUTING_APPLIED ||
+                code == DomainStatsViewModel.MSG_ROUTING_APPLIED_DISABLED
+        val result =
+            snackbarHost.showSnackbar(
+                message = text,
+                actionLabel = if (canUndo && state.routingCanUndo) routingUndo else null,
+                duration = SnackbarDuration.Long,
+            )
+        viewModel.consumeRoutingMessage()
+        if (result == SnackbarResult.ActionPerformed) viewModel.undoRouting()
+    }
 
     LaunchedEffect(state.message) {
         val code = state.message ?: return@LaunchedEffect
@@ -174,6 +220,7 @@ fun DomainStatsScreen(
                     ),
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHost) },
         bottomBar = {
             if (state.pendingCount > 0) {
                 Row(
@@ -282,11 +329,23 @@ fun DomainStatsScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(bottom = 24.dp),
                 ) {
+                    // 列表首项: 路由建议 (失败多 / 下行大且未固定出口的域名) —— 非空才出现
+                    if (state.routingSuggestions.isNotEmpty()) {
+                        item(key = ROUTING_SUGGESTIONS_KEY) {
+                            RoutingSuggestionCard(
+                                suggestions = state.routingSuggestions,
+                                exits = state.routingExits,
+                                onApply = { domain, exitId -> viewModel.applySuggestion(domain, exitId) },
+                            )
+                        }
+                    }
                     items(state.rows, key = { it.domain }) { row ->
                         DomainStatCard(
                             row = row,
                             marks = state.marks[DomainSuffixSet.normalize(row.domain)],
                             appLabels = state.appLabels,
+                            exitId = state.domainExits[row.domain] ?: ExitId.DEFAULT,
+                            exits = state.routingExits,
                             expanded = expanded == row.domain,
                             resolving = state.resolving == row.domain,
                             onToggle = {
@@ -294,6 +353,7 @@ fun DomainStatsScreen(
                             },
                             onResolve = { viewModel.resolveRealIp(row.domain) },
                             onToggleChip = { target -> viewModel.toggleSuggestion(row.domain, target) },
+                            onSelectExit = { exitId -> viewModel.setDomainExit(row.domain, exitId) },
                         )
                     }
                 }
@@ -339,11 +399,14 @@ private fun DomainStatCard(
     row: DomainStatSnapshot,
     marks: RowListMarks?,
     appLabels: Map<Int, String>,
+    exitId: String,
+    exits: List<String>,
     expanded: Boolean,
     resolving: Boolean,
     onToggle: () -> Unit,
     onResolve: () -> Unit,
     onToggleChip: (SuggestionTarget) -> Unit,
+    onSelectExit: (String) -> Unit,
 ) {
     Column(
         modifier =
@@ -370,10 +433,13 @@ private fun DomainStatCard(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        // IP 字面量条目没有域名语义 (key 就是 "ip:port"), 不给名单 chip
+        // IP 字面量条目没有域名语义 (key 就是 "ip:port"), 不给名单 chip / 出口 chip
         if (!row.isIpLiteral) {
             Spacer(Modifier.height(4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+            ) {
                 ListChip(
                     label = stringResource(R.string.domain_stats_chip_adblock),
                     inList = marks?.inAdBlock,
@@ -386,6 +452,12 @@ private fun DomainStatCard(
                     pending = marks?.listPending,
                     onClick = { onToggleChip(SuggestionTarget.DOMAIN_LIST) },
                 )
+                // 一键固定出口: 选中即写规则文本 (Snackbar 可撤销); 主出口显示本地化的「主出口」
+                ExitPicker(
+                    label = exitChipLabel(exitId),
+                    exits = exits,
+                    onSelect = onSelectExit,
+                )
             }
         }
         Spacer(Modifier.height(2.dp))
@@ -397,6 +469,125 @@ private fun DomainStatCard(
         if (expanded) {
             Spacer(Modifier.height(8.dp))
             DetailContent(row = row, appLabels = appLabels, resolving = resolving, onResolve = onResolve)
+        }
+    }
+}
+
+/**
+ * 「路由建议」卡片 (列表首项): 失败多 / 下行大的域名 + 原因 + 「应用」出口下拉。
+ *
+ * 应用与行内保存走**同一条** `upsertDomain` 路径 (Snackbar 可撤销) —— 建议只是入口, 不是第二套写逻辑。
+ */
+@Composable
+private fun RoutingSuggestionCard(
+    suggestions: List<RoutingSuggestion>,
+    exits: List<String>,
+    onApply: (String, String) -> Unit,
+) {
+    Card(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.domain_routing_suggestions),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+            )
+            suggestions.forEach { suggestion ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = suggestion.domain,
+                            fontSize = 14.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = suggestionReason(suggestion),
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    ExitPicker(
+                        label = stringResource(R.string.domain_routing_apply),
+                        exits = exits,
+                        onSelect = { exitId -> onApply(suggestion.domain, exitId) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 建议原因: 失败 N 次 / 下行 X (由 `RoutingSuggestions.pick` 的枚举决定, 不做字符串判断)。 */
+@Composable
+private fun suggestionReason(suggestion: RoutingSuggestion): String =
+    when (suggestion.reason) {
+        RoutingSuggestionReason.FAILED ->
+            stringResource(R.string.domain_routing_suggestion_failed, suggestion.failedConnCount)
+        RoutingSuggestionReason.TRAFFIC ->
+            stringResource(
+                R.string.domain_routing_suggestion_traffic,
+                MainViewModel.formatBytes(suggestion.downBytes),
+            )
+    }
+
+/** 出口 chip 文案: `出口: <name>` (主出口显示本地化「主出口」, 附加出口就是规则里的名字)。 */
+@Composable
+private fun exitChipLabel(exitId: String): String =
+    stringResource(R.string.domain_routing_exit) + ": " +
+        exitDisplayName(exitId)
+
+@Composable
+private fun exitDisplayName(exitId: String): String =
+    if (exitId == ExitId.DEFAULT) {
+        stringResource(R.string.domain_routing_main_exit)
+    } else {
+        exitId
+    }
+
+/**
+ * 出口下拉 (行内 chip 与建议卡片共用)。
+ *
+ * 点击才展开 —— LazyColumn 里 20000 行也只给**可见行**各持一个 `mutableStateOf`, 不做全量预计算。
+ */
+@Composable
+private fun ExitPicker(
+    label: String,
+    exits: List<String>,
+    onSelect: (String) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        FilterChip(
+            selected = open,
+            onClick = { open = true },
+            label = { Text(label, fontSize = 11.sp) },
+        )
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            Text(
+                text = stringResource(R.string.domain_routing_pick_exit),
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+            exits.forEach { exitId ->
+                DropdownMenuItem(
+                    text = { Text(exitDisplayName(exitId), fontSize = 13.sp) },
+                    onClick = {
+                        open = false
+                        onSelect(exitId)
+                    },
+                )
+            }
         }
     }
 }
@@ -572,3 +763,6 @@ private fun AppUidProbeDialog(
 
 /** 无真实 IP 时的占位符。 */
 private const val EMPTY_IP = "—"
+
+/** LazyColumn 里「路由建议」卡片的固定 key (与行 key 的空间隔开, 域名不会等于该值)。 */
+private const val ROUTING_SUGGESTIONS_KEY = "routing-suggestions"

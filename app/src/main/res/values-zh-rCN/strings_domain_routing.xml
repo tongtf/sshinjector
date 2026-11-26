@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 域名统计页: 一键固定出口 (多出口路由) -->
+    <string name="domain_routing_exit">出口</string>
+    <string name="domain_routing_main_exit">主出口</string>
+    <string name="domain_routing_pick_exit">选择出口</string>
+    <string name="domain_routing_applied">已保存</string>
+    <string name="domain_routing_applied_disabled">已保存（多出口未启用）</string>
+    <string name="domain_routing_undo">撤销</string>
+    <string name="domain_routing_failed">保存失败，请重试</string>
+    <string name="domain_routing_suggestions">路由建议</string>
+    <string name="domain_routing_suggestion_failed">失败 %1$d 次</string>
+    <string name="domain_routing_suggestion_traffic">下行 %1$s</string>
+    <string name="domain_routing_apply">应用</string>
+    <string name="domain_routing_failed_apply">应用失败，请重试</string>
+</resources>

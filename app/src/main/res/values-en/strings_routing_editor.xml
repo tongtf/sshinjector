@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Multi-exit routing rule editor (simple mode + import/export) -->
+    <string name="routing_mode_simple">Simple</string>
+    <string name="routing_mode_advanced">Advanced</string>
+    <string name="routing_default_exit">Default exit</string>
+    <string name="routing_main_exit">Main exit</string>
+    <string name="routing_apps">App exceptions</string>
+    <string name="routing_domains">Domain exceptions</string>
+    <string name="routing_add_app">Add app</string>
+    <string name="routing_add_domain">Add domain</string>
+    <string name="routing_domain_hint">e.g. example.com or *.example.com</string>
+    <string name="routing_domain_invalid">Invalid domain</string>
+    <string name="routing_no_apps">No app exceptions (all apps use the default exit)</string>
+    <string name="routing_no_domains">No domain exceptions (all domains use the default exit)</string>
+    <string name="routing_priority_note">Rules are ordered automatically: app &gt; domain (longest suffix) &gt; default exit</string>
+    <string name="routing_simple_unsupported">These rules cannot be expressed in the simple editor (IP ranges, port limits, syntax issues), so advanced mode is used</string>
+    <string name="routing_saved">Routing rules saved</string>
+    <string name="routing_import">Import</string>
+    <string name="routing_export">Export</string>
+    <string name="routing_import_ok">Imported — remember to save</string>
+    <string name="routing_import_failed">Import failed (unreadable file or over 64 KB)</string>
+    <string name="routing_export_ok">Exported</string>
+    <string name="routing_export_failed">Export failed</string>
+    <string name="routing_remove">Remove</string>
+</resources>

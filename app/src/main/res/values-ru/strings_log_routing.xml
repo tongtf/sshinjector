@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Экран журнала: закрепить домен за выходом (дизайн 2026-11-26-routing-ux-redesign §D) -->
+    <string name="log_routing_action">Выход</string>
+    <string name="log_routing_title">Выход для домена · %1$s</string>
+    <string name="log_routing_main_exit">Основной выход</string>
+    <string name="log_routing_applied">Выход для %1$s закреплён</string>
+    <string name="log_routing_applied_disabled">Выход для %1$s закреплён (мульти-выход выключен)</string>
+    <string name="log_routing_undo">Отменить</string>
+    <string name="log_routing_failed">Не удалось закрепить выход для %1$s</string>
+</resources>

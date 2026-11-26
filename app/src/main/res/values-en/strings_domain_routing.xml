@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Domain stats page: one-tap exit pinning (multi-exit routing) -->
+    <string name="domain_routing_exit">Exit</string>
+    <string name="domain_routing_main_exit">Main exit</string>
+    <string name="domain_routing_pick_exit">Choose exit</string>
+    <string name="domain_routing_applied">Saved</string>
+    <string name="domain_routing_applied_disabled">Saved (multi-exit routing is off)</string>
+    <string name="domain_routing_undo">Undo</string>
+    <string name="domain_routing_failed">Save failed, please retry</string>
+    <string name="domain_routing_suggestions">Routing suggestions</string>
+    <string name="domain_routing_suggestion_failed">%1$d failed connections</string>
+    <string name="domain_routing_suggestion_traffic">Down %1$s</string>
+    <string name="domain_routing_apply">Apply</string>
+    <string name="domain_routing_failed_apply">Apply failed, please retry</string>
+</resources>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Страница статистики доменов: фиксация выхода в один касание (маршрутизация по выходам) -->
+    <string name="domain_routing_exit">Выход</string>
+    <string name="domain_routing_main_exit">Основной выход</string>
+    <string name="domain_routing_pick_exit">Выберите выход</string>
+    <string name="domain_routing_applied">Сохранено</string>
+    <string name="domain_routing_applied_disabled">Сохранено (маршрутизация по выходам выключена)</string>
+    <string name="domain_routing_undo">Отменить</string>
+    <string name="domain_routing_failed">Не удалось сохранить, повторите</string>
+    <string name="domain_routing_suggestions">Рекомендации по маршрутизации</string>
+    <string name="domain_routing_suggestion_failed">Ошибок: %1$d</string>
+    <string name="domain_routing_suggestion_traffic">Вх. %1$s</string>
+    <string name="domain_routing_apply">Применить</string>
+    <string name="domain_routing_failed_apply">Не удалось применить, повторите</string>
+</resources>

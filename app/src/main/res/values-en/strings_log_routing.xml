@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Log screen: pin a domain to an exit (design 2026-11-26-routing-ux-redesign §D) -->
+    <string name="log_routing_action">Exit</string>
+    <string name="log_routing_title">Domain exit · %1$s</string>
+    <string name="log_routing_main_exit">Primary exit</string>
+    <string name="log_routing_applied">Exit pinned for %1$s</string>
+    <string name="log_routing_applied_disabled">Exit pinned for %1$s (multi-exit disabled)</string>
+    <string name="log_routing_undo">Undo</string>
+    <string name="log_routing_failed">Failed to pin exit for %1$s</string>
+</resources>
