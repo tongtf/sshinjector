@@ -414,6 +414,17 @@ private class Socks5Connection(
     private var remotePort: Int = 0
     private val pendingWrites = java.util.concurrent.ConcurrentLinkedDeque<ByteBuffer>()
 
+    /**
+     * 远端 clean EOF 后**等回程写队列排空再关** (直连 SOCKS / 本地代理路径)。
+     *
+     * 回程在 `callback == null` 时走 [sendReply] → [pendingWrites] 异步写; 旧实现在 EOF
+     * 处直接 `close()`, 事件环还没把最后一段写出去就 cancel 了 selectionKey —— 客户端
+     * 只收到半截响应。现场形态: 无 Content-Length 的响应 (读到 EOF 为止) 偶发整段丢失,
+     * 有 Content-Length 时通常已写出所以更难复现 (CI 上 `ConnectivityProberTest` 偶发)。
+     */
+    @Volatile
+    private var closeAfterFlush = false
+
     // 直写 channel 的互斥: eventLoop handleWrite 与 sshIoDispatcher 的 sendReplyAndClose
     // (connectToTarget 失败路径) 并发直写同一 SocketChannel 时串行化, 避免字节交错
     private val writeLock = Any()
@@ -596,6 +607,13 @@ private class Socks5Connection(
             }
             buf = pendingWrites.peek()
         }
+        // 远端 clean EOF 的延迟关闭: 队列已排空才真正 close(), 否则最后一段回程会被丢弃。
+        // 判空与关闭都在事件环线程, 与 closeWhenReturnFlushed 的"置标志后判空"互为兜底。
+        if (closeAfterFlush && pendingWrites.isEmpty()) {
+            close()
+            return
+        }
+
         // If queue is empty, remove OP_WRITE
         //
         // P1-9: 判空与清位必须在**同一临界区**。sendReply (sshIo/回程线程) 是"先 add 再置位",
@@ -990,7 +1008,10 @@ private class Socks5Connection(
                         // 报 true 会把"本栈主动断开"伪装成远端正常收尾 (截断下载被当成正常结束)。
                         val eofCallback = pendingTargetEofCallbacksRef?.remove(tunCallbackKey)
                         eofCallback?.invoke(state == SocksState.Relaying)
-                        this@Socks5Connection.close()
+                        // 直连 SOCKS 路径的回程是 pendingWrites 异步写: 远端 clean EOF 后
+                        // 必须等队列排空再 close(), 否则最后一段会被事件环 cancel 丢掉。
+                        // TUN 直通回调路径不经过队列 (队列空), 这里等价于立即关闭。
+                        this@Socks5Connection.closeWhenReturnFlushed()
                         break
                     }
                     if (read > 0) {
@@ -1148,6 +1169,28 @@ private class Socks5Connection(
                 throttleKey = "本地代理应答写失败",
             )
             close()
+        }
+    }
+
+    /**
+     * 请求关闭, 但先把 [pendingWrites] 里的回程写完。
+     *
+     * 调用序: 置 [closeAfterFlush] **先于**判空 —— 这样事件环只有两种收尾方式:
+     * ① 它先排空并看到标志 (关), ② 我们看到空队列 (关); 两者交叉也只会关一次
+     * ([close] 幂等)。判空若在置标志之前, 事件环可能"排空 → 读标志 false → 清 OP_WRITE"
+     * 之后我们再置标志并读到空, 仍然会由我们关, 所以其实也安全 —— 但先置标志让
+     * "事件环排空即关"这条路径覆盖更长, 减少一次线程切换。
+     */
+    private fun closeWhenReturnFlushed() {
+        closeAfterFlush = true
+        if (pendingWrites.isEmpty()) {
+            close()
+        } else {
+            // sendReply 已置 OP_WRITE; 再 wakeup 一次防止它刚好在 selector 阻塞前被清位
+            try {
+                selectionKey?.selector()?.wakeup()
+            } catch (_: Exception) {
+            }
         }
     }
 
