@@ -21,6 +21,8 @@ buildscript {
             force("org.bouncycastle:bcpkix-jdk18on:1.85")
             force("org.bouncycastle:bcutil-jdk18on:1.85")
             force("org.apache.httpcomponents:httpmime:4.5.14")
+            // AGP 传递依赖：CVE-2026-102554（CompactHashMap/MapMakerInternalMap 反序列化内存放大）
+            force("com.google.guava:guava:33.7.2-jre")
             // AGP UTP -> grpc-netty / ktlint-cli 传递依赖：统一升到已修复版本（Dependabot）
             eachDependency {
                 when (requested.group) {
@@ -48,6 +50,8 @@ subprojects {
             force("org.apache.httpcomponents:httpcore:4.4.16")
             force("org.apache.httpcomponents:httpmime:4.5.14")
             force("com.google.protobuf:protobuf-java-util:4.35.1")
+            // CVE-2026-102554: Guava 反序列化内存放大, 33.7.2 起修复
+            force("com.google.guava:guava:33.7.2-jre")
             // 构建期传递依赖（ktlint-cli -> logback 等）：统一升到已修复版本（Dependabot）
             eachDependency {
                 when (requested.group) {
